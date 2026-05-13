@@ -4,9 +4,60 @@ from rest_framework.permissions import IsAuthenticated
 
 from app.base.pagination import CustomPagination
 from app.utils.response import APIResponse
-from accounts.api.v1.admin.serializers import AccountListSerializer
+from accounts.api.v1.admin.serializers import (
+    AccountListSerializer,
+    AdminDetailsSerializer,
+    AdminLoginSerializer,
+)
 from accounts.models import User
-from accounts.permissions import IsSuperAdmin
+from accounts.permissions import IsAdmin, IsSuperAdmin
+
+
+class AdminLoginAPIView(GenericAPIView):
+    """
+    Admin login API.
+
+    Frontend request:
+    - Method: POST
+    - Content-Type: application/json
+    - Body: `email`, `password`
+
+    Frontend response:
+    - 200 success with `access_token` and `refresh_token`.
+    - Non-staff users are rejected even when credentials are valid.
+    """
+
+    serializer_class = AdminLoginSerializer
+
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+        return APIResponse.success(
+            data=serializer.validated_data,
+            message="Admin logged in.",
+        )
+
+
+class AdminDetailsAPIView(GenericAPIView):
+    """
+    Current admin details API.
+
+    Frontend request:
+    - Method: GET
+    - Headers: authenticated bearer token from admin login.
+
+    Frontend response:
+    - 200 success with the current admin account summary.
+    """
+
+    permission_classes = [IsAuthenticated, IsAdmin]
+    serializer_class = AdminDetailsSerializer
+
+    def get(self, request, *args, **kwargs):
+        return APIResponse.success(
+            data=self.get_serializer(request.user).data,
+            message="Admin details fetched successfully.",
+        )
 
 
 class AccountListAPIView(GenericAPIView):

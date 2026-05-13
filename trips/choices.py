@@ -1,0 +1,48 @@
+from django.db import models
+
+
+class TripStatus(models.TextChoices):
+    DRAFT = "draft", "Draft"
+    PLANNING = "planning", "Planning"
+    READY = "ready", "Ready"
+    IN_PROGRESS = "in_progress", "In Progress"
+    COMPLETED = "completed", "Completed"
+    CANCELLED = "cancelled", "Cancelled"
+    ARCHIVED = "archived", "Archived"
+
+
+class TripVisibility(models.TextChoices):
+    PRIVATE = "private", "Private"
+    LINK_ONLY = "link_only", "Link Only"
+
+
+class TripPace(models.TextChoices):
+    RELAXED = "relaxed", "Relaxed"
+    BALANCED = "balanced", "Balanced"
+    FAST = "fast", "Fast"
+
+
+class TripItemType(models.TextChoices):
+    TRANSIT = "transit", "Transit"
+    ATTRACTION = "attraction", "Attraction"
+    ACTIVITY = "activity", "Activity"
+    CUISINE = "cuisine", "Cuisine"
+    HOTEL = "hotel", "Hotel / Stay"
+    FOOD = "food", "Food"
+    FREE_TIME = "free_time", "Free Time"
+    NOTE = "note", "Note"
+    CUSTOM = "custom", "Custom"
+
+
+class TripItemStatus(models.TextChoices):
+    SUGGESTED = "suggested", "Suggested"
+    PLANNED = "planned", "Planned"
+    BOOKED = "booked", "Booked"
+    COMPLETED = "completed", "Completed"
+    SKIPPED = "skipped", "Skipped"
+
+
+class PlanningSource(models.TextChoices):
+    USER = "user", "User"
+    AGENT = "agent", "Agent"
+    HYBRID = "hybrid", "Hybrid"

@@ -1,0 +1,216 @@
+from rest_framework import status
+from rest_framework.generics import GenericAPIView
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
+from rest_framework.permissions import IsAuthenticated
+from django.shortcuts import get_object_or_404
+
+from accounts.permissions import IsSuperAdmin
+from app.base.pagination import CustomPagination
+from app.utils.cloudinary import delete_image
+from app.utils.response import APIResponse
+from destinations.api.v1.admin.serializers import (
+    AdminDestinationDetailSerializer,
+    AdminDestinationListSerializer,
+    AdminDestinationWriteSerializer,
+)
+from destinations.api.v1.query import apply_destination_filters
+from destinations.models import Destination
+
+
+class DestinationPaginationMixin:
+    pagination_class = CustomPagination
+
+    def paginate_with_meta(self, queryset, serializer_class):
+        paginator = self.pagination_class()
+        page = paginator.paginate_queryset(queryset, self.request, view=self)
+        serializer = serializer_class(page, many=True)
+        return APIResponse.success(
+            data=serializer.data,
+            meta={
+                "count": paginator.page.paginator.count,
+                "page": paginator.page.number,
+                "page_size": paginator.get_page_size(self.request),
+                "num_pages": paginator.page.paginator.num_pages,
+                "next": paginator.get_next_link(),
+                "previous": paginator.get_previous_link(),
+            },
+            message="Destinations fetched successfully.",
+        )
+
+
+class AdminDestinationCreateAPIView(GenericAPIView):
+    """
+    Admin create destination API.
+
+    Frontend request:
+    - Method: POST
+    - Content-Type: multipart/form-data
+    - Send scalar fields normally: name, country, country_code, destination_type, latitude, longitude,
+      tagline, overview, min_stay_days, max_stay_days, budget_tier, difficulty, currency, currency_code,
+      status, data_source, region, getting_around, visa_notes.
+    - Send array/object fields as JSON strings in multipart:
+      `tags=[{"name":"Beach","category":"experience"}]`
+      `local_languages=["English","Thai"]`
+      `best_travel_months=[11,12,1]`
+      `cultural_tips=["Dress modestly at temples","Carry cash for local markets"]`
+    - Send one `cover_image_file` for the main image, or a plain `cover_image` URL.
+    - Send repeated `gallery_images` files for gallery uploads.
+
+    Frontend response:
+    - 201 success with the created destination object including `id`, `slug`, nested `tags`, and `images`.
+    """
+
+    permission_classes = [IsAuthenticated, IsSuperAdmin]
+    serializer_class = AdminDestinationWriteSerializer
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+        destination = serializer.save()
+        return APIResponse.success(
+            data=AdminDestinationDetailSerializer(destination).data,
+            message="Destination created successfully.",
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class AdminDestinationUpdateAPIView(GenericAPIView):
+    """
+    Admin update destination API.
+
+    Frontend request:
+    - Method: PATCH
+    - URL param: `destination_id` (UUID from admin list/detail API).
+    - Content-Type: multipart/form-data
+    - Send only fields you want to change.
+    - Array/object fields still come as JSON strings in multipart.
+    - Send `cover_image_file` to replace the main image.
+    - Send `clear_cover_image=true` to remove the current main image.
+    - Send repeated `gallery_images` files to append new gallery images.
+    - Send `remove_image_urls=["https://...","https://..."]` to delete existing gallery images.
+
+    Frontend response:
+    - 200 success with the fully updated destination object.
+    """
+
+    permission_classes = [IsAuthenticated, IsSuperAdmin]
+    serializer_class = AdminDestinationWriteSerializer
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+    def get_object(self):
+        return get_object_or_404(
+            Destination.objects.prefetch_related("tags", "images"),
+            pk=self.kwargs["destination_id"],
+        )
+
+    def patch(self, request, *args, **kwargs):
+        destination = self.get_object()
+        serializer = self.get_serializer(
+            destination,
+            data=request.data,
+            partial=True,
+            context={"request": request},
+        )
+        serializer.is_valid(raise_exception=True)
+        destination = serializer.save()
+        return APIResponse.success(
+            data=AdminDestinationDetailSerializer(destination).data,
+            message="Destination updated successfully.",
+        )
+
+
+class AdminDestinationDeleteAPIView(GenericAPIView):
+    """
+    Admin delete destination API.
+
+    Frontend request:
+    - Method: DELETE
+    - URL param: `destination_id` (UUID from admin list/detail API).
+    - No request body is required.
+
+    Frontend response:
+    - 200 success with no data payload.
+    - Cloudinary cover image and gallery images are removed before the record is deleted.
+    """
+
+    permission_classes = [IsAuthenticated, IsSuperAdmin]
+
+    def get_object(self):
+        return get_object_or_404(
+            Destination.objects.prefetch_related("images"),
+            pk=self.kwargs["destination_id"],
+        )
+
+    def delete(self, request, *args, **kwargs):
+        destination = self.get_object()
+        if destination.cover_image:
+            delete_image(image_url=destination.cover_image)
+        for image in destination.images.all():
+            delete_image(image_url=image.image_url)
+        destination.delete()
+        return APIResponse.success(message="Destination deleted successfully.")
+
+
+class AdminDestinationListAPIView(DestinationPaginationMixin, GenericAPIView):
+    """
+    Admin destination list API.
+
+    Frontend request:
+    - Method: GET
+    - Query params:
+      `page`, `page_size`
+      `search=nepal`
+      `destination_type=city,beach`
+      `country_code=NPL,THA`
+      `budget_tier=budget,mid`
+      `difficulty=easy,moderate`
+      `tag=heritage,romantic`
+      `best_travel_month=10,11`
+      `status=draft,published`
+      `data_source=manual`
+      `region=South Asia`
+    - Multiple filters can be combined in the same request.
+
+    Frontend response:
+    - 200 success with paginated destination rows.
+    - Each row includes `id` so admin can call update/delete APIs.
+    """
+
+    permission_classes = [IsAuthenticated, IsSuperAdmin]
+
+    def get_queryset(self):
+        queryset = Destination.objects.prefetch_related("tags", "images").order_by("-created_at")
+        return apply_destination_filters(queryset, self.request.query_params, include_status=True)
+
+    def get(self, request, *args, **kwargs):
+        return self.paginate_with_meta(self.get_queryset(), AdminDestinationListSerializer)
+
+
+class AdminDestinationDetailAPIView(GenericAPIView):
+    """
+    Admin destination detail API.
+
+    Frontend request:
+    - Method: GET
+    - URL param: `destination_id` (UUID).
+
+    Frontend response:
+    - 200 success with the full destination object.
+    - Includes internal `id`, nested `tags`, and nested `images`.
+    """
+
+    permission_classes = [IsAuthenticated, IsSuperAdmin]
+
+    def get_object(self):
+        return get_object_or_404(
+            Destination.objects.prefetch_related("tags", "images"),
+            pk=self.kwargs["destination_id"],
+        )
+
+    def get(self, request, *args, **kwargs):
+        destination = self.get_object()
+        return APIResponse.success(
+            data=AdminDestinationDetailSerializer(destination).data,
+            message="Destination fetched successfully.",
+        )

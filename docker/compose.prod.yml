@@ -1,0 +1,123 @@
+services:
+  tourtoise-core-wsgi:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: gunicorn app.wsgi:application --bind 0.0.0.0:8000 --workers ${GUNICORN_WORKERS:-3}
+    env_file:
+      - ../.env
+    environment:
+      APP_ENV: prod
+      DEBUG: "false"
+      DJANGO_RUN_MIGRATIONS: "1"
+      DJANGO_COLLECTSTATIC: "1"
+      DB_HOST: postgres
+      DB_PORT: ${DB_PORT:-5432}
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+    ports:
+      - "${WSGI_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  tourtoise-core-asgi:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: uvicorn app.asgi:application --host 0.0.0.0 --port 8001 --workers ${UVICORN_WORKERS:-2}
+    env_file:
+      - ../.env
+    environment:
+      APP_ENV: prod
+      DEBUG: "false"
+      DB_HOST: postgres
+      DB_PORT: ${DB_PORT:-5432}
+      DJANGO_CREATE_SUPERUSER: "0"
+      DJANGO_WAIT_FOR_MIGRATIONS: "1"
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+    ports:
+      - "${ASGI_PORT:-8001}:8001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  tourtoise-core-celery-worker:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: celery -A app worker -l info
+    env_file:
+      - ../.env
+    environment:
+      APP_ENV: prod
+      DEBUG: "false"
+      DB_HOST: postgres
+      DB_PORT: ${DB_PORT:-5432}
+      DJANGO_CREATE_SUPERUSER: "0"
+      DJANGO_WAIT_FOR_MIGRATIONS: "1"
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  tourtoise-core-celery-beat:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command: celery -A app beat -l info
+    env_file:
+      - ../.env
+    environment:
+      APP_ENV: prod
+      DEBUG: "false"
+      DB_HOST: postgres
+      DB_PORT: ${DB_PORT:-5432}
+      DJANGO_CREATE_SUPERUSER: "0"
+      DJANGO_WAIT_FOR_MIGRATIONS: "1"
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16-alpine
+    env_file:
+      - ../.env
+    environment:
+      POSTGRES_DB: ${DB_NAME:-tourtoise_db}
+      POSTGRES_USER: ${DB_USER:-tourtoise_db_owner}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-tourtoise_db_password}
+    volumes:
+      - postgres_prod_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-tourtoise_db_owner} -d ${DB_NAME:-tourtoise_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_prod_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres_prod_data:
+  redis_prod_data:

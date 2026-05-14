@@ -9,18 +9,27 @@ from app.base.pagination import CustomPagination
 from app.utils.cloudinary import delete_image
 from app.utils.response import APIResponse
 from destinations.api.v1.admin.serializers import (
+    AdminActivitySerializer,
+    AdminAttractionSerializer,
+    AdminCuisineSerializer,
     AdminDestinationDetailSerializer,
     AdminDestinationListSerializer,
     AdminDestinationWriteSerializer,
 )
 from destinations.api.v1.query import apply_destination_filters
-from destinations.models import Destination
+from destinations.models import Activity, Attraction, Cuisine, Destination
 
 
 class DestinationPaginationMixin:
     pagination_class = CustomPagination
 
-    def paginate_with_meta(self, queryset, serializer_class):
+    def paginate_with_meta(
+        self,
+        queryset,
+        serializer_class,
+        *,
+        message="Destinations fetched successfully.",
+    ):
         paginator = self.pagination_class()
         page = paginator.paginate_queryset(queryset, self.request, view=self)
         serializer = serializer_class(page, many=True)
@@ -34,8 +43,141 @@ class DestinationPaginationMixin:
                 "next": paginator.get_next_link(),
                 "previous": paginator.get_previous_link(),
             },
-            message="Destinations fetched successfully.",
+            message=message,
         )
+
+
+class DestinationChildListCreateAPIView(DestinationPaginationMixin, GenericAPIView):
+    permission_classes = [IsAuthenticated, IsSuperAdmin]
+    parser_classes = [JSONParser, FormParser, MultiPartParser]
+    model = None
+    serializer_class = None
+    related_name = ""
+    resource_label = ""
+    singular_label = ""
+
+    def get_destination(self):
+        if hasattr(self, "_destination"):
+            return self._destination
+        self._destination = get_object_or_404(Destination, pk=self.kwargs["destination_id"])
+        return self._destination
+
+    def get_queryset(self):
+        destination = self.get_destination()
+        return self.model.objects.filter(destination=destination)
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context["destination"] = self.get_destination()
+        return context
+
+    def get(self, request, *args, **kwargs):
+        return self.paginate_with_meta(
+            self.get_queryset(),
+            self.serializer_class,
+            message=f"{self.resource_label} fetched successfully.",
+        )
+
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        item = serializer.save()
+        return APIResponse.success(
+            data=self.get_serializer(item).data,
+            message=f"{self.singular_label} created successfully.",
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class DestinationChildDetailAPIView(GenericAPIView):
+    permission_classes = [IsAuthenticated, IsSuperAdmin]
+    parser_classes = [JSONParser, FormParser, MultiPartParser]
+    model = None
+    serializer_class = None
+    lookup_kwarg = ""
+    resource_label = ""
+
+    def get_destination(self):
+        if hasattr(self, "_destination"):
+            return self._destination
+        self._destination = get_object_or_404(Destination, pk=self.kwargs["destination_id"])
+        return self._destination
+
+    def get_object(self):
+        return get_object_or_404(
+            self.model,
+            pk=self.kwargs[self.lookup_kwarg],
+            destination=self.get_destination(),
+        )
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context["destination"] = self.get_destination()
+        return context
+
+    def get(self, request, *args, **kwargs):
+        item = self.get_object()
+        return APIResponse.success(
+            data=self.serializer_class(item).data,
+            message=f"{self.resource_label} fetched successfully.",
+        )
+
+    def patch(self, request, *args, **kwargs):
+        item = self.get_object()
+        serializer = self.get_serializer(item, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        item = serializer.save()
+        return APIResponse.success(
+            data=self.serializer_class(item).data,
+            message=f"{self.resource_label} updated successfully.",
+        )
+
+    def delete(self, request, *args, **kwargs):
+        item = self.get_object()
+        item.delete()
+        return APIResponse.success(message=f"{self.resource_label} deleted successfully.")
+
+
+class AdminDestinationAttractionListCreateAPIView(DestinationChildListCreateAPIView):
+    model = Attraction
+    serializer_class = AdminAttractionSerializer
+    resource_label = "Attractions"
+    singular_label = "Attraction"
+
+
+class AdminDestinationAttractionDetailAPIView(DestinationChildDetailAPIView):
+    model = Attraction
+    serializer_class = AdminAttractionSerializer
+    lookup_kwarg = "attraction_id"
+    resource_label = "Attraction"
+
+
+class AdminDestinationActivityListCreateAPIView(DestinationChildListCreateAPIView):
+    model = Activity
+    serializer_class = AdminActivitySerializer
+    resource_label = "Activities"
+    singular_label = "Activity"
+
+
+class AdminDestinationActivityDetailAPIView(DestinationChildDetailAPIView):
+    model = Activity
+    serializer_class = AdminActivitySerializer
+    lookup_kwarg = "activity_id"
+    resource_label = "Activity"
+
+
+class AdminDestinationCuisineListCreateAPIView(DestinationChildListCreateAPIView):
+    model = Cuisine
+    serializer_class = AdminCuisineSerializer
+    resource_label = "Cuisines"
+    singular_label = "Cuisine"
+
+
+class AdminDestinationCuisineDetailAPIView(DestinationChildDetailAPIView):
+    model = Cuisine
+    serializer_class = AdminCuisineSerializer
+    lookup_kwarg = "cuisine_id"
+    resource_label = "Cuisine"
 
 
 class AdminDestinationCreateAPIView(GenericAPIView):

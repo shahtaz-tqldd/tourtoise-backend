@@ -2,11 +2,12 @@ import json
 from uuid import uuid4
 
 from django.conf import settings
+from django.db import transaction
 from django.utils.text import slugify
 from rest_framework import serializers
 
 from app.utils.cloudinary import delete_image, upload_image
-from destinations.models import Destination, DestinationImage, DestinationTag
+from destinations.models import Activity, Attraction, Cuisine, Destination, DestinationImage, DestinationTag
 
 
 class FlexibleJSONField(serializers.JSONField):
@@ -33,6 +34,185 @@ class DestinationImageSerializer(serializers.ModelSerializer):
         model = DestinationImage
         fields = ("id", "image_url", "caption", "sort_order", "created_at")
         read_only_fields = fields
+
+
+class AdminAttractionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Attraction
+        fields = (
+            "id",
+            "destination",
+            "name",
+            "slug",
+            "attraction_type",
+            "description",
+            "latitude",
+            "longitude",
+            "address",
+            "cover_image",
+            "budget_tier",
+            "avg_duration_hours",
+            "best_time_of_day",
+            "entrance_fee_required",
+            "approx_entrance_fee",
+            "sort_order",
+            "is_featured",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = ("id", "destination", "slug", "created_at", "updated_at")
+        extra_kwargs = {
+            "address": {"required": False, "allow_blank": True},
+            "cover_image": {"required": False, "allow_blank": True},
+            "budget_tier": {"required": False, "allow_blank": True},
+            "approx_entrance_fee": {"required": False, "allow_blank": True},
+        }
+
+    def validate(self, attrs):
+        self._validate_unique_slug(attrs)
+        return attrs
+
+    def create(self, validated_data):
+        request = self.context["request"]
+        validated_data["destination"] = self.context["destination"]
+        validated_data["created_by"] = request.user
+        validated_data["updated_by"] = request.user
+        return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        validated_data["updated_by"] = self.context["request"].user
+        return super().update(instance, validated_data)
+
+    def _validate_unique_slug(self, attrs):
+        destination = self.context.get("destination")
+        if not destination or destination._state.adding:
+            return
+        name = attrs.get("name", getattr(self.instance, "name", ""))
+        slug = slugify(name)
+        queryset = Attraction.objects.filter(destination=destination, slug=slug)
+        if self.instance:
+            queryset = queryset.exclude(pk=self.instance.pk)
+        if queryset.exists():
+            raise serializers.ValidationError(
+                {"name": "An attraction with this name already exists for this destination."}
+            )
+
+
+class AdminActivitySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Activity
+        fields = (
+            "id",
+            "destination",
+            "name",
+            "slug",
+            "activity_type",
+            "description",
+            "difficulty_level",
+            "budget_tier",
+            "approx_cost",
+            "cost_unit",
+            "duration_hours",
+            "best_season",
+            "cover_image",
+            "booking_required",
+            "is_featured",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = ("id", "destination", "slug", "created_at", "updated_at")
+        extra_kwargs = {
+            "cost_unit": {"required": False, "allow_blank": True},
+            "best_season": {"required": False, "allow_blank": True},
+            "cover_image": {"required": False, "allow_blank": True},
+        }
+
+    def validate(self, attrs):
+        self._validate_unique_slug(attrs)
+        return attrs
+
+    def create(self, validated_data):
+        request = self.context["request"]
+        validated_data["destination"] = self.context["destination"]
+        validated_data["created_by"] = request.user
+        validated_data["updated_by"] = request.user
+        return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        validated_data["updated_by"] = self.context["request"].user
+        return super().update(instance, validated_data)
+
+    def _validate_unique_slug(self, attrs):
+        destination = self.context.get("destination")
+        if not destination or destination._state.adding:
+            return
+        name = attrs.get("name", getattr(self.instance, "name", ""))
+        slug = slugify(name)
+        queryset = Activity.objects.filter(destination=destination, slug=slug)
+        if self.instance:
+            queryset = queryset.exclude(pk=self.instance.pk)
+        if queryset.exists():
+            raise serializers.ValidationError(
+                {"name": "An activity with this name already exists for this destination."}
+            )
+
+
+class AdminCuisineSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Cuisine
+        fields = (
+            "id",
+            "destination",
+            "name",
+            "slug",
+            "cuisine_type",
+            "description",
+            "ingredients_note",
+            "spice_level",
+            "meal_type",
+            "cover_image",
+            "is_vegetarian_friendly",
+            "is_must_try",
+            "approx_price_range",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = ("id", "destination", "slug", "created_at", "updated_at")
+        extra_kwargs = {
+            "cuisine_type": {"required": False, "allow_blank": True},
+            "ingredients_note": {"required": False, "allow_blank": True},
+            "cover_image": {"required": False, "allow_blank": True},
+            "approx_price_range": {"required": False, "allow_blank": True},
+        }
+
+    def validate(self, attrs):
+        self._validate_unique_slug(attrs)
+        return attrs
+
+    def create(self, validated_data):
+        request = self.context["request"]
+        validated_data["destination"] = self.context["destination"]
+        validated_data["created_by"] = request.user
+        validated_data["updated_by"] = request.user
+        return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        validated_data["updated_by"] = self.context["request"].user
+        return super().update(instance, validated_data)
+
+    def _validate_unique_slug(self, attrs):
+        destination = self.context.get("destination")
+        if not destination or destination._state.adding:
+            return
+        name = attrs.get("name", getattr(self.instance, "name", ""))
+        slug = slugify(name)
+        queryset = Cuisine.objects.filter(destination=destination, slug=slug)
+        if self.instance:
+            queryset = queryset.exclude(pk=self.instance.pk)
+        if queryset.exists():
+            raise serializers.ValidationError(
+                {"name": "A cuisine with this name already exists for this destination."}
+            )
 
 
 class AdminDestinationListSerializer(serializers.ModelSerializer):
@@ -106,6 +286,9 @@ class AdminDestinationDetailSerializer(serializers.ModelSerializer):
 
 class AdminDestinationWriteSerializer(serializers.ModelSerializer):
     tags = FlexibleJSONField(required=False)
+    attractions = FlexibleJSONField(required=False, write_only=True)
+    activities = FlexibleJSONField(required=False, write_only=True)
+    cuisines = FlexibleJSONField(required=False, write_only=True)
     local_languages = FlexibleJSONField(required=False)
     best_travel_months = FlexibleJSONField(required=False)
     cultural_tips = FlexibleJSONField(required=False)
@@ -133,6 +316,9 @@ class AdminDestinationWriteSerializer(serializers.ModelSerializer):
             "cover_image",
             "cover_image_file",
             "tags",
+            "attractions",
+            "activities",
+            "cuisines",
             "min_stay_days",
             "max_stay_days",
             "budget_tier",
@@ -178,6 +364,27 @@ class AdminDestinationWriteSerializer(serializers.ModelSerializer):
             normalized_tags.append({"name": name, "category": category})
         return normalized_tags
 
+    def validate_attractions(self, value):
+        return self._validate_nested_resource(
+            value,
+            serializer_class=AdminAttractionSerializer,
+            field_name="attractions",
+        )
+
+    def validate_activities(self, value):
+        return self._validate_nested_resource(
+            value,
+            serializer_class=AdminActivitySerializer,
+            field_name="activities",
+        )
+
+    def validate_cuisines(self, value):
+        return self._validate_nested_resource(
+            value,
+            serializer_class=AdminCuisineSerializer,
+            field_name="cuisines",
+        )
+
     def validate_local_languages(self, value):
         return self._ensure_string_list(value, field_name="local_languages")
 
@@ -211,6 +418,16 @@ class AdminDestinationWriteSerializer(serializers.ModelSerializer):
         return self._ensure_string_list(value, field_name="remove_image_urls")
 
     def validate(self, attrs):
+        if self.instance is not None:
+            nested_fields = ("attractions", "activities", "cuisines")
+            nested_errors = {
+                field: "Use this destination's separate admin API to manage this resource."
+                for field in nested_fields
+                if field in attrs
+            }
+            if nested_errors:
+                raise serializers.ValidationError(nested_errors)
+
         cover_image = attrs.get("cover_image", "")
         cover_image_file = attrs.get("cover_image_file", serializers.empty)
         clear_cover_image = attrs.get("clear_cover_image", False)
@@ -238,6 +455,9 @@ class AdminDestinationWriteSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         tags_data = validated_data.pop("tags", [])
+        attractions_data = validated_data.pop("attractions", [])
+        activities_data = validated_data.pop("activities", [])
+        cuisines_data = validated_data.pop("cuisines", [])
         cover_image_file = validated_data.pop("cover_image_file", serializers.empty)
         gallery_images = validated_data.pop("gallery_images", [])
         validated_data.pop("remove_image_urls", [])
@@ -248,14 +468,21 @@ class AdminDestinationWriteSerializer(serializers.ModelSerializer):
         validated_data["updated_by"] = request.user
         validated_data["cover_image"] = validated_data.get("cover_image", "")
 
-        destination = Destination.objects.create(**validated_data)
-        self._sync_tags(destination, tags_data)
-        self._sync_cover_image(destination, cover_image_file, keep_existing=False)
-        self._create_gallery_images(destination, gallery_images)
+        with transaction.atomic():
+            destination = Destination.objects.create(**validated_data)
+            self._sync_tags(destination, tags_data)
+            self._sync_cover_image(destination, cover_image_file, keep_existing=False)
+            self._create_gallery_images(destination, gallery_images)
+            self._create_nested_resources(destination, attractions_data, AdminAttractionSerializer)
+            self._create_nested_resources(destination, activities_data, AdminActivitySerializer)
+            self._create_nested_resources(destination, cuisines_data, AdminCuisineSerializer)
         return destination
 
     def update(self, instance, validated_data):
         tags_data = validated_data.pop("tags", None)
+        validated_data.pop("attractions", None)
+        validated_data.pop("activities", None)
+        validated_data.pop("cuisines", None)
         cover_image_file = validated_data.pop("cover_image_file", serializers.empty)
         gallery_images = validated_data.pop("gallery_images", [])
         remove_image_urls = validated_data.pop("remove_image_urls", [])
@@ -286,6 +513,38 @@ class AdminDestinationWriteSerializer(serializers.ModelSerializer):
         if not isinstance(value, list):
             raise serializers.ValidationError(f"Send {field_name} as a JSON array.")
         return [str(item).strip() for item in value if str(item).strip()]
+
+    def _validate_nested_resource(self, value, *, serializer_class, field_name):
+        if value in (None, ""):
+            return []
+        if not isinstance(value, list):
+            raise serializers.ValidationError(f"Send {field_name} as a JSON array.")
+        destination = self.instance or Destination()
+        serializer = serializer_class(
+            data=value,
+            many=True,
+            context={
+                "request": self.context["request"],
+                "destination": destination,
+            },
+        )
+        serializer.is_valid(raise_exception=True)
+        self._validate_unique_nested_names(serializer.validated_data, field_name=field_name)
+        return serializer.validated_data
+
+    def _validate_unique_nested_names(self, items, *, field_name):
+        seen = set()
+        duplicates = set()
+        for item in items:
+            slug = slugify(item.get("name", ""))
+            if slug in seen:
+                duplicates.add(item.get("name", ""))
+            seen.add(slug)
+        if duplicates:
+            duplicate_names = ", ".join(sorted(name for name in duplicates if name))
+            raise serializers.ValidationError(
+                f"Duplicate {field_name} names are not allowed in the same destination payload: {duplicate_names}."
+            )
 
     def _sync_tags(self, destination, tags_data):
         tag_ids = []
@@ -342,7 +601,6 @@ class AdminDestinationWriteSerializer(serializers.ModelSerializer):
                 image_url=upload["url"],
                 sort_order=index,
                 created_by=request.user,
-                updated_by=request.user,
             )
 
     def _delete_gallery_images(self, destination, remove_image_urls):
@@ -352,6 +610,18 @@ class AdminDestinationWriteSerializer(serializers.ModelSerializer):
         for image in images_to_remove:
             delete_image(image_url=image.image_url)
             image.delete()
+
+    def _create_nested_resources(self, destination, items, serializer_class):
+        serializer = serializer_class(
+            data=items,
+            many=True,
+            context={
+                "request": self.context["request"],
+                "destination": destination,
+            },
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
 
     def _build_cover_public_id(self, destination):
         base_name = slugify(destination.name) or uuid4().hex[:8]

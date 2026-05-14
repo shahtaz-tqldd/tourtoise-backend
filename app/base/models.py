@@ -27,6 +27,7 @@ class BaseModel(models.Model):
 class BaseImage(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid4, editable=False)
     image_url = models.URLField()
+    caption = models.CharField(max_length=200, blank=True)
     sort_order = models.PositiveSmallIntegerField(default=0)
     
     created_at = models.DateTimeField(auto_now_add=True)

@@ -88,7 +88,7 @@ class User(AbstractBaseUser, PermissionsMixin):
 
 class UserProfile(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="profile")
-    username = models.SlugField(max_length=50, unique=True, blank=True)
+    username = models.SlugField(max_length=50, unique=True, blank=True, null=True)
     avatar_url = models.URLField(blank=True)
     bio = models.TextField(blank=True)
     date_of_birth = models.DateField(blank=True, null=True)

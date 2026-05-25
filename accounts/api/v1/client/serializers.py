@@ -1,6 +1,7 @@
 from django.contrib.auth import authenticate, get_user_model
 from django.contrib.auth.password_validation import validate_password
 from django.conf import settings
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 from django.utils.text import slugify
 from rest_framework import serializers
@@ -160,6 +161,8 @@ class UserUpdateSerializer(serializers.ModelSerializer):
         read_only_fields = ("avatar_url",)
 
     def validate_username(self, value):
+        if not value:
+            return None
         profile = get_or_create_profile(self.instance)
         queryset = UserProfile.objects.filter(username=value)
         queryset = queryset.exclude(pk=profile.pk)
@@ -277,20 +280,34 @@ class RegisterSerializer(serializers.ModelSerializer):
 
     def validate_username(self, value):
         if not value:
-            return value
+            return None
         if UserProfile.objects.filter(username=value).exists():
             raise serializers.ValidationError("This username is already taken.")
         return value
 
     def create(self, validated_data):
-        username = validated_data.pop("username", "")
+        username = validated_data.pop("username", None)
         validated_data.pop("confirm_password")
         password = validated_data.pop("password")
-        user = User.objects.create_user(password=password, **validated_data)
-        if username:
-            profile = get_or_create_profile(user)
-            profile.username = username
-            profile.save(update_fields=["username"])
+        try:
+            with transaction.atomic():
+                user = User.objects.create_user(password=password, **validated_data)
+                if username:
+                    profile = get_or_create_profile(user)
+                    profile.username = username
+                    profile.save(update_fields=["username"])
+        except IntegrityError as exc:
+            if User.objects.filter(email__iexact=validated_data["email"]).exists():
+                raise serializers.ValidationError(
+                    {"email": "A user with this email already exists."}
+                ) from exc
+            if username and UserProfile.objects.filter(username=username).exists():
+                raise serializers.ValidationError(
+                    {"username": "This username is already taken. Please choose another username."}
+                ) from exc
+            raise serializers.ValidationError(
+                {"non_field_errors": "Could not create user. Please try again."}
+            ) from exc
         return user
 
 

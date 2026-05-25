@@ -1,6 +1,7 @@
 from django.contrib.auth import get_user_model
 from django.shortcuts import get_object_or_404
 from rest_framework import status
+from rest_framework import serializers as drf_serializers
 from rest_framework.generics import CreateAPIView, GenericAPIView
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
@@ -42,8 +43,20 @@ class CreateNewUserView(CreateAPIView):
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        user = serializer.save()
+        if not serializer.is_valid():
+            return APIResponse.error(
+                errors=serializer.errors,
+                message="Registration failed.",
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            user = serializer.save()
+        except drf_serializers.ValidationError as exc:
+            return APIResponse.error(
+                errors=exc.detail,
+                message="Registration failed.",
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         return APIResponse.success(
             data=UserSerializer(user).data,
             message="User created successfully.",

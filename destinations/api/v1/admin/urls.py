@@ -5,6 +5,8 @@ from destinations.api.v1.admin.views import (
     AdminDestinationActivityListCreateAPIView,
     AdminDestinationAttractionDetailAPIView,
     AdminDestinationAttractionListCreateAPIView,
+    AdminDestinationBulkTemplateAPIView,
+    AdminDestinationBulkUploadAPIView,
     AdminDestinationCreateAPIView,
     AdminDestinationCuisineDetailAPIView,
     AdminDestinationCuisineListCreateAPIView,
@@ -17,6 +19,8 @@ from destinations.api.v1.admin.views import (
 
 urlpatterns = [
     path("create/", AdminDestinationCreateAPIView.as_view(), name="admin-destination-create"),
+    path("bulk-template/", AdminDestinationBulkTemplateAPIView.as_view(), name="admin-destination-bulk-template"),
+    path("bulk-upload/", AdminDestinationBulkUploadAPIView.as_view(), name="admin-destination-bulk-upload"),
     path("list/", AdminDestinationListAPIView.as_view(), name="admin-destination-list"),
     path("<uuid:destination_id>/detail/", AdminDestinationDetailAPIView.as_view(), name="admin-destination-detail"),
     path("<uuid:destination_id>/update/", AdminDestinationUpdateAPIView.as_view(), name="admin-destination-update"),

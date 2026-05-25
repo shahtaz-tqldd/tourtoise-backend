@@ -84,7 +84,13 @@ class ClientDestinationDetailAPIView(GenericAPIView):
     def get_object(self):
         return get_object_or_404(
             Destination.objects.filter(status="published")
-            .prefetch_related("tags", "images"),
+            .prefetch_related(
+                "tags",
+                "images",
+                "attractions__images",
+                "activities__images",
+                "cuisines__images",
+            ),
             slug=self.kwargs["slug"],
         )
 

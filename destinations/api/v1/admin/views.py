@@ -12,9 +12,11 @@ from destinations.api.v1.admin.serializers import (
     AdminActivitySerializer,
     AdminAttractionSerializer,
     AdminCuisineSerializer,
+    AdminDestinationBulkUploadSerializer,
     AdminDestinationDetailSerializer,
     AdminDestinationListSerializer,
     AdminDestinationWriteSerializer,
+    BULK_DESTINATION_TEMPLATE,
 )
 from destinations.api.v1.query import apply_destination_filters
 from destinations.models import Activity, Attraction, Cuisine, Destination
@@ -187,15 +189,19 @@ class AdminDestinationCreateAPIView(GenericAPIView):
     Frontend request:
     - Method: POST
     - Content-Type: multipart/form-data
-    - Send scalar fields normally: name, country, country_code, destination_type, latitude, longitude,
-      tagline, overview, min_stay_days, max_stay_days, budget_tier, difficulty, currency, currency_code,
+    - Send scalar fields normally: name, country, destination_type, latitude, longitude,
+      tagline, overview, min_stay_days, max_stay_days, budget_tier, difficulty, currency,
       status, data_source, region, getting_around, visa_notes.
     - Send array/object fields as JSON strings in multipart:
       `tags=[{"name":"Beach","category":"experience"}]`
+      `attractions=[{"name":"Phewa Lake","attraction_type":"natural_site","description":"..."}]`
+      `activities=[{"name":"Paragliding","activity_type":"adventure","description":"...","budget_tier":"premium"}]`
+      `cuisines=[{"name":"Thakali Set","description":"..."}]`
       `local_languages=["English","Thai"]`
       `best_travel_months=[11,12,1]`
       `cultural_tips=["Dress modestly at temples","Carry cash for local markets"]`
     - Send one `cover_image_file` for the main image, or a plain `cover_image` URL.
+    - Send child cover image files by index, for example `attractions[0].cover_image_file`.
     - Send repeated `gallery_images` files for gallery uploads.
 
     Frontend response:
@@ -217,6 +223,57 @@ class AdminDestinationCreateAPIView(GenericAPIView):
         )
 
 
+class AdminDestinationBulkTemplateAPIView(GenericAPIView):
+    """
+    Admin bulk destination template API.
+
+    Frontend request:
+    - Method: GET
+
+    Frontend response:
+    - 200 success with CSV columns, XLSX sheet headers, example rows, and allowed enum values.
+    """
+
+    permission_classes = [IsAuthenticated, IsSuperAdmin]
+
+    def get(self, request, *args, **kwargs):
+        return APIResponse.success(
+            data=BULK_DESTINATION_TEMPLATE,
+            message="Bulk destination template fetched successfully.",
+        )
+
+
+class AdminDestinationBulkUploadAPIView(GenericAPIView):
+    """
+    Admin bulk destination upload API.
+
+    Frontend request:
+    - Method: POST
+    - Content-Type: multipart/form-data
+    - Send `file` as a `.xlsx` workbook or combined `.csv`.
+    - XLSX sheets: destinations, attractions, activities, cuisines.
+    - CSV uses `record_type` values: destination, attraction, activity, cuisine.
+    - All image fields are URL strings. No image file uploads are processed here.
+
+    Frontend response:
+    - 201 success with created counts and created destination ids.
+    """
+
+    permission_classes = [IsAuthenticated, IsSuperAdmin]
+    serializer_class = AdminDestinationBulkUploadSerializer
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+        result = serializer.save()
+        return APIResponse.success(
+            data=result,
+            message="Bulk destinations created successfully.",
+            status=status.HTTP_201_CREATED,
+        )
+
+
 class AdminDestinationUpdateAPIView(GenericAPIView):
     """
     Admin update destination API.
@@ -231,6 +288,8 @@ class AdminDestinationUpdateAPIView(GenericAPIView):
     - Send `clear_cover_image=true` to remove the current main image.
     - Send repeated `gallery_images` files to append new gallery images.
     - Send `remove_image_urls=["https://...","https://..."]` to delete existing gallery images.
+    - To replace a child cover image, send the child id list and matching indexed file:
+      `attractions=[{"id":"..."}]` with `attractions[0].cover_image_file`.
 
     Frontend response:
     - 200 success with the fully updated destination object.
@@ -339,14 +398,20 @@ class AdminDestinationDetailAPIView(GenericAPIView):
 
     Frontend response:
     - 200 success with the full destination object.
-    - Includes internal `id`, nested `tags`, and nested `images`.
+    - Includes internal `id`, nested `tags`, nested `images`, and destination child resources.
     """
 
     permission_classes = [IsAuthenticated, IsSuperAdmin]
 
     def get_object(self):
         return get_object_or_404(
-            Destination.objects.prefetch_related("tags", "images"),
+            Destination.objects.prefetch_related(
+                "tags",
+                "images",
+                "attractions__images",
+                "activities__images",
+                "cuisines__images",
+            ),
             pk=self.kwargs["destination_id"],
         )
 

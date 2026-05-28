@@ -1,4 +1,5 @@
-from django.db.models import Prefetch, Q
+from django.db.models import CharField, F, Prefetch, Q
+from django.db.models.functions import Cast
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.generics import GenericAPIView
@@ -115,6 +116,7 @@ class TripListAPIView(TripPaginationMixin, UserTripQuerysetMixin, GenericAPIView
       `status=draft,ready`
       `planning_source=agent,hybrid`
       `destination=tokyo`
+      `destination_slug=tokyo`
       `start_date_from=2026-12-01`
       `start_date_to=2026-12-31`
     - Multiple filters can be combined.
@@ -145,9 +147,14 @@ class TripListAPIView(TripPaginationMixin, UserTripQuerysetMixin, GenericAPIView
         if planning_sources:
             queryset = queryset.filter(planning_source__in=planning_sources)
 
-        destinations = self._get_multi_values("destination")
-        if destinations:
-            queryset = queryset.filter(trip_destinations__destination__slug__in=destinations)
+        destination_slugs = self._get_multi_values("destination") + self._get_multi_values(
+            "destination_slug"
+        )
+        if destination_slugs:
+            queryset = queryset.annotate(
+                agent_context_text=Cast("agent_context", CharField()),
+                plan_snapshot_text=Cast("plan_versions__snapshot", CharField()),
+            ).filter(self._build_destination_slug_query(destination_slugs))
 
         start_date_from = params.get("start_date_from")
         if start_date_from:
@@ -167,6 +174,15 @@ class TripListAPIView(TripPaginationMixin, UserTripQuerysetMixin, GenericAPIView
         for item in self.request.query_params.getlist(key):
             values.extend([part.strip() for part in str(item).split(",") if part.strip()])
         return values
+
+    def _build_destination_slug_query(self, destination_slugs):
+        query = Q(trip_destinations__destination__slug__in=destination_slugs)
+        for slug in destination_slugs:
+            query |= Q(agent_context_text__icontains=slug) | Q(
+                plan_versions__version=F("latest_plan_version"),
+                plan_snapshot_text__icontains=slug,
+            )
+        return query
 
 
 class TripDetailAPIView(UserTripQuerysetMixin, GenericAPIView):

@@ -32,7 +32,7 @@ class UserAdmin(BaseUserAdmin):
 
 @admin.register(UserProfile)
 class UserProfileAdmin(admin.ModelAdmin):
-    list_display = ("user", "username", "travel_style", "preferred_currency", "preferred_language", "is_public_profile")
-    list_filter = ("travel_style", "preferred_currency", "preferred_language", "is_public_profile")
+    list_display = ("user", "username", "travel_pace", "preferred_currency", "preferred_language", "is_public_profile")
+    list_filter = ("travel_pace", "preferred_currency", "preferred_language", "is_public_profile")
     search_fields = ("user__email", "username", "city", "country_of_residence")
     autocomplete_fields = ("user",)

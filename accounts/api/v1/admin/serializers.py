@@ -68,7 +68,7 @@ class AccountListSerializer(serializers.ModelSerializer):
     location = serializers.CharField(source="profile.location", read_only=True)
     public_profile = serializers.BooleanField(source="profile.is_public_profile", read_only=True)
     last_active_at = serializers.DateTimeField(source="last_login", read_only=True)
-    travel_style = serializers.CharField(source="profile.travel_style", read_only=True)
+    travel_pace = serializers.CharField(source="profile.travel_pace", read_only=True)
 
     class Meta:
         model = User
@@ -80,7 +80,7 @@ class AccountListSerializer(serializers.ModelSerializer):
             "location",
             "phone",
             "status",
-            "travel_style",
+            "travel_pace",
             "public_profile",
             "is_staff",
             "is_superuser",

@@ -23,13 +23,12 @@ class TripAdmin(admin.ModelAdmin):
         "title",
         "user",
         "status",
-        "planning_source",
         "travelers_count",
         "start_date",
         "end_date",
         "updated_at",
     )
-    list_filter = ("status", "planning_source", "visibility", "trip_pace")
+    list_filter = ("status", "visibility", "trip_pace")
     search_fields = ("title", "user__email", "user__name")
     readonly_fields = ("id", "share_token", "created_at", "updated_at", "created_by", "updated_by")
     autocomplete_fields = ("user",)

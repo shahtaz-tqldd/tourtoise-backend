@@ -1,7 +1,11 @@
+from datetime import timedelta
+
+from django.db import transaction
 from django.urls import reverse
 from rest_framework import serializers
 
 from destinations.api.v1.client.serializers import ClientDestinationListSerializer
+from destinations.choices import Status
 from destinations.models import Activity, Attraction, Cuisine, Destination
 from trips.choices import PlanningSource
 from trips.models import Trip, TripDay, TripDestination, TripItineraryItem, TripPlanVersion
@@ -191,13 +195,17 @@ class TripListSerializer(serializers.ModelSerializer):
             "status",
             "planning_source",
             "visibility",
+            "current_step",
             "start_date",
             "end_date",
             "nights",
+            "duration_days",
             "travelers_count",
+            "traveler_type",
             "trip_pace",
             "total_budget",
             "budget_currency",
+            "accommodation_preference",
             "primary_destination",
             "destinations_count",
             "days_count",
@@ -247,19 +255,29 @@ class TripDetailSerializer(serializers.ModelSerializer):
             "status",
             "visibility",
             "planning_source",
+            "current_step",
             "start_date",
             "end_date",
             "nights",
+            "duration_days",
             "travelers_count",
+            "traveler_type",
             "trip_pace",
             "origin_city",
             "origin_country",
+            "start_location_address",
+            "start_location_latitude",
+            "start_location_longitude",
             "total_budget",
             "budget_currency",
+            "accommodation_preference",
             "preferences",
             "constraints",
             "traveler_profile_snapshot",
             "planning_summary",
+            "agent_active",
+            "agent_active_failed_message",
+            "agent_message",
             "agent_context",
             "latest_plan_version",
             "share_url",
@@ -293,16 +311,26 @@ class PublicTripDetailSerializer(serializers.ModelSerializer):
             "status",
             "visibility",
             "planning_source",
+            "current_step",
             "start_date",
             "end_date",
             "nights",
+            "duration_days",
             "travelers_count",
+            "traveler_type",
             "trip_pace",
             "origin_city",
             "origin_country",
+            "start_location_address",
+            "start_location_latitude",
+            "start_location_longitude",
             "total_budget",
             "budget_currency",
+            "accommodation_preference",
             "planning_summary",
+            "agent_active",
+            "agent_active_failed_message",
+            "agent_message",
             "trip_destinations",
             "days",
             "share_url",
@@ -319,6 +347,14 @@ class PublicTripDetailSerializer(serializers.ModelSerializer):
 
 
 class TripWriteSerializer(serializers.ModelSerializer):
+    days = serializers.IntegerField(write_only=True, min_value=1, max_value=365, required=False)
+    destination_slugs = serializers.ListField(
+        child=serializers.SlugField(),
+        write_only=True,
+        required=False,
+        allow_empty=False,
+    )
+
     class Meta:
         model = Trip
         fields = (
@@ -326,14 +362,23 @@ class TripWriteSerializer(serializers.ModelSerializer):
             "status",
             "visibility",
             "planning_source",
+            "current_step",
             "start_date",
             "end_date",
+            "days",
+            "duration_days",
             "travelers_count",
+            "traveler_type",
             "trip_pace",
             "origin_city",
             "origin_country",
+            "start_location_address",
+            "start_location_latitude",
+            "start_location_longitude",
             "total_budget",
             "budget_currency",
+            "accommodation_preference",
+            "destination_slugs",
             "preferences",
             "constraints",
             "traveler_profile_snapshot",
@@ -344,41 +389,158 @@ class TripWriteSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         start_date = attrs.get("start_date", getattr(self.instance, "start_date", None))
         end_date = attrs.get("end_date", getattr(self.instance, "end_date", None))
+        days = attrs.pop("days", None)
+        destination_slugs = attrs.get("destination_slugs")
+
+        if days is not None:
+            attrs["duration_days"] = days
+            if start_date and not end_date:
+                attrs["end_date"] = start_date + timedelta(days=days - 1)
+                end_date = attrs["end_date"]
+
         if start_date and end_date and end_date < start_date:
             raise serializers.ValidationError({"end_date": "end_date must be after or equal to start_date."})
+
+        if destination_slugs:
+            duplicates = sorted({slug for slug in destination_slugs if destination_slugs.count(slug) > 1})
+            if duplicates:
+                raise serializers.ValidationError(
+                    {"destination_slugs": f"Duplicate destination slug(s): {', '.join(duplicates)}."}
+                )
+
+            found_slugs = set(
+                Destination.objects.filter(slug__in=destination_slugs, status=Status.PUBLISHED)
+                .values_list("slug", flat=True)
+            )
+            missing_slugs = [slug for slug in destination_slugs if slug not in found_slugs]
+            if missing_slugs:
+                raise serializers.ValidationError(
+                    {"destination_slugs": f"Destination not found or not available: {', '.join(missing_slugs)}."}
+                )
+
         return attrs
 
     def create(self, validated_data):
         request = self.context["request"]
+        destination_slugs = validated_data.pop("destination_slugs", [])
+        validated_data["current_step"] = 2
         validated_data.setdefault("traveler_profile_snapshot", self._build_traveler_snapshot(request.user))
-        return Trip.objects.create(
-            user=request.user,
-            created_by=request.user,
-            updated_by=request.user,
-            **validated_data,
-        )
+        with transaction.atomic():
+            trip = Trip.objects.create(
+                user=request.user,
+                created_by=request.user,
+                updated_by=request.user,
+                **validated_data,
+            )
+            self._create_trip_destinations(trip, destination_slugs)
+            return trip
 
     def update(self, instance, validated_data):
+        validated_data.pop("destination_slugs", None)
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
         instance.updated_by = self.context["request"].user
         instance.save()
         return instance
 
+    def _create_trip_destinations(self, trip, destination_slugs):
+        if not destination_slugs:
+            return
+
+        request = self.context["request"]
+        destinations_by_slug = Destination.objects.in_bulk(destination_slugs, field_name="slug")
+        trip_destinations = [
+            TripDestination(
+                trip=trip,
+                destination=destinations_by_slug[slug],
+                sort_order=index,
+                is_primary=index == 1,
+                created_by=request.user,
+                updated_by=request.user,
+            )
+            for index, slug in enumerate(destination_slugs, start=1)
+        ]
+        TripDestination.objects.bulk_create(trip_destinations)
+
     def _build_traveler_snapshot(self, user):
         profile = getattr(user, "profile", None)
         if not profile:
             return {}
         return {
-            "travel_style": profile.travel_style,
             "travel_interests": profile.travel_interests,
             "dietary_preferences": profile.dietary_preferences,
+            "travel_pace": profile.travel_pace,
+            "mobility_constraints": profile.mobility_constraints,
             "preferred_language": profile.preferred_language,
             "preferred_currency": profile.preferred_currency,
-            "accessibility_needs": profile.accessibility_needs,
             "country_of_residence": profile.country_of_residence,
             "city": profile.city,
         }
+
+
+class TripAgentActiveSerializer(serializers.Serializer):
+    trip_id = serializers.UUIDField()
+    travel_pace = serializers.CharField(max_length=40, allow_blank=True, required=False)
+    interest_tags = serializers.ListField(
+        child=serializers.CharField(max_length=80),
+        required=False,
+        allow_empty=True,
+    )
+    dietary_needs = serializers.ListField(
+        child=serializers.CharField(max_length=80),
+        required=False,
+        allow_empty=True,
+    )
+    dietary_other = serializers.CharField(max_length=200, allow_blank=True, required=False)
+    mobility_constraints = serializers.ListField(
+        child=serializers.CharField(max_length=120),
+        required=False,
+        allow_empty=True,
+    )
+    mobility_other = serializers.CharField(max_length=200, allow_blank=True, required=False)
+
+    def validate(self, attrs):
+        attrs["interest_tags"] = self._clean_list(attrs.get("interest_tags", []))
+        attrs["dietary_needs"] = self._append_other(
+            attrs.get("dietary_needs", []),
+            attrs.get("dietary_other", ""),
+        )
+        attrs["mobility_constraints"] = self._append_other(
+            attrs.get("mobility_constraints", []),
+            attrs.get("mobility_other", ""),
+        )
+        attrs["travel_pace"] = attrs.get("travel_pace", "").strip()
+        return attrs
+
+    def normalized_preferences(self):
+        data = self.validated_data
+        return {
+            "travel_pace": data["travel_pace"],
+            "interest_tags": data["interest_tags"],
+            "dietary_needs": data["dietary_needs"],
+            "mobility_constraints": data["mobility_constraints"],
+        }
+
+    def _append_other(self, values, other):
+        cleaned = self._clean_list(values)
+        other = (other or "").strip()
+        if other and other not in cleaned:
+            cleaned.append(other)
+        return cleaned
+
+    def _clean_list(self, values):
+        cleaned = []
+        for value in values or []:
+            value = value.strip() if isinstance(value, str) else value
+            if value and value not in cleaned:
+                cleaned.append(value)
+        return cleaned
+
+
+class TripAgentCreateMessageSerializer(serializers.Serializer):
+    trip_id = serializers.UUIDField()
+    current_step = serializers.IntegerField(min_value=1, max_value=6)
+    message = serializers.CharField(allow_blank=False, trim_whitespace=True)
 
 
 class TripPlanVersionSerializer(serializers.ModelSerializer):

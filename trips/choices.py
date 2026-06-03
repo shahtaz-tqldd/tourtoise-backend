@@ -22,6 +22,25 @@ class TripPace(models.TextChoices):
     FAST = "fast", "Fast"
 
 
+class TravelerType(models.TextChoices):
+    SOLO = "solo", "Solo"
+    COUPLE = "couple", "Couple"
+    FAMILY = "family", "Family"
+    FRIENDS = "friends", "Friends"
+    GROUP = "group", "Group"
+    BUSINESS = "business", "Business"
+
+
+class AccommodationPreference(models.TextChoices):
+    BUDGET = "budget", "Budget"
+    MID_RANGE = "mid_range", "Mid-range"
+    LUXURY = "luxury", "Luxury"
+    BOUTIQUE = "boutique", "Boutique"
+    APARTMENT = "apartment", "Apartment"
+    HOSTEL = "hostel", "Hostel"
+    ANY = "any", "Any"
+
+
 class TripItemType(models.TextChoices):
     TRANSIT = "transit", "Transit"
     ATTRACTION = "attraction", "Attraction"

@@ -33,10 +33,10 @@ class UserSerializer(serializers.ModelSerializer):
     city = serializers.CharField(source="profile.city", read_only=True)
     preferred_language = serializers.CharField(source="profile.preferred_language", read_only=True)
     preferred_currency = serializers.CharField(source="profile.preferred_currency", read_only=True)
-    travel_style = serializers.CharField(source="profile.travel_style", read_only=True)
     travel_interests = serializers.ListField(source="profile.travel_interests", read_only=True)
     dietary_preferences = serializers.ListField(source="profile.dietary_preferences", read_only=True)
-    accessibility_needs = serializers.CharField(source="profile.accessibility_needs", read_only=True)
+    travel_pace = serializers.CharField(source="profile.travel_pace", read_only=True)
+    mobility_constraints = serializers.ListField(source="profile.mobility_constraints", read_only=True)
     emergency_contact_name = serializers.CharField(source="profile.emergency_contact_name", read_only=True)
     emergency_contact_phone = serializers.CharField(source="profile.emergency_contact_phone", read_only=True)
     is_public_profile = serializers.BooleanField(source="profile.is_public_profile", read_only=True)
@@ -61,10 +61,10 @@ class UserSerializer(serializers.ModelSerializer):
             "city",
             "preferred_language",
             "preferred_currency",
-            "travel_style",
             "travel_interests",
             "dietary_preferences",
-            "accessibility_needs",
+            "travel_pace",
+            "mobility_constraints",
             "emergency_contact_name",
             "emergency_contact_phone",
             "is_public_profile",
@@ -89,8 +89,8 @@ class PublicUserProfileSerializer(serializers.ModelSerializer):
     city = serializers.CharField(source="profile.city", read_only=True)
     preferred_language = serializers.CharField(source="profile.preferred_language", read_only=True)
     preferred_currency = serializers.CharField(source="profile.preferred_currency", read_only=True)
-    travel_style = serializers.CharField(source="profile.travel_style", read_only=True)
     travel_interests = serializers.ListField(source="profile.travel_interests", read_only=True)
+    travel_pace = serializers.CharField(source="profile.travel_pace", read_only=True)
 
     class Meta:
         model = User
@@ -103,8 +103,8 @@ class PublicUserProfileSerializer(serializers.ModelSerializer):
             "city",
             "preferred_language",
             "preferred_currency",
-            "travel_style",
             "travel_interests",
+            "travel_pace",
         )
         read_only_fields = fields
 
@@ -118,14 +118,10 @@ class UserUpdateSerializer(serializers.ModelSerializer):
     city = serializers.CharField(required=False, allow_blank=True)
     preferred_language = serializers.CharField(required=False, allow_blank=True)
     preferred_currency = serializers.CharField(required=False, allow_blank=True)
-    travel_style = serializers.ChoiceField(
-        choices=UserProfile._meta.get_field("travel_style").choices,
-        required=False,
-        allow_blank=True,
-    )
     travel_interests = serializers.JSONField(required=False)
     dietary_preferences = serializers.JSONField(required=False)
-    accessibility_needs = serializers.CharField(required=False, allow_blank=True)
+    travel_pace = serializers.CharField(required=False, allow_blank=True)
+    mobility_constraints = serializers.JSONField(required=False)
     emergency_contact_name = serializers.CharField(required=False, allow_blank=True)
     emergency_contact_phone = serializers.CharField(required=False, allow_blank=True)
     is_public_profile = serializers.BooleanField(required=False)
@@ -147,10 +143,10 @@ class UserUpdateSerializer(serializers.ModelSerializer):
             "city",
             "preferred_language",
             "preferred_currency",
-            "travel_style",
             "travel_interests",
             "dietary_preferences",
-            "accessibility_needs",
+            "travel_pace",
+            "mobility_constraints",
             "emergency_contact_name",
             "emergency_contact_phone",
             "is_public_profile",
@@ -176,6 +172,9 @@ class UserUpdateSerializer(serializers.ModelSerializer):
     def validate_dietary_preferences(self, value):
         return self._normalize_string_list(value, "dietary_preferences")
 
+    def validate_mobility_constraints(self, value):
+        return self._normalize_string_list(value, "mobility_constraints")
+
     def validate(self, attrs):
         clear_profile_picture = attrs.get("clear_profile_picture", False)
         profile_picture = attrs.get("profile_picture", serializers.empty)
@@ -197,10 +196,10 @@ class UserUpdateSerializer(serializers.ModelSerializer):
             "city",
             "preferred_language",
             "preferred_currency",
-            "travel_style",
             "travel_interests",
             "dietary_preferences",
-            "accessibility_needs",
+            "travel_pace",
+            "mobility_constraints",
             "emergency_contact_name",
             "emergency_contact_phone",
             "is_public_profile",

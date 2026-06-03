@@ -7,12 +7,14 @@ from django.db.models import Q
 from app.base.models import BaseModel
 from destinations.models import Activity, Attraction, Cuisine, Destination
 from trips.choices import (
+    AccommodationPreference,
     PlanningSource,
     TripItemStatus,
     TripItemType,
     TripPace,
     TripStatus,
     TripVisibility,
+    TravelerType,
 )
 
 
@@ -41,12 +43,23 @@ class Trip(BaseModel):
         choices=PlanningSource.choices,
         default=PlanningSource.HYBRID,
     )
+    current_step = models.PositiveSmallIntegerField(
+        default=1,
+        validators=[MinValueValidator(1), MaxValueValidator(6)],
+        db_index=True,
+    )
 
     # Trip fundamentals
     start_date = models.DateField(null=True, blank=True, db_index=True)
     end_date = models.DateField(null=True, blank=True, db_index=True)
     nights = models.PositiveSmallIntegerField(null=True, blank=True)
+    duration_days = models.PositiveSmallIntegerField(null=True, blank=True)
     travelers_count = models.PositiveSmallIntegerField(default=1)
+    traveler_type = models.CharField(
+        max_length=20,
+        choices=TravelerType.choices,
+        blank=True,
+    )
     trip_pace = models.CharField(
         max_length=10,
         choices=TripPace.choices,
@@ -54,6 +67,9 @@ class Trip(BaseModel):
     )
     origin_city = models.CharField(max_length=120, blank=True)
     origin_country = models.CharField(max_length=120, blank=True)
+    start_location_address = models.CharField(max_length=500, blank=True)
+    start_location_latitude = models.FloatField(null=True, blank=True)
+    start_location_longitude = models.FloatField(null=True, blank=True)
 
     # Budget and personalization
     total_budget = models.DecimalField(
@@ -63,6 +79,11 @@ class Trip(BaseModel):
         blank=True,
     )
     budget_currency = models.CharField(max_length=10, blank=True, default="USD")
+    accommodation_preference = models.CharField(
+        max_length=20,
+        choices=AccommodationPreference.choices,
+        blank=True,
+    )
     preferences = models.JSONField(
         default=dict,
         blank=True,
@@ -86,6 +107,9 @@ class Trip(BaseModel):
         blank=True,
         help_text="Agent-specific structured state, prompts, or planning notes.",
     )
+    agent_active = models.BooleanField(default=False)
+    agent_active_failed_message = models.TextField(blank=True)
+    agent_message = models.TextField(blank=True)
     latest_plan_version = models.PositiveSmallIntegerField(default=1)
 
     class Meta:
@@ -107,6 +131,7 @@ class Trip(BaseModel):
     def save(self, *args, **kwargs):
         if self.start_date and self.end_date:
             self.nights = max((self.end_date - self.start_date).days, 0)
+            self.duration_days = self.nights + 1
         super().save(*args, **kwargs)
 
 

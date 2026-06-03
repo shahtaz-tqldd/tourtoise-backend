@@ -177,11 +177,12 @@ class UserDetailsUpdateView(GenericAPIView):
     - Supported scalar fields:
       `email`, `name`, `phone`, `username`, `bio`, `date_of_birth`, `gender`,
       `country_of_residence`, `city`, `preferred_language`, `preferred_currency`,
-      `travel_style`, `accessibility_needs`, `emergency_contact_name`,
+      `travel_pace`, `emergency_contact_name`,
       `emergency_contact_phone`, `is_public_profile`
     - Send list fields as JSON arrays:
       `travel_interests=["beaches","food","culture"]`
       `dietary_preferences=["halal","vegetarian"]`
+      `mobility_constraints=["avoid stairs"]`
     - For multipart requests, those list fields can be sent as JSON strings.
     - Send `profile_picture` to upload/replace the avatar.
     - Send `clear_profile_picture=true` to remove the current avatar.

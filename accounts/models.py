@@ -7,7 +7,7 @@ from django.core.validators import RegexValidator
 from django.db import models
 from django.utils.translation import gettext_lazy as _
 
-from accounts.choices import AccountStatus, TravelStyle
+from accounts.choices import AccountStatus
 
 
 phone_regex = RegexValidator(
@@ -97,14 +97,10 @@ class UserProfile(models.Model):
     city = models.CharField(max_length=100, blank=True)
     preferred_language = models.CharField(max_length=20, blank=True, default="en")
     preferred_currency = models.CharField(max_length=10, blank=True, default="USD")
-    travel_style = models.CharField(
-        max_length=20,
-        choices=TravelStyle.choices,
-        blank=True,
-    )
     travel_interests = models.JSONField(default=list, blank=True)
     dietary_preferences = models.JSONField(default=list, blank=True)
-    accessibility_needs = models.TextField(blank=True)
+    travel_pace = models.CharField(max_length=40, blank=True)
+    mobility_constraints = models.JSONField(default=list, blank=True)
     emergency_contact_name = models.CharField(max_length=100, blank=True)
     emergency_contact_phone = models.CharField(
         max_length=17,

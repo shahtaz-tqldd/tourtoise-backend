@@ -9,6 +9,8 @@ from app.base.pagination import CustomPagination
 from app.utils.response import APIResponse
 from trips.api.v1.client.serializers import (
     PublicTripDetailSerializer,
+    TripAgentActiveSerializer,
+    TripAgentCreateMessageSerializer,
     TripDaySerializer,
     TripDestinationSerializer,
     TripDetailSerializer,
@@ -19,6 +21,7 @@ from trips.api.v1.client.serializers import (
     TripWriteSerializer,
 )
 from trips.models import Trip, TripDay, TripDestination, TripItineraryItem, TripPlanVersion
+from trips.services import build_agent_active_response, update_user_profile_from_agent_preferences
 
 
 class TripPaginationMixin:
@@ -101,6 +104,98 @@ class TripCreateAPIView(UserTripQuerysetMixin, GenericAPIView):
             message="Trip created successfully.",
             status=status.HTTP_201_CREATED,
         )
+
+
+class TripAgentActiveAPIView(UserTripQuerysetMixin, GenericAPIView):
+    """
+    Activate/update trip planning agent preferences for the current trip step.
+    """
+
+    permission_classes = [IsAuthenticated]
+    serializer_class = TripAgentActiveSerializer
+
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+
+        trip = get_object_or_404(
+            Trip.objects.filter(user=request.user),
+            pk=serializer.validated_data["trip_id"],
+        )
+        normalized_payload = serializer.normalized_preferences()
+        agent_response = build_agent_active_response(trip, normalized_payload)
+
+        trip.preferences = normalized_payload
+        trip.agent_active = agent_response["agent_active"]
+        trip.agent_active_failed_message = agent_response["agent_active_failed_message"]
+        trip.agent_message = agent_response["agent_message"]
+        trip.updated_by = request.user
+        trip.save(
+            update_fields=[
+                "preferences",
+                "current_step",
+                "agent_active",
+                "agent_active_failed_message",
+                "agent_message",
+                "updated_by",
+                "updated_at",
+            ]
+        )
+
+        update_user_profile_from_agent_preferences(request.user, normalized_payload)
+
+        return APIResponse.success(
+            data=agent_response,
+            message="Trip agent preferences updated successfully.",
+        )
+
+
+class TripAgentCreateMessageAPIView(UserTripQuerysetMixin, GenericAPIView):
+    """
+    Save a trip agent message and advance the trip planning flow.
+    """
+
+    permission_classes = [IsAuthenticated]
+    serializer_class = TripAgentCreateMessageSerializer
+
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+        trip = get_object_or_404(
+            Trip.objects.filter(user=request.user),
+            pk=serializer.validated_data["trip_id"],
+        )
+
+        if False:
+            preferences = trip.preferences or {}
+            agent_messages = preferences.get("agent_messages", [])
+            agent_messages.append(
+                {
+                    "step": serializer.validated_data["current_step"],
+                    "message": serializer.validated_data["message"],
+                }
+            )
+            preferences["agent_messages"] = agent_messages
+
+            trip.preferences = preferences
+            trip.current_step = 3
+            trip.updated_by = request.user
+            trip.save(update_fields=["preferences", "current_step", "updated_by", "updated_at"])
+
+            return APIResponse.success(
+                data={
+                    "is_step_complete": True,
+                    "current_step": trip.current_step,
+                },
+                message="Trip agent message created successfully.",
+            )
+        else:
+            return APIResponse.success(
+                data={
+                    "agent_message": "That's Really Nice, what else do you want?",
+                },
+                message="Trip agent message created successfully.",
+            )
 
 
 class TripListAPIView(TripPaginationMixin, UserTripQuerysetMixin, GenericAPIView):

@@ -70,7 +70,7 @@ class AccountListAPIView(GenericAPIView):
       `page`, `page_size`
       `search=john`
       `status=ACTIVE,PREMIUM`
-      `travel_style=ADVENTURE,BUDGET`
+      `travel_pace=moderate,fast`
       `is_staff=true`
       `is_superuser=false`
       `is_email_verified=true`
@@ -104,9 +104,9 @@ class AccountListAPIView(GenericAPIView):
         if statuses:
             queryset = queryset.filter(status__in=statuses)
 
-        travel_styles = self._get_multi_values("travel_style")
-        if travel_styles:
-            queryset = queryset.filter(profile__travel_style__in=travel_styles)
+        travel_paces = self._get_multi_values("travel_pace")
+        if travel_paces:
+            queryset = queryset.filter(profile__travel_pace__in=travel_paces)
 
         is_staff = self._get_boolean("is_staff")
         if is_staff is not None:

@@ -78,7 +78,6 @@ def build_trip_snapshot(trip):
         "duration_days": trip.duration_days,
         "travelers_count": trip.travelers_count,
         "traveler_type": trip.traveler_type,
-        "trip_pace": trip.trip_pace,
         "origin_city": trip.origin_city,
         "origin_country": trip.origin_country,
         "budget": str(trip.total_budget) if trip.total_budget is not None else None,

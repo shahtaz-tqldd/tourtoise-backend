@@ -113,3 +113,53 @@ class TripItineraryDesignResponse(BaseModel):
     revision_instruction: str = Field(
         description="Short instruction asking the user what they want to change."
     )
+
+class PackingItem(BaseModel):
+    item: str = Field(description="Name of the item to pack.")
+    category: str = Field(
+        description="One of: clothing, toiletries, electronics, medicine, travel_gear, safety, weather, other."
+    )
+    reason: Optional[str] = Field(
+        default=None,
+        description="Short reason why this item is useful for this trip."
+    )
+    priority: str = Field(
+        description="One of: essential, recommended, optional."
+    )
+
+
+class TravelDocumentItem(BaseModel):
+    document: str = Field(description="Name of the required or recommended document.")
+    required_level: str = Field(
+        description="One of: required, recommended, conditional."
+    )
+    reason: Optional[str] = Field(
+        default=None,
+        description="Short reason or when this document may be needed."
+    )
+
+
+class TravelHeadsUpItem(BaseModel):
+    title: str = Field(description="Short heads-up title.")
+    category: str = Field(
+        description="One of: safety, weather, culture, transport, money, health, connectivity, timing, rules, other."
+    )
+    details: str = Field(description="Short practical advice for the traveler.")
+    severity: str = Field(
+        description="One of: low, medium, high."
+    )
+
+
+class TripPreparationResponse(BaseModel):
+    is_preparation_complete: bool = Field(
+        description="True when packing list, documents, and heads-up information are generated."
+    )
+    title: str = Field(description="Short title for the preparation guide.")
+    summary: str = Field(description="Short summary of preparation advice.")
+    packing_items: list[PackingItem] = Field(default_factory=list)
+    required_documents: list[TravelDocumentItem] = Field(default_factory=list)
+    heads_up: list[TravelHeadsUpItem] = Field(default_factory=list)
+    message: str = Field(description="Short user-facing message.")
+    revision_instruction: str = Field(
+        description="Short instruction asking the user what they want to adjust."
+    )

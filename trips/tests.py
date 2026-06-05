@@ -10,8 +10,7 @@ from rest_framework.test import APIClient
 from destinations.choices import BudgetTier, DestinationType
 from destinations.choices import Status as DestinationStatus
 from destinations.models import Destination
-from trips.choices import PlanningSource
-from trips.models import Trip, TripAgentConversationSession, TripAgentMessage, TripDestination, TripPlanVersion
+from trips.models import Trip, TripAgentConversationSession, TripAgentMessage, TripDestination
 
 
 User = get_user_model()
@@ -158,14 +157,6 @@ class TripListApiTests(TestCase):
         plan_trip = Trip.objects.create(
             user=self.user,
             title="Amalfi Plan",
-            created_by=self.user,
-            updated_by=self.user,
-        )
-        TripPlanVersion.objects.create(
-            trip=plan_trip,
-            version=1,
-            source=PlanningSource.AGENT,
-            snapshot={"destinations": [{"slug": "amalfi-coast-ita"}]},
             created_by=self.user,
             updated_by=self.user,
         )

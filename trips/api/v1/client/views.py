@@ -24,8 +24,6 @@ from trips.api.v1.client.serializers import (
     TripDetailSerializer,
     TripItineraryItemSerializer,
     TripListSerializer,
-    TripPlanVersionCreateSerializer,
-    TripPlanVersionSerializer,
     TripWriteSerializer,
 )
 from trips.choices import AgentMessageSender
@@ -33,10 +31,9 @@ from trips.models import (
     Trip,
     TripAgentConversationSession,
     TripAgentMessage,
-    TripDay,
+    TripItineraryDay,
     TripDestination,
-    TripItineraryItem,
-    TripPlanVersion,
+    TripItineraryDayItem,
 )
 from trips.services import (
     build_followup_agent_query,
@@ -86,10 +83,10 @@ class UserTripQuerysetMixin:
             ),
             Prefetch(
                 "days",
-                queryset=TripDay.objects.prefetch_related(
+                queryset=TripItineraryDay.objects.prefetch_related(
                     Prefetch(
                         "items",
-                        queryset=TripItineraryItem.objects.select_related(
+                        queryset=TripItineraryDayItem.objects.select_related(
                             "trip_destination", "attraction", "activity", "cuisine"
                         ).order_by("sort_order", "start_time"),
                     )
@@ -113,9 +110,9 @@ class TripCreateAPIView(UserTripQuerysetMixin, GenericAPIView):
       `title`
       Optional:
       `status`, `visibility`, `planning_source`, `start_date`, `end_date`,
-      `travelers_count`, `trip_pace`, `origin_city`, `origin_country`,
-      `total_budget`, `budget_currency`, `preferences`, `constraints`,
-      `traveler_profile_snapshot`, `planning_summary`, `agent_context`
+      `travelers_count`, `origin_city`, `origin_country`,
+      `total_budget`, `budget_currency`, `preferences`, 
+      `planning_summary`, `agent_context`
 
     Frontend response:
     - 201 success with the full created trip payload.
@@ -441,7 +438,7 @@ class TripDayUpdateAPIView(UserTripQuerysetMixin, GenericAPIView):
 
     def get_object(self):
         trip = self.get_trip_by_id()
-        return get_object_or_404(TripDay, trip=trip, pk=self.kwargs["day_id"])
+        return get_object_or_404(TripItineraryDay, trip=trip, pk=self.kwargs["day_id"])
 
     def patch(self, request, *args, **kwargs):
         day = self.get_object()
@@ -472,7 +469,7 @@ class TripDayDeleteAPIView(UserTripQuerysetMixin, GenericAPIView):
 
     def delete(self, request, *args, **kwargs):
         trip = self.get_trip_by_id()
-        day = get_object_or_404(TripDay, trip=trip, pk=self.kwargs["day_id"])
+        day = get_object_or_404(TripItineraryDay, trip=trip, pk=self.kwargs["day_id"])
         day.delete()
         return APIResponse.success(message="Trip day deleted successfully.")
 
@@ -504,7 +501,7 @@ class TripItineraryItemCreateAPIView(UserTripQuerysetMixin, GenericAPIView):
 
     def post(self, request, *args, **kwargs):
         trip = self.get_trip_by_id()
-        day = get_object_or_404(TripDay, trip=trip, pk=self.kwargs["day_id"])
+        day = get_object_or_404(TripItineraryDay, trip=trip, pk=self.kwargs["day_id"])
         serializer = self.get_serializer(
             data=request.data,
             context={"request": request, "trip": trip, "day": day},
@@ -538,7 +535,7 @@ class TripItineraryItemUpdateAPIView(UserTripQuerysetMixin, GenericAPIView):
 
     def get_object(self):
         trip = self.get_trip_by_id()
-        return get_object_or_404(TripItineraryItem, trip=trip, pk=self.kwargs["item_id"])
+        return get_object_or_404(TripItineraryDayItem, trip=trip, pk=self.kwargs["item_id"])
 
     def patch(self, request, *args, **kwargs):
         item = self.get_object()
@@ -574,81 +571,9 @@ class TripItineraryItemDeleteAPIView(UserTripQuerysetMixin, GenericAPIView):
 
     def delete(self, request, *args, **kwargs):
         trip = self.get_trip_by_id()
-        item = get_object_or_404(TripItineraryItem, trip=trip, pk=self.kwargs["item_id"])
+        item = get_object_or_404(TripItineraryDayItem, trip=trip, pk=self.kwargs["item_id"])
         item.delete()
         return APIResponse.success(message="Itinerary item deleted successfully.")
-
-
-class TripPlanVersionListAPIView(UserTripQuerysetMixin, GenericAPIView):
-    """
-    Trip plan version list API.
-
-    Frontend request:
-    - Method: GET
-    - Headers: authenticated bearer token
-    - URL param: `trip_id`
-
-    Frontend response:
-    - 200 success with saved plan versions for the trip.
-    """
-
-    permission_classes = [IsAuthenticated]
-
-    def get(self, request, *args, **kwargs):
-        trip = self.get_trip_by_id()
-        versions = trip.plan_versions.all().order_by("-version")
-        return APIResponse.success(
-            data=TripPlanVersionSerializer(versions, many=True).data,
-            message="Trip plan versions fetched successfully.",
-        )
-
-
-class TripPlanVersionCreateAPIView(UserTripQuerysetMixin, GenericAPIView):
-    """
-    Save trip plan version API.
-
-    Frontend request:
-    - Method: POST
-    - Headers: authenticated bearer token
-    - URL param: `trip_id`
-    - Content-Type: application/json
-    - Body:
-      Optional:
-      `summary`, `source`, `snapshot`
-    - If `snapshot` is omitted, frontend should first fetch trip detail and send the structure it wants persisted.
-
-    Frontend response:
-    - 201 success with the saved plan version row.
-    """
-
-    permission_classes = [IsAuthenticated]
-    serializer_class = TripPlanVersionCreateSerializer
-
-    def post(self, request, *args, **kwargs):
-        trip = self.get_trip_by_id()
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-
-        next_version = (trip.plan_versions.order_by("-version").first().version + 1) if trip.plan_versions.exists() else 1
-        payload = serializer.validated_data
-        plan_version = TripPlanVersion.objects.create(
-            trip=trip,
-            version=next_version,
-            summary=payload.get("summary", ""),
-            source=payload.get("source"),
-            snapshot=payload.get("snapshot", {}),
-            created_by=request.user,
-            updated_by=request.user,
-        )
-        trip.latest_plan_version = next_version
-        trip.updated_by = request.user
-        trip.save(update_fields=["latest_plan_version", "updated_by", "updated_at"])
-
-        return APIResponse.success(
-            data=TripPlanVersionSerializer(plan_version).data,
-            message="Trip plan version saved successfully.",
-            status=status.HTTP_201_CREATED,
-        )
 
 
 class PublicTripDetailAPIView(GenericAPIView):
@@ -675,10 +600,10 @@ class PublicTripDetailAPIView(GenericAPIView):
                 ),
                 Prefetch(
                     "days",
-                    queryset=TripDay.objects.prefetch_related(
+                    queryset=TripItineraryDay.objects.prefetch_related(
                         Prefetch(
                             "items",
-                            queryset=TripItineraryItem.objects.select_related(
+                            queryset=TripItineraryDayItem.objects.select_related(
                                 "trip_destination", "attraction", "activity", "cuisine"
                             ).order_by("sort_order", "start_time"),
                         )
@@ -906,7 +831,6 @@ class TripAgentMessageListAPIView(TripPaginationMixin, UserTripQuerysetMixin, Ge
 class TripAgentRecommendationsAPIView(UserTripQuerysetMixin, GenericAPIView):
     """
     Get trip recommendations
-
     Query params:
     - `trip_id` required
     """

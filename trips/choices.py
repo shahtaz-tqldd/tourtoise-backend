@@ -30,6 +30,13 @@ class TravelerType(models.TextChoices):
     GROUP = "group", "Group"
     BUSINESS = "business", "Business"
 
+class BudgetTier(models.TextChoices):
+    BACKPACKER = "backpacker", "Backpacker"
+    BUDGET = "budget", "Budget"
+    COMFORT = "comfort", "Comfort"
+    PREMIUM = "premium", "Premium"
+    LUXURY = "luxury", "Luxury"
+
 
 class AccommodationPreference(models.TextChoices):
     BUDGET = "budget", "Budget"

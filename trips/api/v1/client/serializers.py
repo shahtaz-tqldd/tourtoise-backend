@@ -6,9 +6,8 @@ from rest_framework import serializers
 
 from destinations.api.v1.client.serializers import ClientDestinationListSerializer
 from destinations.choices import Status
-from destinations.models import Activity, Attraction, Cuisine, Destination
-from trips.choices import PlanningSource
-from trips.models import Trip, TripAgentMessage, TripDay, TripDestination, TripItineraryItem, TripPlanVersion
+from destinations.models import Destination
+from trips.models import Trip, TripAgentMessage, TripItineraryDay, TripDestination, TripItineraryDayItem
 
 
 class TripDestinationSummarySerializer(serializers.ModelSerializer):
@@ -75,7 +74,7 @@ class TripItineraryItemSerializer(serializers.ModelSerializer):
     cuisine_name = serializers.CharField(source="cuisine.name", read_only=True)
 
     class Meta:
-        model = TripItineraryItem
+        model = TripItineraryDayItem
         fields = (
             "id",
             "trip_destination",
@@ -123,7 +122,7 @@ class TripItineraryItemSerializer(serializers.ModelSerializer):
         day = self.context["day"]
         trip = self.context["trip"]
         request = self.context["request"]
-        return TripItineraryItem.objects.create(
+        return TripItineraryDayItem.objects.create(
             trip=trip,
             day=day,
             created_by=request.user,
@@ -143,7 +142,7 @@ class TripDaySerializer(serializers.ModelSerializer):
     items = TripItineraryItemSerializer(many=True, read_only=True)
 
     class Meta:
-        model = TripDay
+        model = TripItineraryDay
         fields = (
             "id",
             "trip_destination",
@@ -166,7 +165,7 @@ class TripDaySerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         trip = self.context["trip"]
         request = self.context["request"]
-        return TripDay.objects.create(
+        return TripItineraryDay.objects.create(
             trip=trip,
             created_by=request.user,
             updated_by=request.user,
@@ -202,7 +201,6 @@ class TripListSerializer(serializers.ModelSerializer):
             "duration_days",
             "travelers_count",
             "traveler_type",
-            "trip_pace",
             "total_budget",
             "budget_currency",
             "accommodation_preference",
@@ -262,7 +260,6 @@ class TripDetailSerializer(serializers.ModelSerializer):
             "duration_days",
             "travelers_count",
             "traveler_type",
-            "trip_pace",
             "origin_city",
             "origin_country",
             "start_location_address",
@@ -272,8 +269,6 @@ class TripDetailSerializer(serializers.ModelSerializer):
             "budget_currency",
             "accommodation_preference",
             "preferences",
-            "constraints",
-            "traveler_profile_snapshot",
             "planning_summary",
             "agent_active",
             "agent_active_failed_message",
@@ -318,7 +313,6 @@ class PublicTripDetailSerializer(serializers.ModelSerializer):
             "duration_days",
             "travelers_count",
             "traveler_type",
-            "trip_pace",
             "origin_city",
             "origin_country",
             "start_location_address",
@@ -369,7 +363,6 @@ class TripWriteSerializer(serializers.ModelSerializer):
             "duration_days",
             "travelers_count",
             "traveler_type",
-            "trip_pace",
             "origin_city",
             "origin_country",
             "start_location_address",
@@ -380,8 +373,6 @@ class TripWriteSerializer(serializers.ModelSerializer):
             "accommodation_preference",
             "destination_slugs",
             "preferences",
-            "constraints",
-            "traveler_profile_snapshot",
             "planning_summary",
             "agent_context",
         )
@@ -424,7 +415,6 @@ class TripWriteSerializer(serializers.ModelSerializer):
         request = self.context["request"]
         destination_slugs = validated_data.pop("destination_slugs", [])
         validated_data["current_step"] = 2
-        validated_data.setdefault("traveler_profile_snapshot", self._build_traveler_snapshot(request.user))
         with transaction.atomic():
             trip = Trip.objects.create(
                 user=request.user,
@@ -462,20 +452,6 @@ class TripWriteSerializer(serializers.ModelSerializer):
         ]
         TripDestination.objects.bulk_create(trip_destinations)
 
-    def _build_traveler_snapshot(self, user):
-        profile = getattr(user, "profile", None)
-        if not profile:
-            return {}
-        return {
-            "travel_interests": profile.travel_interests,
-            "dietary_preferences": profile.dietary_preferences,
-            "travel_pace": profile.travel_pace,
-            "mobility_constraints": profile.mobility_constraints,
-            "preferred_language": profile.preferred_language,
-            "preferred_currency": profile.preferred_currency,
-            "country_of_residence": profile.country_of_residence,
-            "city": profile.city,
-        }
 
 
 class TripAgentActiveSerializer(serializers.Serializer):
@@ -566,15 +542,3 @@ class TripAgentMessageSerializer(serializers.ModelSerializer):
         )
         read_only_fields = fields
 
-
-class TripPlanVersionSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = TripPlanVersion
-        fields = ("id", "version", "summary", "source", "snapshot", "created_at")
-        read_only_fields = ("id", "version", "created_at")
-
-
-class TripPlanVersionCreateSerializer(serializers.Serializer):
-    summary = serializers.CharField(required=False, allow_blank=True)
-    source = serializers.ChoiceField(choices=PlanningSource.choices, required=False, default=PlanningSource.AGENT)
-    snapshot = serializers.JSONField(required=False)

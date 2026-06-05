@@ -17,8 +17,6 @@ from trips.api.v1.client.views import (
     TripItineraryItemDeleteAPIView,
     TripItineraryItemUpdateAPIView,
     TripListAPIView,
-    TripPlanVersionCreateAPIView,
-    TripPlanVersionListAPIView,
     TripUpdateAPIView,
     TripAgentMessageListAPIView,
     TripAgentRecommendationsAPIView,
@@ -76,13 +74,5 @@ urlpatterns = [
         "<uuid:trip_id>/items/<uuid:item_id>/delete/",
         TripItineraryItemDeleteAPIView.as_view(),
         name="trip-item-delete",
-    ),
-
-    # manage plan versions
-    path("<uuid:trip_id>/plan-versions/", TripPlanVersionListAPIView.as_view(), name="trip-plan-version-list"),
-    path(
-        "<uuid:trip_id>/plan-versions/create/",
-        TripPlanVersionCreateAPIView.as_view(),
-        name="trip-plan-version-create",
-    ),
+    )
 ]

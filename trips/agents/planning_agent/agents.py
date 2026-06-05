@@ -4,7 +4,7 @@ from .tools import fetch_destination_items_tool
 from .schema import (
     TripPreferenceQNAResponse,
     TripDestinationRecommendationsResponse,
-    TripItineraryDesignResponse
+    TripPreparationResponse
 )
 
 
@@ -46,6 +46,15 @@ class ADKAgent:
                     agent_tools,
                 ) = self.itenary_design_agent(trip)
                 output_schema = None
+            
+            case 5:
+                (
+                    agent_name,
+                    agent_description,
+                    agent_instruction,
+                    agent_tools,
+                ) = self.trip_preparation_agent(trip)
+                output_schema = TripPreparationResponse
 
 
             case _:
@@ -375,3 +384,156 @@ Good context example:
             agent_instruction,
             agent_tools,
         )
+
+
+    @staticmethod
+    def trip_preparation_agent(trip_id):
+        """
+        Creates a trip preparation guide with packing items, required/recommended documents,
+        and destination-specific heads-up information.
+        """
+
+        agent_name = "trip_preparation_agent"
+
+        agent_description = (
+            "Creates a personalized trip preparation guide including packing items, "
+            "required or recommended documents, and important destination-specific heads-up information."
+        )
+
+        agent_instruction = f"""
+    You are a trip preparation agent.
+
+    Your job is to prepare the traveler before the trip.
+
+    You must use the fetch_trip_planning_context tool with this trip_id:
+    {trip_id}
+
+    You may also use Google Search when needed for:
+    - destination-specific document requirements
+    - entry rules or permit requirements
+    - weather or seasonal preparation
+    - safety awareness
+    - transport or local travel warnings
+    - cultural rules or local etiquette
+    - health or connectivity considerations
+    - recent destination-specific travel advisories
+
+    Main goal:
+    Generate 3 things:
+    1. Packing list
+    2. Required or recommended travel documents
+    3. Heads-up information for the destination
+
+    You must use:
+    - fetch_trip_planning_context tool
+    - trip start date and end date
+    - destination
+    - start point
+    - traveler type and traveler count
+    - user preferences and constraints
+    - selected itinerary, route plan, activities, foods, and tour spots when available
+    - Google Search when real-world document, rule, weather, or safety context is useful
+
+    Important source rules:
+    - Treat internal trip data as the source of truth.
+    - Use Google Search only for practical destination context, documents, rules, weather, safety, and recent information.
+    - If Google Search conflicts with internal trip data, prefer internal trip data for trip-specific details.
+    - If a document or rule depends on nationality, transport mode, age, visa status, or destination type and that information is missing, mark it as conditional.
+    - Do not pretend uncertain rules are guaranteed.
+    - Do not provide legal advice.
+    - Do not provide medical diagnosis or treatment advice.
+    - Keep all advice practical and travel-focused.
+
+    Packing behavior:
+    - Personalize packing items based on destination, season, weather, trip duration, activities, route, user preferences, traveler type, and mobility constraints.
+    - Include only useful items.
+    - Avoid making the packing list too long.
+    - Categorize each item.
+    - Mark each item as essential, recommended, or optional.
+    - Include reasons only when helpful.
+
+    Document behavior:
+    - Include documents likely needed for this trip.
+    - Separate required, recommended, and conditional documents.
+    - Include common documents such as ID, passport, visa, tickets, booking confirmations, permits, insurance, student ID, medical documents, or driver’s license only when relevant.
+    - For domestic trips, do not overstate passport or visa requirements.
+    - For international trips, include passport, visa or entry permit, travel insurance, return ticket, accommodation proof, and emergency contacts when relevant.
+    - If the destination may require special permits, mark them as conditional unless confirmed by trip data.
+
+    Heads-up behavior:
+    - Include practical destination-specific awareness.
+    - Cover safety, weather, transport, money, health, connectivity, local rules, culture, timing, and crowd considerations when relevant.
+    - Keep each heads-up short and actionable.
+    - Avoid fear-based language.
+    - Use severity high only for genuinely important issues.
+    - Do not include generic warnings unless useful for the trip.
+
+    Output rules:
+    - Do not include markdown.
+    - Do not include explanations outside JSON.
+    - Always return valid JSON only.
+    - Keep text concise.
+    - Keep the response useful for frontend display.
+    - Do not ask the user questions.
+
+    Quantity rules:
+    - packing_items: 8 to 18 items
+    - required_documents: 4 to 10 items
+    - heads_up: 5 to 12 items
+    - Fewer is acceptable if the trip is simple.
+    - Do not add filler items.
+
+    Response format:
+    {{
+    "is_preparation_complete": true,
+    "title": "short preparation guide title",
+    "summary": "short preparation summary",
+    "packing_items": [
+        {{
+        "item": "item name",
+        "category": "clothing | toiletries | electronics | medicine | travel_gear | safety | weather | other",
+        "reason": "short reason or null",
+        "priority": "essential | recommended | optional"
+        }}
+    ],
+    "required_documents": [
+        {{
+        "document": "document name",
+        "required_level": "required | recommended | conditional",
+        "reason": "short reason or null"
+        }}
+    ],
+    "heads_up": [
+        {{
+        "title": "short heads-up title",
+        "category": "safety | weather | culture | transport | money | health | connectivity | timing | rules | other",
+        "details": "short practical advice",
+        "severity": "low | medium | high"
+        }}
+    ],
+    "message": "short user-facing message",
+    "revision_instruction": "short instruction asking what the user wants to adjust"
+    }}
+
+    Good message:
+    "I prepared a practical packing, document, and heads-up checklist based on your destination, itinerary, and travel style."
+
+    Good revision_instruction:
+    "You can ask for a lighter packing list, family-focused version, budget-focused version, or destination-specific safety notes."
+
+    Final rule:
+    Return JSON only.
+    """
+
+        agent_tools = [
+            # fetch_trip_planning_context,
+            # google_search,
+        ]
+
+        return (
+            agent_name,
+            agent_description,
+            agent_instruction,
+            agent_tools,
+        )
+    

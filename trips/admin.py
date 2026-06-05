@@ -1,6 +1,9 @@
 from django.contrib import admin
 
-from trips.models import Trip, TripDay, TripDestination, TripItineraryItem, TripPlanVersion
+from trips.models import (
+    Trip, TripDay, TripDestination, TripItineraryItem, TripPlanVersion, 
+    TripAgentConversationSession, TripAgentMessage
+)
 
 
 class TripDestinationInline(admin.TabularInline):
@@ -74,4 +77,23 @@ class TripPlanVersionAdmin(admin.ModelAdmin):
     list_filter = ("source",)
     search_fields = ("trip__title", "summary")
     readonly_fields = ("id", "created_at", "updated_at", "created_by", "updated_by")
+    autocomplete_fields = ("trip",)
+
+
+@admin.register(TripAgentConversationSession)
+class TripAgentConversationSessionAdmin(admin.ModelAdmin):
+    list_display = ("trip", "user", "current_step", "created_at")
+    list_filter = ("current_step",)
+    search_fields = ("trip__title", "user__email")
+    readonly_fields = ("id", "created_at", "updated_at", "created_by", "updated_by")
+    autocomplete_fields = ("trip", "user")
+
+
+@admin.register(TripAgentMessage)
+class TripAgentMessageAdmin(admin.ModelAdmin):
+    list_display = ("session", "sender", "content", "created_at")
+    list_filter = ("sender",)
+    search_fields = ("content",)
+    readonly_fields = ("id", "created_at", "updated_at", "created_by", "updated_by")
+    autocomplete_fields = ("session",)
     autocomplete_fields = ("trip",)

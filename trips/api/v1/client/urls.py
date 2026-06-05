@@ -1,4 +1,4 @@
-from django.urls import path
+from django.urls import path, include
 
 from trips.api.v1.client.views import (
     PublicTripDetailAPIView,
@@ -20,12 +20,22 @@ from trips.api.v1.client.views import (
     TripPlanVersionCreateAPIView,
     TripPlanVersionListAPIView,
     TripUpdateAPIView,
+    TripAgentMessageListAPIView,
+    TripAgentRecommendationsAPIView,
+    TripAgentItinerariesAPIView
 )
+
+agent_urlpatterns = [
+    path("active/", TripAgentActiveAPIView.as_view(), name="trip-agent-active"),
+    path("create-message/", TripAgentCreateMessageAPIView.as_view(), name="trip-agent-create-message"),
+    path("messages/", TripAgentMessageListAPIView.as_view(), name="trip-agent-messages"),
+    path("recommendations/", TripAgentRecommendationsAPIView.as_view(), name="trip-agent-recommendations"),
+    path("itineraries/", TripAgentItinerariesAPIView.as_view(), name="trip-agent-itineraries"),
+]
 
 
 urlpatterns = [
-    path("agent-active/", TripAgentActiveAPIView.as_view(), name="trip-agent-active"),
-    path("agent/create-message/", TripAgentCreateMessageAPIView.as_view(), name="trip-agent-create-message"),
+    path("agent/", include(agent_urlpatterns)),
     path("create/", TripCreateAPIView.as_view(), name="trip-create"),
     path("list/", TripListAPIView.as_view(), name="trip-list"),
     path("<uuid:trip_id>/detail/", TripDetailAPIView.as_view(), name="trip-detail"),

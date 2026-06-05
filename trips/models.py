@@ -8,6 +8,7 @@ from app.base.models import BaseModel
 from destinations.models import Activity, Attraction, Cuisine, Destination
 from trips.choices import (
     AccommodationPreference,
+    AgentMessageSender,
     PlanningSource,
     TripItemStatus,
     TripItemType,
@@ -361,3 +362,71 @@ class TripPlanVersion(BaseModel):
 
     def __str__(self):
         return f"{self.trip.title} v{self.version}"
+
+
+class TripAgentConversationSession(BaseModel):
+    trip = models.ForeignKey(
+        Trip,
+        on_delete=models.CASCADE,
+        related_name="agent_conversation_sessions",
+    )
+    user = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.CASCADE,
+        related_name="trip_agent_conversation_sessions",
+        db_index=True,
+    )
+    current_step = models.PositiveSmallIntegerField(
+        default=2,
+        validators=[MinValueValidator(1), MaxValueValidator(6)],
+        db_index=True,
+    )
+    external_session_id = models.CharField(max_length=120, blank=True, db_index=True)
+    is_active = models.BooleanField(default=True, db_index=True)
+    qna_count = models.PositiveSmallIntegerField(default=0)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ["-updated_at"]
+        indexes = [
+            models.Index(fields=["trip", "current_step", "is_active"]),
+            models.Index(fields=["user", "is_active"]),
+        ]
+
+    def __str__(self):
+        return f"{self.trip.title} agent session step {self.current_step}"
+
+
+class TripAgentMessage(BaseModel):
+    session = models.ForeignKey(
+        TripAgentConversationSession,
+        on_delete=models.CASCADE,
+        related_name="messages",
+    )
+    trip = models.ForeignKey(
+        Trip,
+        on_delete=models.CASCADE,
+        related_name="agent_messages",
+    )
+    sender = models.CharField(max_length=10, choices=AgentMessageSender.choices)
+    step = models.PositiveSmallIntegerField(
+        default=2,
+        validators=[MinValueValidator(1), MaxValueValidator(6)],
+        db_index=True,
+    )
+    sequence = models.PositiveIntegerField()
+    content = models.TextField(blank=True)
+    payload = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ["sequence", "created_at"]
+        constraints = [
+            models.UniqueConstraint(fields=["session", "sequence"], name="unique_trip_agent_message_sequence"),
+        ]
+        indexes = [
+            models.Index(fields=["trip", "step"]),
+            models.Index(fields=["session", "sender"]),
+        ]
+
+    def __str__(self):
+        return f"{self.sender} message {self.sequence} for {self.session_id}"

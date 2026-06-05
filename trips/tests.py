@@ -1,4 +1,5 @@
 from datetime import date
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.db import IntegrityError
@@ -10,7 +11,7 @@ from destinations.choices import BudgetTier, DestinationType
 from destinations.choices import Status as DestinationStatus
 from destinations.models import Destination
 from trips.choices import PlanningSource
-from trips.models import Trip, TripDestination, TripPlanVersion
+from trips.models import Trip, TripAgentConversationSession, TripAgentMessage, TripDestination, TripPlanVersion
 
 
 User = get_user_model()
@@ -313,36 +314,44 @@ class TripAgentActiveApiTests(TestCase):
         )
 
     def test_updates_trip_agent_preferences_and_user_profile(self):
-        response = self.client.post(
-            self.url,
-            {
-                "trip_id": str(self.trip.id),
-                "current_step": 2,
-                "let_agent_decide": False,
-                "travel_pace": "moderate",
-                "interest_tags": ["History", "Nature"],
-                "dietary_needs": ["Vegetarian", "Gluten-free"],
-                "dietary_other": "Halal",
-                "mobility_constraints": ["No mobility constraints", "Avoid stairs"],
-                "mobility_other": "Wheelchair access",
-            },
-            format="json",
-        )
+        with patch("trips.api.v1.client.views.run_plan_agent_for_session") as run_agent:
+            run_agent.return_value = {
+                "session_id": "adk-session-1",
+                "response": {
+                    "question": "What would make this trip feel successful?",
+                    "is_qna_complete": False,
+                    "context": None,
+                },
+                "cost": None,
+                "total_tokens": None,
+                "intention": None,
+            }
+            response = self.client.post(
+                self.url,
+                {
+                    "trip_id": str(self.trip.id),
+                    "current_step": 2,
+                    "let_agent_decide": True,
+                    "travel_pace": "moderate",
+                    "interest_tags": ["History", "Nature"],
+                    "dietary_needs": ["Vegetarian", "Gluten-free"],
+                    "dietary_other": "Halal",
+                    "mobility_constraints": ["No mobility constraints", "Avoid stairs"],
+                    "mobility_other": "Wheelchair access",
+                },
+                format="json",
+            )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(
-            response.data["data"],
-            {
-                "agent_active": False,
-                "agent_active_failed_message": "",
-                "agent_message": "Agent is not active because let_agent_decide is false.",
-            },
-        )
+        self.assertTrue(response.data["data"]["agent_active"])
+        self.assertEqual(response.data["data"]["agent_message"], "What would make this trip feel successful?")
+        self.assertFalse(response.data["data"]["is_qna_complete"])
+        self.assertIsNotNone(response.data["data"]["session_id"])
 
         self.trip.refresh_from_db()
         preferences = self.trip.preferences["agent_customization"]
         self.assertEqual(self.trip.current_step, 2)
-        self.assertFalse(self.trip.agent_active)
+        self.assertTrue(self.trip.agent_active)
         self.assertEqual(preferences["travel_pace"], "moderate")
         self.assertEqual(preferences["dietary_needs"], ["Vegetarian", "Gluten-free", "Halal"])
         self.assertEqual(
@@ -359,6 +368,31 @@ class TripAgentActiveApiTests(TestCase):
             profile.mobility_constraints,
             ["No mobility constraints", "Avoid stairs", "Wheelchair access"],
         )
+        session = TripAgentConversationSession.objects.get(trip=self.trip)
+        self.assertEqual(session.qna_count, 1)
+        self.assertEqual(TripAgentMessage.objects.filter(session=session).count(), 2)
+
+    def test_can_disable_agent_decision(self):
+        response = self.client.post(
+            self.url,
+            {
+                "trip_id": str(self.trip.id),
+                "let_agent_decide": False,
+                "travel_pace": "moderate",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            response.data["data"],
+            {
+                "agent_active": False,
+                "agent_active_failed_message": "",
+                "agent_message": "Agent is not active because let_agent_decide is false.",
+            },
+        )
+        self.assertFalse(TripAgentConversationSession.objects.filter(trip=self.trip).exists())
 
     def test_rejects_trip_from_another_user(self):
         other_trip = Trip.objects.create(
@@ -398,25 +432,54 @@ class TripAgentCreateMessageApiTests(TestCase):
         )
 
     def test_creates_agent_message_and_advances_step(self):
-        response = self.client.post(
-            self.url,
-            {
-                "trip_id": str(self.trip.id),
-                "current_step": 2,
-                "message": "lots of smaller experience",
-            },
-            format="json",
+        session = TripAgentConversationSession.objects.create(
+            trip=self.trip,
+            user=self.user,
+            current_step=2,
+            external_session_id="adk-session-1",
+            created_by=self.user,
+            updated_by=self.user,
         )
+        self.trip.preferences = {"agent_customization": {"travel_pace": "moderate"}}
+        self.trip.save(update_fields=["preferences"])
+
+        with patch("trips.api.v1.client.views.run_plan_agent_for_session") as run_agent:
+            run_agent.return_value = {
+                "session_id": "adk-session-1",
+                "response": {
+                    "question": None,
+                    "is_qna_complete": True,
+                    "context": "Moderate-paced traveler who prefers lots of smaller local experiences.",
+                },
+                "cost": None,
+                "total_tokens": None,
+                "intention": None,
+            }
+            response = self.client.post(
+                self.url,
+                {
+                    "trip_id": str(self.trip.id),
+                    "session_id": str(session.id),
+                    "current_step": 2,
+                    "message": "lots of smaller experience",
+                },
+                format="json",
+            )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.data["data"], {"is_step_complete": True, "current_step": 3})
+        self.assertTrue(response.data["data"]["is_step_complete"])
+        self.assertTrue(response.data["data"]["is_qna_complete"])
+        self.assertEqual(response.data["data"]["current_step"], 3)
 
         self.trip.refresh_from_db()
         self.assertEqual(self.trip.current_step, 3)
         self.assertEqual(
-            self.trip.preferences["agent_messages"],
-            [{"step": 2, "message": "lots of smaller experience"}],
+            self.trip.agent_context["preference_qna"]["context"],
+            "Moderate-paced traveler who prefers lots of smaller local experiences.",
         )
+        session.refresh_from_db()
+        self.assertFalse(session.is_active)
+        self.assertEqual(TripAgentMessage.objects.filter(session=session).count(), 2)
 
     def test_rejects_trip_from_another_user(self):
         other_trip = Trip.objects.create(

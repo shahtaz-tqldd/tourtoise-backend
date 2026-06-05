@@ -8,7 +8,7 @@ from destinations.api.v1.client.serializers import ClientDestinationListSerializ
 from destinations.choices import Status
 from destinations.models import Activity, Attraction, Cuisine, Destination
 from trips.choices import PlanningSource
-from trips.models import Trip, TripDay, TripDestination, TripItineraryItem, TripPlanVersion
+from trips.models import Trip, TripAgentMessage, TripDay, TripDestination, TripItineraryItem, TripPlanVersion
 
 
 class TripDestinationSummarySerializer(serializers.ModelSerializer):
@@ -480,6 +480,7 @@ class TripWriteSerializer(serializers.ModelSerializer):
 
 class TripAgentActiveSerializer(serializers.Serializer):
     trip_id = serializers.UUIDField()
+    let_agent_decide = serializers.BooleanField(required=False, default=True)
     travel_pace = serializers.CharField(max_length=40, allow_blank=True, required=False)
     interest_tags = serializers.ListField(
         child=serializers.CharField(max_length=80),
@@ -539,8 +540,31 @@ class TripAgentActiveSerializer(serializers.Serializer):
 
 class TripAgentCreateMessageSerializer(serializers.Serializer):
     trip_id = serializers.UUIDField()
+    session_id = serializers.UUIDField(required=False)
     current_step = serializers.IntegerField(min_value=1, max_value=6)
     message = serializers.CharField(allow_blank=False, trim_whitespace=True)
+
+
+class TripAgentMessageListQuerySerializer(serializers.Serializer):
+    trip_id = serializers.UUIDField()
+    step = serializers.IntegerField(min_value=1, max_value=6, required=False)
+
+
+class TripAgentMessageSerializer(serializers.ModelSerializer):
+    session_id = serializers.UUIDField(read_only=True)
+
+    class Meta:
+        model = TripAgentMessage
+        fields = (
+            "id",
+            "session_id",
+            "sender",
+            "step",
+            "sequence",
+            "content",
+            "created_at",
+        )
+        read_only_fields = fields
 
 
 class TripPlanVersionSerializer(serializers.ModelSerializer):

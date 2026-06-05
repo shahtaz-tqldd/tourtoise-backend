@@ -65,3 +65,8 @@ class PlanningSource(models.TextChoices):
     USER = "user", "User"
     AGENT = "agent", "Agent"
     HYBRID = "hybrid", "Hybrid"
+
+
+class AgentMessageSender(models.TextChoices):
+    USER = "user", "User"
+    AGENT = "agent", "Agent"

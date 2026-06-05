@@ -11,10 +11,12 @@ services:
       DJANGO_RUN_MIGRATIONS: "1"
       DB_HOST: postgres
       DB_PORT: ${DB_PORT:-5432}
+      ADK_DB_URL: postgresql+asyncpg://${DB_USER:-tourtoise_db_owner}:${DB_PASSWORD:-tourtoise_db_password}@postgres:5432/adk_session_db
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
     volumes:
       - ..:/app
+      - ../secrets/service-account.json:/app/secrets/service-account.json:ro
     ports:
       - "${WSGI_PORT:-8000}:8000"
     depends_on:
@@ -36,6 +38,7 @@ services:
       APP_ENV: dev
       DB_HOST: postgres
       DB_PORT: ${DB_PORT:-5432}
+      ADK_DB_URL: postgresql+asyncpg://${DB_USER:-tourtoise_db_owner}:${DB_PASSWORD:-tourtoise_db_password}@postgres:5432/adk_session_db
       DJANGO_CREATE_SUPERUSER: "0"
       DJANGO_WAIT_FOR_MIGRATIONS: "1"
       CELERY_BROKER_URL: redis://redis:6379/0
@@ -64,6 +67,7 @@ services:
       APP_ENV: dev
       DB_HOST: postgres
       DB_PORT: ${DB_PORT:-5432}
+      ADK_DB_URL: postgresql+asyncpg://${DB_USER:-tourtoise_db_owner}:${DB_PASSWORD:-tourtoise_db_password}@postgres:5432/adk_session_db
       DJANGO_CREATE_SUPERUSER: "0"
       DJANGO_WAIT_FOR_MIGRATIONS: "1"
       CELERY_BROKER_URL: redis://redis:6379/0
@@ -89,6 +93,7 @@ services:
       APP_ENV: dev
       DB_HOST: postgres
       DB_PORT: ${DB_PORT:-5432}
+      ADK_DB_URL: postgresql+asyncpg://${DB_USER:-tourtoise_db_owner}:${DB_PASSWORD:-tourtoise_db_password}@postgres:5432/adk_session_db
       DJANGO_CREATE_SUPERUSER: "0"
       DJANGO_WAIT_FOR_MIGRATIONS: "1"
       CELERY_BROKER_URL: redis://redis:6379/0
@@ -111,8 +116,10 @@ services:
       POSTGRES_DB: ${DB_NAME:-tourtoise_db}
       POSTGRES_USER: ${DB_USER:-tourtoise_db_owner}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-tourtoise_db_password}
+      POSTGRES_ADDITIONAL_DATABASES: adk_session_db
     volumes:
       - postgres_dev_data:/var/lib/postgresql/data
+      - ./postgres/init-additional-databases.sh:/docker-entrypoint-initdb.d/10-create-additional-databases.sh:ro
     ports:
       - "${POSTGRES_FORWARD_PORT:-5433}:5432"
     healthcheck:

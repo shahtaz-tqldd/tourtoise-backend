@@ -55,6 +55,7 @@ class ClientAttractionSerializer(serializers.ModelSerializer):
     class Meta:
         model = Attraction
         fields = (
+            "id",
             "name",
             "slug",
             "attraction_type",
@@ -81,6 +82,7 @@ class ClientActivitySerializer(serializers.ModelSerializer):
     class Meta:
         model = Activity
         fields = (
+            "id",
             "name",
             "slug",
             "activity_type",
@@ -105,6 +107,7 @@ class ClientCuisineSerializer(serializers.ModelSerializer):
     class Meta:
         model = Cuisine
         fields = (
+            "id",
             "name",
             "slug",
             "cuisine_type",

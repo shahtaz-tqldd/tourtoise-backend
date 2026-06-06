@@ -1,10 +1,11 @@
+import json
+
 from google.adk.agents import Agent
 from google.adk.tools.google_search_tool import GoogleSearchTool
 from .tools import fetch_destination_items_tool
 from .schema import (
     TripPreferenceQNAResponse,
     TripDestinationRecommendationsResponse,
-    TripPreparationResponse
 )
 
 
@@ -54,7 +55,7 @@ class ADKAgent:
                     agent_instruction,
                     agent_tools,
                 ) = self.trip_preparation_agent(trip)
-                output_schema = TripPreparationResponse
+                output_schema = None
 
 
             case _:
@@ -387,7 +388,7 @@ Good context example:
 
 
     @staticmethod
-    def trip_preparation_agent(trip_id):
+    def trip_preparation_agent(trip):
         """
         Creates a trip preparation guide with packing items, required/recommended documents,
         and destination-specific heads-up information.
@@ -400,13 +401,15 @@ Good context example:
             "required or recommended documents, and important destination-specific heads-up information."
         )
 
+        trip_context_json = json.dumps(trip or {}, default=str)
+
         agent_instruction = f"""
     You are a trip preparation agent.
 
     Your job is to prepare the traveler before the trip.
 
-    You must use the fetch_trip_planning_context tool with this trip_id:
-    {trip_id}
+    Use this trip planning context as the primary source of truth:
+    {trip_context_json}
 
     You may also use Google Search when needed for:
     - destination-specific document requirements
@@ -425,7 +428,7 @@ Good context example:
     3. Heads-up information for the destination
 
     You must use:
-    - fetch_trip_planning_context tool
+    - the provided trip planning context
     - trip start date and end date
     - destination
     - start point
@@ -526,8 +529,7 @@ Good context example:
     """
 
         agent_tools = [
-            # fetch_trip_planning_context,
-            # google_search,
+            GoogleSearchTool(),
         ]
 
         return (

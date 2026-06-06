@@ -49,6 +49,17 @@ DEFAULT_ITINERARY_RESPONSE = {
     "revision_instruction": "",
 }
 
+DEFAULT_PREPARATION_RESPONSE = {
+    "is_preparation_complete": False,
+    "title": "",
+    "summary": "",
+    "packing_items": [],
+    "required_documents": [],
+    "heads_up": [],
+    "message": "",
+    "revision_instruction": "",
+}
+
 
 class PlanAgentClient:
     """Service class for the trip preference planning agent with ADK session persistence."""
@@ -234,4 +245,6 @@ class PlanAgentClient:
             return DEFAULT_RECOMMENDATIONS_RESPONSE
         if self.current_step == 4:
             return DEFAULT_ITINERARY_RESPONSE
+        if self.current_step == 5:
+            return DEFAULT_PREPARATION_RESPONSE
         return DEFAULT_STRUCTURED_RESPONSE

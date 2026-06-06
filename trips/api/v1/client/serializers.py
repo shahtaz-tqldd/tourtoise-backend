@@ -7,7 +7,7 @@ from rest_framework import serializers
 from destinations.api.v1.client.serializers import ClientDestinationListSerializer
 from destinations.choices import Status
 from destinations.models import Destination
-from trips.models import Trip, TripAgentMessage, TripItineraryDay, TripDestination, TripItineraryDayItem
+from trips.models import Trip, TripAgentMessage, TripItinerary, TripItineraryDay, TripDestination, TripItineraryDayItem
 
 
 class TripDestinationSummarySerializer(serializers.ModelSerializer):
@@ -69,64 +69,24 @@ class TripDestinationSerializer(serializers.ModelSerializer):
 
 
 class TripItineraryItemSerializer(serializers.ModelSerializer):
-    attraction_name = serializers.CharField(source="attraction.name", read_only=True)
-    activity_name = serializers.CharField(source="activity.name", read_only=True)
-    cuisine_name = serializers.CharField(source="cuisine.name", read_only=True)
-
     class Meta:
         model = TripItineraryDayItem
         fields = (
             "id",
-            "trip_destination",
             "item_type",
-            "status",
             "title",
             "description",
-            "start_time",
-            "end_time",
-            "duration_minutes",
-            "sort_order",
-            "attraction",
-            "activity",
-            "cuisine",
-            "attraction_name",
-            "activity_name",
-            "cuisine_name",
-            "location_name",
-            "address",
-            "latitude",
-            "longitude",
+            "time",
+            "notes",
+            "item_id",
             "estimated_cost",
-            "cost_currency",
-            "booking_required",
-            "booking_reference",
-            "external_url",
-            "metadata",
         )
-        read_only_fields = ("id", "attraction_name", "activity_name", "cuisine_name")
-
-    def validate(self, attrs):
-        trip = self.context["trip"]
-        trip_destination = attrs.get("trip_destination") or getattr(self.instance, "trip_destination", None)
-        if trip_destination and trip_destination.trip_id != trip.id:
-            raise serializers.ValidationError({"trip_destination": "Trip destination does not belong to this trip."})
-        if attrs.get("attraction") and attrs.get("activity"):
-            raise serializers.ValidationError("Select only one structured content reference per item.")
-        if attrs.get("attraction") and attrs.get("cuisine"):
-            raise serializers.ValidationError("Select only one structured content reference per item.")
-        if attrs.get("activity") and attrs.get("cuisine"):
-            raise serializers.ValidationError("Select only one structured content reference per item.")
-        return attrs
+        read_only_fields = ("id",)
 
     def create(self, validated_data):
         day = self.context["day"]
-        trip = self.context["trip"]
-        request = self.context["request"]
         return TripItineraryDayItem.objects.create(
-            trip=trip,
-            day=day,
-            created_by=request.user,
-            updated_by=request.user,
+            trip_itinerary_day=day,
             **validated_data,
         )
 
@@ -139,36 +99,25 @@ class TripItineraryItemSerializer(serializers.ModelSerializer):
 
 
 class TripDaySerializer(serializers.ModelSerializer):
-    items = TripItineraryItemSerializer(many=True, read_only=True)
+    items = TripItineraryItemSerializer(source="day_items", many=True, read_only=True)
 
     class Meta:
         model = TripItineraryDay
         fields = (
             "id",
-            "trip_destination",
-            "day_number",
+            "day",
             "date",
             "title",
             "summary",
-            "notes",
             "items",
         )
         read_only_fields = ("id", "items")
 
-    def validate(self, attrs):
-        trip = self.context["trip"]
-        trip_destination = attrs.get("trip_destination") or getattr(self.instance, "trip_destination", None)
-        if trip_destination and trip_destination.trip_id != trip.id:
-            raise serializers.ValidationError({"trip_destination": "Trip destination does not belong to this trip."})
-        return attrs
-
     def create(self, validated_data):
         trip = self.context["trip"]
-        request = self.context["request"]
+        itinerary, _ = TripItinerary.objects.get_or_create(trip=trip)
         return TripItineraryDay.objects.create(
-            trip=trip,
-            created_by=request.user,
-            updated_by=request.user,
+            itinerary=itinerary,
             **validated_data,
         )
 
@@ -226,9 +175,10 @@ class TripListSerializer(serializers.ModelSerializer):
         return obj.trip_destinations.count()
 
     def get_days_count(self, obj):
-        if hasattr(obj, "_prefetched_objects_cache") and "days" in obj._prefetched_objects_cache:
-            return len(obj._prefetched_objects_cache["days"])
-        return obj.days.count()
+        try:
+            return obj.trip_itinerary.itinerary_days.count()
+        except TripItinerary.DoesNotExist:
+            return 0
 
     def get_share_url(self, obj):
         request = self.context.get("request")
@@ -241,7 +191,7 @@ class TripListSerializer(serializers.ModelSerializer):
 
 class TripDetailSerializer(serializers.ModelSerializer):
     trip_destinations = TripDestinationSerializer(many=True, read_only=True)
-    days = TripDaySerializer(many=True, read_only=True)
+    days = serializers.SerializerMethodField()
     share_url = serializers.SerializerMethodField()
 
     class Meta:
@@ -272,9 +222,7 @@ class TripDetailSerializer(serializers.ModelSerializer):
             "planning_summary",
             "agent_active",
             "agent_active_failed_message",
-            "agent_message",
             "agent_context",
-            "latest_plan_version",
             "share_url",
             "trip_destinations",
             "days",
@@ -291,10 +239,17 @@ class TripDetailSerializer(serializers.ModelSerializer):
             reverse("public-trip-detail", kwargs={"share_token": obj.share_token})
         )
 
+    def get_days(self, obj):
+        try:
+            days = obj.trip_itinerary.itinerary_days.all()
+        except TripItinerary.DoesNotExist:
+            return []
+        return TripDaySerializer(days, many=True).data
+
 
 class PublicTripDetailSerializer(serializers.ModelSerializer):
     trip_destinations = TripDestinationSerializer(many=True, read_only=True)
-    days = TripDaySerializer(many=True, read_only=True)
+    days = serializers.SerializerMethodField()
     share_url = serializers.SerializerMethodField()
 
     class Meta:
@@ -324,7 +279,6 @@ class PublicTripDetailSerializer(serializers.ModelSerializer):
             "planning_summary",
             "agent_active",
             "agent_active_failed_message",
-            "agent_message",
             "trip_destinations",
             "days",
             "share_url",
@@ -338,6 +292,13 @@ class PublicTripDetailSerializer(serializers.ModelSerializer):
         return request.build_absolute_uri(
             reverse("public-trip-detail", kwargs={"share_token": obj.share_token})
         )
+
+    def get_days(self, obj):
+        try:
+            days = obj.trip_itinerary.itinerary_days.all()
+        except TripItinerary.DoesNotExist:
+            return []
+        return TripDaySerializer(days, many=True).data
 
 
 class TripWriteSerializer(serializers.ModelSerializer):
@@ -541,4 +502,3 @@ class TripAgentMessageSerializer(serializers.ModelSerializer):
             "created_at",
         )
         read_only_fields = fields
-

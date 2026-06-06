@@ -246,11 +246,39 @@ def _parse_trip_itinerary_response(raw_text: Optional[str]) -> Optional[dict[str
     }
 
 
+def _parse_trip_preparation_response(raw_text: Optional[str]) -> Optional[dict[str, Any]]:
+    data = _parse_json_object(raw_text)
+    if data is None:
+        return None
+
+    is_preparation_complete = data.get("is_preparation_complete")
+    if not isinstance(is_preparation_complete, bool):
+        logger.error(
+            "Agent JSON response has invalid is_preparation_complete. value=%r response=%s",
+            is_preparation_complete,
+            data,
+        )
+        return None
+
+    return {
+        "is_preparation_complete": is_preparation_complete,
+        "title": str(data.get("title") or "").strip(),
+        "summary": str(data.get("summary") or "").strip(),
+        "packing_items": _dict_list(data.get("packing_items")),
+        "required_documents": _dict_list(data.get("required_documents")),
+        "heads_up": _dict_list(data.get("heads_up")),
+        "message": str(data.get("message") or "").strip(),
+        "revision_instruction": str(data.get("revision_instruction") or "").strip(),
+    }
+
+
 def _parse_trip_agent_response(raw_text: Optional[str], current_step: int) -> Optional[dict[str, Any]]:
     if current_step == 3:
         return _parse_trip_recommendations_response(raw_text)
     if current_step == 4:
         return _parse_trip_itinerary_response(raw_text)
+    if current_step == 5:
+        return _parse_trip_preparation_response(raw_text)
     return _parse_trip_qna_response(raw_text)
 
 
@@ -292,6 +320,12 @@ def _string_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
     return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _dict_list(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
 
 
 def _strip_json_markdown(text: str) -> str:
@@ -339,6 +373,7 @@ def _define_intention(agent_name: str) -> str:
         "profile_customization_agent": "trip_profile_qna",
         "destination_discovery_agent": "destination_recommendations",
         "itinerary_design_agent": "itinerary_design",
+        "trip_preparation_agent": "trip_preparation",
         "default_root_agent": "general",
     }
 

@@ -1,78 +1,42 @@
 from django.urls import path, include
+from trips.api.v1.client import views
 
-from trips.api.v1.client.views import (
-    PublicTripDetailAPIView,
-    TripAgentActiveAPIView,
-    TripAgentCreateMessageAPIView,
-    TripCreateAPIView,
-    TripDayCreateAPIView,
-    TripDayDeleteAPIView,
-    TripDayUpdateAPIView,
-    TripDeleteAPIView,
-    TripDestinationCreateAPIView,
-    TripDestinationDeleteAPIView,
-    TripDestinationUpdateAPIView,
-    TripDetailAPIView,
-    TripItineraryItemCreateAPIView,
-    TripItineraryItemDeleteAPIView,
-    TripItineraryItemUpdateAPIView,
-    TripListAPIView,
-    TripUpdateAPIView,
-    TripAgentMessageListAPIView,
-    TripAgentRecommendationsAPIView,
-    TripAgentItinerariesAPIView
-)
-
-agent_urlpatterns = [
-    path("active/", TripAgentActiveAPIView.as_view(), name="trip-agent-active"),
-    path("create-message/", TripAgentCreateMessageAPIView.as_view(), name="trip-agent-create-message"),
-    path("messages/", TripAgentMessageListAPIView.as_view(), name="trip-agent-messages"),
-    path("recommendations/", TripAgentRecommendationsAPIView.as_view(), name="trip-agent-recommendations"),
-    path("itineraries/", TripAgentItinerariesAPIView.as_view(), name="trip-agent-itineraries"),
+planning_urlpatterns = [
+    path("agent-init/", views.TripAgentInitAPIView.as_view(), name="trip-agent-initiate"),
+    path("create-message/", views.TripAgentCreateMessageAPIView.as_view(), name="trip-agent-create-message"),
+    path("messages/", views.TripAgentMessageListAPIView.as_view(), name="trip-agent-messages"),
+    path("recommendations/", views.TripPlanningRecommendationsAPIView.as_view(), name="trip-planning-recommendations"),
+    path("itineraries/", views.TripPlanningItinerariesAPIView.as_view(), name="trip-planning-itineraries"),
+    path("preparation/", views.TripPlanningPrepartionAPIView.as_view(), name="trip-planning-preparation"),
+    path("overview/", views.TripPlanningOverviewAPIView.as_view(), name="trip-planning-overview"),
+    path("activate/", views.ActivateTripPlanAPIView.as_view(), name="trip-planning-activate"),
 ]
 
-
-urlpatterns = [
-    path("agent/", include(agent_urlpatterns)),
-    path("create/", TripCreateAPIView.as_view(), name="trip-create"),
-    path("list/", TripListAPIView.as_view(), name="trip-list"),
-    path("<uuid:trip_id>/detail/", TripDetailAPIView.as_view(), name="trip-detail"),
-    path("public/<uuid:share_token>/detail/", PublicTripDetailAPIView.as_view(), name="public-trip-detail"),
-    path("<uuid:trip_id>/update/", TripUpdateAPIView.as_view(), name="trip-update"),
-    path("<uuid:trip_id>/delete/", TripDeleteAPIView.as_view(), name="trip-delete"),
-    
-    # manage destinations
-    path("<uuid:trip_id>/destinations/create/", TripDestinationCreateAPIView.as_view(), name="trip-destination-create"),
+trip_destination_urlpatterns = [
+    path("create/", views.TripDestinationCreateAPIView.as_view(), name="trip-destination-create"),
     path(
-        "<uuid:trip_id>/destinations/<uuid:destination_row_id>/update/",
-        TripDestinationUpdateAPIView.as_view(),
+        "<uuid:destination_row_id>/update/",
+        views.TripDestinationUpdateAPIView.as_view(),
         name="trip-destination-update",
     ),
     path(
-        "<uuid:trip_id>/destinations/<uuid:destination_row_id>/delete/",
-        TripDestinationDeleteAPIView.as_view(),
+        "<uuid:destination_row_id>/delete/",
+        views.TripDestinationDeleteAPIView.as_view(),
         name="trip-destination-delete",
     ),
+]
 
-    # manage days
-    path("<uuid:trip_id>/days/create/", TripDayCreateAPIView.as_view(), name="trip-day-create"),
-    path("<uuid:trip_id>/days/<uuid:day_id>/update/", TripDayUpdateAPIView.as_view(), name="trip-day-update"),
-    path("<uuid:trip_id>/days/<uuid:day_id>/delete/", TripDayDeleteAPIView.as_view(), name="trip-day-delete"),
-    
-    # manage itinerary items
-    path(
-        "<uuid:trip_id>/days/<uuid:day_id>/items/create/",
-        TripItineraryItemCreateAPIView.as_view(),
-        name="trip-item-create",
-    ),
-    path(
-        "<uuid:trip_id>/items/<uuid:item_id>/update/",
-        TripItineraryItemUpdateAPIView.as_view(),
-        name="trip-item-update",
-    ),
-    path(
-        "<uuid:trip_id>/items/<uuid:item_id>/delete/",
-        TripItineraryItemDeleteAPIView.as_view(),
-        name="trip-item-delete",
-    )
+trip_urlpatterns = [
+    path("create/", views.TripCreateAPIView.as_view(), name="trip-create"),
+    path("list/", views.TripListAPIView.as_view(), name="trip-list"),
+    path("<uuid:trip_id>/detail/", views.TripDetailAPIView.as_view(), name="trip-detail"),
+    path("public/<uuid:share_token>/detail/", views.PublicTripDetailAPIView.as_view(), name="public-trip-detail"),
+    path("<uuid:trip_id>/update/", views.TripUpdateAPIView.as_view(), name="trip-update"),
+    path("<uuid:trip_id>/delete/", views.TripDeleteAPIView.as_view(), name="trip-delete"),
+]
+
+urlpatterns = [
+    path("", include(trip_urlpatterns)),
+    path("planning/", include(planning_urlpatterns)),
+    path("<uuid:trip_id>/destinations/", include(trip_destination_urlpatterns)),
 ]

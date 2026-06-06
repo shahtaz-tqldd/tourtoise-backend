@@ -31,8 +31,11 @@ def fetch_trip_planning_context_tool():
 
 
 def _fetch_trip_planning_context(trip_id: str):
-    # Implementation for fetching trip planning context
-    pass
+    from trips.models import Trip
+    from trips.services import build_itinerary_planning_context
+
+    trip = Trip.objects.get(pk=trip_id)
+    return build_itinerary_planning_context(trip)
 
 
 def _fetch_destination_items(destination_id: str):

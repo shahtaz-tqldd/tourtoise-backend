@@ -9,6 +9,8 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from uuid import uuid4
 
 from app.utils.cloudinary import delete_image, upload_image
+from accounts.choices import AccountProvider
+from accounts.firebase import FirebaseVerificationError, verify_firebase_id_token
 from accounts.models import UserProfile
 from accounts.services import resolve_password_reset_user, send_user_password_reset_email
 
@@ -21,6 +23,28 @@ def get_or_create_profile(user):
         return user.profile
     except UserProfile.DoesNotExist:
         return UserProfile.objects.create(user=user)
+
+
+def build_auth_token_payload(user):
+    refresh = RefreshToken.for_user(user)
+    return {
+        "access_token": str(refresh.access_token),
+        "refresh_token": str(refresh),
+    }
+
+
+def build_unique_username_from_email(email):
+    local_part = email.split("@", 1)[0]
+    base_username = slugify(local_part)[:50].strip("-") or "user"
+    username = base_username
+    suffix = 1
+
+    while UserProfile.objects.filter(username=username).exists():
+        suffix_text = f"-{suffix}"
+        username = f"{base_username[:50 - len(suffix_text)]}{suffix_text}"
+        suffix += 1
+
+    return username
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -48,6 +72,8 @@ class UserSerializer(serializers.ModelSerializer):
             "email",
             "name",
             "phone",
+            "provider",
+            "firebase_uid",
             "status",
             "is_email_verified",
             "is_staff",
@@ -73,6 +99,8 @@ class UserSerializer(serializers.ModelSerializer):
         read_only_fields = (
             "id",
             "status",
+            "provider",
+            "firebase_uid",
             "is_email_verified",
             "is_staff",
             "is_superuser",
@@ -290,6 +318,7 @@ class RegisterSerializer(serializers.ModelSerializer):
         password = validated_data.pop("password")
         try:
             with transaction.atomic():
+                validated_data["provider"] = AccountProvider.PASSWORD
                 user = User.objects.create_user(password=password, **validated_data)
                 if username:
                     profile = get_or_create_profile(user)
@@ -330,12 +359,120 @@ class LoginSerializer(serializers.Serializer):
         user.last_login = timezone.now()
         user.save(update_fields=["last_login"])
 
-        refresh = RefreshToken.for_user(user)
+        return build_auth_token_payload(user)
 
-        return {
-            "access_token": str(refresh.access_token),
-            "refresh_token": str(refresh),
-        }
+
+class GoogleLoginSerializer(serializers.Serializer):
+    provider = serializers.ChoiceField(choices=[AccountProvider.GOOGLE])
+    firebase_id_token = serializers.CharField(write_only=True)
+    google_access_token = serializers.CharField(
+        write_only=True,
+        required=False,
+        allow_blank=True,
+        allow_null=True,
+    )
+    firebase_uid = serializers.CharField(max_length=128)
+    email = serializers.EmailField()
+    email_verified = serializers.BooleanField()
+    name = serializers.CharField(max_length=50, required=False, allow_blank=True)
+    photo_url = serializers.URLField(required=False, allow_blank=True, allow_null=True)
+    phone_number = serializers.CharField(max_length=17, required=False, allow_blank=True, allow_null=True)
+
+    def validate(self, attrs):
+        try:
+            decoded_token = verify_firebase_id_token(attrs["firebase_id_token"])
+        except FirebaseVerificationError as exc:
+            raise serializers.ValidationError({"firebase_id_token": str(exc)}) from exc
+
+        if decoded_token:
+            firebase_uid = decoded_token.get("uid")
+            email = decoded_token.get("email")
+            if firebase_uid and firebase_uid != attrs["firebase_uid"]:
+                raise serializers.ValidationError({"firebase_uid": "Firebase UID does not match the ID token."})
+            if email and email.lower() != attrs["email"].lower():
+                raise serializers.ValidationError({"email": "Email does not match the Firebase ID token."})
+            attrs["email_verified"] = bool(decoded_token.get("email_verified", attrs["email_verified"]))
+            attrs["name"] = attrs.get("name") or decoded_token.get("name", "")
+            attrs["photo_url"] = attrs.get("photo_url") or decoded_token.get("picture", "")
+            attrs["phone_number"] = attrs.get("phone_number") or decoded_token.get("phone_number")
+
+        return attrs
+
+    def save(self, **kwargs):
+        email = self.validated_data["email"]
+        firebase_uid = self.validated_data["firebase_uid"]
+
+        try:
+            with transaction.atomic():
+                user = (
+                    User.objects.select_for_update()
+                    .filter(firebase_uid=firebase_uid)
+                    .first()
+                )
+                if user is None:
+                    user = (
+                        User.objects.select_for_update()
+                        .filter(email__iexact=email)
+                        .first()
+                    )
+
+                if user is None:
+                    user = User.objects.create_user(
+                        email=email,
+                        password=None,
+                        name=self.validated_data.get("name", ""),
+                        provider=AccountProvider.GOOGLE,
+                        firebase_uid=firebase_uid,
+                        firebase_id_token=self.validated_data["firebase_id_token"],
+                        google_access_token=self.validated_data.get("google_access_token") or "",
+                        is_email_verified=self.validated_data["email_verified"],
+                    )
+                    profile = get_or_create_profile(user)
+                    profile.username = build_unique_username_from_email(email)
+                else:
+                    if not user.is_active:
+                        raise serializers.ValidationError({"error": "User is disabled."})
+
+                    user.email = email
+                    user.name = self.validated_data.get("name", user.name)
+                    user.provider = AccountProvider.GOOGLE
+                    user.firebase_uid = firebase_uid
+                    user.firebase_id_token = self.validated_data["firebase_id_token"]
+                    user.google_access_token = self.validated_data.get("google_access_token") or ""
+                    user.is_email_verified = self.validated_data["email_verified"]
+                    profile = get_or_create_profile(user)
+                    if not profile.username:
+                        profile.username = build_unique_username_from_email(email)
+
+                phone_number = self.validated_data.get("phone_number")
+                if phone_number is not None:
+                    user.phone = phone_number or ""
+
+                photo_url = self.validated_data.get("photo_url")
+                if photo_url:
+                    profile.avatar_url = photo_url
+
+                user.last_login = timezone.now()
+                user.save(
+                    update_fields=[
+                        "email",
+                        "name",
+                        "phone",
+                        "provider",
+                        "firebase_uid",
+                        "firebase_id_token",
+                        "google_access_token",
+                        "is_email_verified",
+                        "last_login",
+                    ]
+                )
+                profile.save(update_fields=["username", "avatar_url"])
+        except IntegrityError as exc:
+            raise serializers.ValidationError(
+                {"error": "Could not complete Google login. Please try again."}
+            ) from exc
+
+        return build_auth_token_payload(user)
 
 
 class ChangePasswordSerializer(serializers.Serializer):

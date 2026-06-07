@@ -7,14 +7,15 @@ from accounts.models import User, UserProfile
 @admin.register(User)
 class UserAdmin(BaseUserAdmin):
     ordering = ("-created_at",)
-    list_display = ("email", "name", "status", "is_email_verified", "is_staff", "is_superuser")
-    list_filter = ("status", "is_staff", "is_superuser", "is_email_verified")
-    search_fields = ("email", "name", "phone")
+    list_display = ("email", "name", "provider", "status", "is_email_verified", "is_staff", "is_superuser")
+    list_filter = ("provider", "status", "is_staff", "is_superuser", "is_email_verified")
+    search_fields = ("email", "name", "phone", "firebase_uid")
     readonly_fields = ("id", "created_at", "updated_at", "last_login")
 
     fieldsets = (
         ("Credentials", {"fields": ("email", "password")}),
         ("Profile", {"fields": ("name", "phone")}),
+        ("Auth provider", {"fields": ("provider", "firebase_uid", "firebase_id_token", "google_access_token")}),
         ("Access", {"fields": ("status", "is_email_verified", "is_staff", "is_superuser", "groups", "user_permissions")}),
         ("Important dates", {"fields": ("last_login", "created_at", "updated_at")}),
     )

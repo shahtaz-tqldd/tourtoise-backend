@@ -7,7 +7,7 @@ from django.core.validators import RegexValidator
 from django.db import models
 from django.utils.translation import gettext_lazy as _
 
-from accounts.choices import AccountStatus
+from accounts.choices import AccountProvider, AccountStatus
 
 
 phone_regex = RegexValidator(
@@ -67,6 +67,21 @@ class User(AbstractBaseUser, PermissionsMixin):
         verbose_name=_("Account status"),
     )
     is_email_verified = models.BooleanField(default=False, verbose_name=_("Email verified"))
+    provider = models.CharField(
+        max_length=20,
+        choices=AccountProvider.choices,
+        default=AccountProvider.PASSWORD,
+        verbose_name=_("Auth provider"),
+    )
+    firebase_uid = models.CharField(
+        max_length=128,
+        unique=True,
+        blank=True,
+        null=True,
+        verbose_name=_("Firebase UID"),
+    )
+    firebase_id_token = models.TextField(blank=True, verbose_name=_("Firebase ID token"))
+    google_access_token = models.TextField(blank=True, verbose_name=_("Google access token"))
     is_active = models.BooleanField(default=True, verbose_name=_("Active"))
     is_staff = models.BooleanField(default=False, verbose_name=_("Staff status"))
     created_at = models.DateTimeField(auto_now_add=True, verbose_name=_("Created at"))

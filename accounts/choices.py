@@ -8,6 +8,11 @@ class AccountStatus(models.TextChoices):
     PREMIUM = "PREMIUM", _("Premium")
 
 
+class AccountProvider(models.TextChoices):
+    PASSWORD = "password", _("Password")
+    GOOGLE = "google", _("Google")
+
+
 class TravelStyle(models.TextChoices):
     ADVENTURE = "ADVENTURE", _("Adventure")
     LUXURY = "LUXURY", _("Luxury")

@@ -11,6 +11,7 @@ from rest_framework_simplejwt.views import TokenRefreshView
 from app.utils.response import APIResponse
 from accounts.api.v1.client.serializers import (
     ChangePasswordSerializer,
+    GoogleLoginSerializer,
     LoginSerializer,
     PublicUserProfileSerializer,
     RequestPasswordResetSerializer,
@@ -86,6 +87,35 @@ class LoginView(GenericAPIView):
         serializer.is_valid(raise_exception=True)
         return APIResponse.success(
             data=serializer.validated_data,
+            message="User logged in.",
+        )
+
+
+class GoogleLoginView(GenericAPIView):
+    """
+    Google account login API.
+
+    Frontend request:
+    - Method: POST
+    - Content-Type: application/json
+    - Path: /api/v1/accounts/google/
+    - Body:
+      `provider`, `firebase_id_token`, `google_access_token`, `firebase_uid`,
+      `email`, `email_verified`, `name`, `photo_url`, `phone_number`
+
+    Frontend response:
+    - 200 success with:
+      `access_token`
+      `refresh_token`
+    """
+
+    serializer_class = GoogleLoginSerializer
+
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+        return APIResponse.success(
+            data=serializer.save(),
             message="User logged in.",
         )
 

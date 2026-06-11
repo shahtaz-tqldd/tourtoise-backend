@@ -138,21 +138,21 @@ Good context example:
     @staticmethod
     def destination_discovery_agent(destination_id):
         """
-        Selects personalized tour spots, activities, and food items for one destination.
+        Selects personalized attractions, activities, and cuisines for one destination.
         Uses internal database tools and returns selected IDs only.
         """
 
         agent_name = "destination_discovery_agent"
 
         agent_description = (
-            "Selects personalized tour spot, activity, and food item IDs for one destination "
+            "Selects personalized attraction, activity, and cuisine IDs for one destination "
             "using the user's trip preferences, trip basics, and available destination items."
         )
 
         agent_instruction = f"""
     You are a destination discovery agent.
 
-    Your job is to recommend tour spots, activities, and food items for one destination.
+    Your job is to recommend attractions, activities, and cuisines for one destination.
 
     You must use the fetch_destination_items tool with this destination_id:
     {destination_id}
@@ -183,22 +183,21 @@ Good context example:
     - If a category has no suitable result, return an empty list for that category.
 
     Item category behavior:
-    - tour_spot_ids should include attractions, landmarks, nature places, cultural places, viewpoints, beaches, parks, museums, and hidden gems.
+    - attraction_ids should include attractions, landmarks, nature places, cultural places, viewpoints, beaches, parks, museums, and hidden gems.
     - activity_ids should include experiences, tours, adventures, shopping, nightlife, cultural activities, walks, boat rides, workshops, and relaxation options.
-    - food_item_ids should include local dishes, restaurants, cafes, street food, signature meals, desserts, and food experiences.
+    - cuisine_ids should include local dishes, restaurants, cafes, street food, signature meals, desserts, and food experiences.
 
 	    Response format:
 	    {{
 	    "is_discovery_complete": true,
-	    "tour_spot_ids": ["uuid-1", "uuid-2", "uuid-3"],
+	    "attraction_ids": ["uuid-1", "uuid-2", "uuid-3"],
 	    "activity_ids": ["uuid-4", "uuid-5", "uuid-6"],
-	    "food_item_ids": ["uuid-7", "uuid-8", "uuid-9"],
+	    "cuisine_ids": ["uuid-7", "uuid-8", "uuid-9"],
     "messages": {{
-        "tour_spots": "short user-facing message for tour spots",
+        "attractions": "short user-facing message for attractions",
         "activities": "short user-facing message for activities",
-        "foods": "short user-facing message for foods"
-    }},
-    "selection_instruction": "short instruction asking the user to choose, remove, or request alternatives"
+        "cuisines": "short user-facing message for cuisines"
+    }}
     }}
 
     Message rules:
@@ -268,15 +267,15 @@ Good context example:
     - trip start point
     - destination
     - user preferences
-    - selected tour spots
+    - selected attractions
     - selected activities
-    - selected food items
+    - selected cuisines
 
     Important source rules:
     - Treat internal trip data as the source of truth.
-    - Use only selected tour spots, activities, and food items from the trip context.
+    - Use only selected attractions, activities, and cuisines from the trip context.
     - Do not invent selected item IDs.
-    - Do not add new tour spots, activities, or food items unless the trip context clearly allows suggestions.
+    - Do not add new attractions, activities, or cuisines unless the trip context clearly allows suggestions.
     - Google Search is only for supporting route, timing, transport, and practical planning context.
     - If Google Search conflicts with internal trip data, prefer internal trip data.
     - If exact information is unavailable, provide a reasonable estimate and clearly mark it as approximate.
@@ -288,7 +287,7 @@ Good context example:
     - Avoid overloading a single day.
     - Group nearby places together when possible.
     - Put outdoor/scenic activities at better times of day when reasonable.
-    - Put food items naturally around breakfast, lunch, snacks, or dinner.
+    - Put cuisines naturally around breakfast, lunch, snacks, or dinner.
     - Include rest or flexible time when useful.
     - Avoid unrealistic backtracking.
     - Keep the plan practical and easy to follow.
@@ -330,7 +329,7 @@ Good context example:
             {{
             "time": "09:00 AM",
             "title": "short plan item title",
-            "item_type": "tour_spot | activity | food | transfer | rest | free_time",
+            "item_type": "attraction | activity | cuisine | transfer | rest | free_time",
             "item_id": "related item id or null",
             "description": "short practical description",
             "estimated_cost": "rough cost or null",
@@ -361,15 +360,11 @@ Good context example:
         "total_estimated_budget": "rough total estimate",
         "budget_note": "short note that this is approximate"
     }},
-    "message": "short user-facing message",
-    "revision_instruction": "short instruction asking what the user wants to change"
+    "message": "short user-facing message"
     }}
 
     Good message:
     "I created a balanced day-wise plan with routes and a rough budget based on your selected places and preferences."
-
-    Good revision_instruction:
-    "You can adjust the pace, remove places, change food choices, or ask for a cheaper or more relaxed version."
 
     Final rule:
     Return JSON only.
@@ -434,7 +429,7 @@ Good context example:
     - start point
     - traveler type and traveler count
     - user preferences and constraints
-    - selected itinerary, route plan, activities, foods, and tour spots when available
+    - selected itinerary, route plan, activities, cuisines, and attractions when available
     - Google Search when real-world document, rule, weather, or safety context is useful
 
     Important source rules:
@@ -514,15 +509,11 @@ Good context example:
         "severity": "low | medium | high"
         }}
     ],
-    "message": "short user-facing message",
-    "revision_instruction": "short instruction asking what the user wants to adjust"
+    "message": "short user-facing message"
     }}
 
     Good message:
     "I prepared a practical packing, document, and heads-up checklist based on your destination, itinerary, and travel style."
-
-    Good revision_instruction:
-    "You can ask for a lighter packing list, family-focused version, budget-focused version, or destination-specific safety notes."
 
     Final rule:
     Return JSON only.

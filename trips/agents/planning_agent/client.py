@@ -27,15 +27,14 @@ DEFAULT_STRUCTURED_RESPONSE = {
 
 DEFAULT_RECOMMENDATIONS_RESPONSE = {
     "is_discovery_complete": False,
-    "tour_spot_ids": [],
+    "attraction_ids": [],
     "activity_ids": [],
-    "food_item_ids": [],
+    "cuisine_ids": [],
     "messages": {
-        "tour_spots": "",
+        "attractions": "",
         "activities": "",
-        "foods": "",
+        "cuisines": "",
     },
-    "selection_instruction": "",
 }
 
 DEFAULT_ITINERARY_RESPONSE = {
@@ -46,7 +45,6 @@ DEFAULT_ITINERARY_RESPONSE = {
     "route_plan": [],
     "rough_budget": {},
     "message": "",
-    "revision_instruction": "",
 }
 
 DEFAULT_PREPARATION_RESPONSE = {
@@ -57,7 +55,6 @@ DEFAULT_PREPARATION_RESPONSE = {
     "required_documents": [],
     "heads_up": [],
     "message": "",
-    "revision_instruction": "",
 }
 
 

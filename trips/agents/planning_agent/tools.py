@@ -83,12 +83,12 @@ def _fetch_destination_items(destination_id: str):
             "approx_price_range": cuisine.approx_price_range,
         }
 
-    tour_spots = Attraction.objects.filter(destination_id=destination_id).order_by("name")
+    attractions = Attraction.objects.filter(destination_id=destination_id).order_by("name")
     activities = Activity.objects.filter(destination_id=destination_id).order_by("name")
-    food_items = Cuisine.objects.filter(destination_id=destination_id).order_by("-is_must_try", "name")
+    cuisines = Cuisine.objects.filter(destination_id=destination_id).order_by("-is_must_try", "name")
 
     return {
-        "tour_spots": [serialize_attraction(item) for item in tour_spots],
+        "attractions": [serialize_attraction(item) for item in attractions],
         "activities": [serialize_activity(item) for item in activities],
-        "food_items": [serialize_cuisine(item) for item in food_items],
+        "cuisines": [serialize_cuisine(item) for item in cuisines],
     }

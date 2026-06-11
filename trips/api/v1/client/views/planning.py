@@ -20,6 +20,9 @@ from trips.choices import AgentMessageSender, TripStatus
 from trips.models import (
     TripAgentConversationSession,
     TripAgentMessage,
+    TripItinerary,
+    TripPreparation,
+    TripRecommendations,
 )
 from trips.services import (
     build_initial_agent_query,
@@ -253,12 +256,20 @@ class TripPlanningRecommendationsAPIView(UserTripQuerysetMixin, GenericAPIView):
         serializer.is_valid(raise_exception=True)
 
         trip = get_object_or_404(self.get_trip_queryset(), pk=serializer.validated_data["trip_id"])
-        existing_recommendations = (trip.agent_context or {}).get("recommendations")
-        if existing_recommendations:
-            return APIResponse.success(
-                data=self._serialize_recommendations(existing_recommendations),
-                message="Trip agent recommendations fetched successfully.",
-            )
+        if trip.is_recommendation_complete:
+            saved_recommendations = self._get_saved_recommendations(trip)
+            if saved_recommendations:
+                return APIResponse.success(
+                    data=self._serialize_saved_recommendations(saved_recommendations),
+                    message="Trip recommendations fetched successfully.",
+                )
+
+            existing_recommendations = (trip.agent_context or {}).get("recommendations")
+            if existing_recommendations and existing_recommendations.get("is_discovery_complete"):
+                return APIResponse.success(
+                    data=self._serialize_recommendations(existing_recommendations),
+                    message="Trip recommendations fetched successfully.",
+                )
 
         trip_destination = self._get_recommendation_destination(trip)
         if not trip_destination:
@@ -304,7 +315,7 @@ class TripPlanningRecommendationsAPIView(UserTripQuerysetMixin, GenericAPIView):
         create_agent_message(
             session=session,
             sender=AgentMessageSender.AGENT,
-            content=recommendations.get("selection_instruction", ""),
+            content="Trip recommendations generated.",
             payload={
                 "recommendations": recommendations,
                 "cost": plan_agent_response.get("cost"),
@@ -323,7 +334,7 @@ class TripPlanningRecommendationsAPIView(UserTripQuerysetMixin, GenericAPIView):
 
         return APIResponse.success(
             data=self._serialize_recommendations(recommendations),
-            message="Trip agent recommendations created successfully.",
+            message="Trip recommendations created successfully.",
         )
 
     def _get_recommendation_destination(self, trip):
@@ -336,11 +347,13 @@ class TripPlanningRecommendationsAPIView(UserTripQuerysetMixin, GenericAPIView):
         )
 
     def _serialize_recommendations(self, recommendations):
+        attraction_ids = self._recommendation_ids(recommendations, "attraction")
+        cuisine_ids = self._recommendation_ids(recommendations, "cuisine")
         return {
-            "is_discovery_complete": recommendations.get("is_discovery_complete", False),
-            "tour_spots": self._serialize_items(
-                Attraction.objects.filter(id__in=recommendations.get("tour_spot_ids", [])).prefetch_related("images"),
-                recommendations.get("tour_spot_ids", []),
+            "is_recommendation_complete": recommendations.get("is_discovery_complete", False),
+            "attractions": self._serialize_items(
+                Attraction.objects.filter(id__in=attraction_ids).prefetch_related("images"),
+                attraction_ids,
                 ClientAttractionSerializer,
             ),
             "activities": self._serialize_items(
@@ -348,20 +361,82 @@ class TripPlanningRecommendationsAPIView(UserTripQuerysetMixin, GenericAPIView):
                 recommendations.get("activity_ids", []),
                 ClientActivitySerializer,
             ),
-            "food_items": self._serialize_items(
-                Cuisine.objects.filter(id__in=recommendations.get("food_item_ids", [])).prefetch_related("images"),
-                recommendations.get("food_item_ids", []),
+            "cuisines": self._serialize_items(
+                Cuisine.objects.filter(id__in=cuisine_ids).prefetch_related("images"),
+                cuisine_ids,
                 ClientCuisineSerializer,
             ),
-            "messages": recommendations.get("messages", {}),
-            "selection_instruction": recommendations.get("selection_instruction", ""),
+            "messages": self._serialize_recommendation_messages(recommendations.get("messages", {})),
             "session_id": recommendations.get("session_id"),
             "external_session_id": recommendations.get("external_session_id"),
         }
 
+    def _get_saved_recommendations(self, trip):
+        try:
+            return (
+                TripRecommendations.objects.prefetch_related(
+                    "attraction_items__attraction__images",
+                    "activity_items__activity__images",
+                    "cuisine_items__cuisine__images",
+                )
+                .get(trip=trip)
+            )
+        except TripRecommendations.DoesNotExist:
+            return None
+
+    def _serialize_saved_recommendations(self, recommendations):
+        attractions = [
+            item.attraction
+            for item in recommendations.attraction_items.all()
+            if item.attraction_id and item.attraction
+        ]
+        activities = [item.activity for item in recommendations.activity_items.all()]
+        cuisines = [item.cuisine for item in recommendations.cuisine_items.all()]
+
+        return {
+            "is_recommendation_complete": True,
+            "attractions": ClientAttractionSerializer(
+                attractions,
+                many=True,
+                context={"request": self.request},
+            ).data,
+            "activities": ClientActivitySerializer(
+                activities,
+                many=True,
+                context={"request": self.request},
+            ).data,
+            "cuisines": ClientCuisineSerializer(
+                cuisines,
+                many=True,
+                context={"request": self.request},
+            ).data,
+            "messages": {
+                "attractions": recommendations.attraction_recommendation_message,
+                "activities": recommendations.activity_recommendation_message,
+                "cuisines": recommendations.cusine_recommendation_message,
+            },
+            "session_id": recommendations.session_id,
+            "external_session_id": (recommendations.metadata or {}).get("external_session_id"),
+        }
+
+    def _serialize_recommendation_messages(self, messages):
+        messages = messages if isinstance(messages, dict) else {}
+        return {
+            "attractions": messages.get("attractions") or messages.get("tour_spots") or "",
+            "activities": messages.get("activities") or "",
+            "cuisines": messages.get("cuisines") or messages.get("foods") or "",
+        }
+
+    def _recommendation_ids(self, recommendations, item_type):
+        if item_type == "attraction":
+            return recommendations.get("attraction_ids") or recommendations.get("tour_spot_ids") or []
+        if item_type == "cuisine":
+            return recommendations.get("cuisine_ids") or recommendations.get("food_item_ids") or []
+        return recommendations.get(f"{item_type}_ids") or []
+
     def _serialize_items(self, queryset, selected_ids, serializer_class):
         item_map = {str(item.id): item for item in queryset}
-        ordered_items = [item_map[item_id] for item_id in selected_ids if item_id in item_map]
+        ordered_items = [item_map[str(item_id)] for item_id in selected_ids if str(item_id) in item_map]
         return serializer_class(ordered_items, many=True, context={"request": self.request}).data
 
 
@@ -381,12 +456,13 @@ class TripPlanningItinerariesAPIView(UserTripQuerysetMixin, GenericAPIView):
         serializer.is_valid(raise_exception=True)
 
         trip = get_object_or_404(self.get_trip_queryset(), pk=serializer.validated_data["trip_id"])
-        existing_itinerary = (trip.agent_context or {}).get("itinerary_design")
-        if existing_itinerary:
-            return APIResponse.success(
-                data=existing_itinerary,
-                message="Trip agent itinerary fetched successfully.",
-            )
+        if trip.is_itinerary_design_complete:
+            saved_itinerary = self._get_saved_itinerary(trip)
+            if saved_itinerary:
+                return APIResponse.success(
+                    data=self._serialize_saved_itinerary(saved_itinerary),
+                    message="Trip itinerary fetched successfully.",
+                )
 
         recommendations = (trip.agent_context or {}).get("recommendations")
         if not recommendations or not recommendations.get("is_discovery_complete"):
@@ -425,7 +501,7 @@ class TripPlanningItinerariesAPIView(UserTripQuerysetMixin, GenericAPIView):
         create_agent_message(
             session=session,
             sender=AgentMessageSender.AGENT,
-            content=itinerary.get("message") or itinerary.get("revision_instruction", ""),
+            content=itinerary.get("message", ""),
             payload={
                 "itinerary": itinerary,
                 "cost": plan_agent_response.get("cost"),
@@ -442,10 +518,101 @@ class TripPlanningItinerariesAPIView(UserTripQuerysetMixin, GenericAPIView):
                 status=status.HTTP_502_BAD_GATEWAY,
             )
 
+        saved_itinerary = self._get_saved_itinerary(trip)
         return APIResponse.success(
-            data=itinerary,
-            message="Trip agent itinerary created successfully.",
+            data=self._serialize_saved_itinerary(saved_itinerary) if saved_itinerary else itinerary,
+            message="Trip itinerary created successfully.",
         )
+
+    def _get_saved_itinerary(self, trip):
+        try:
+            return (
+                TripItinerary.objects.prefetch_related(
+                    "route_plan_items",
+                    "itinerary_days__day_items",
+                )
+                .select_related("rough_budget")
+                .get(trip=trip)
+            )
+        except TripItinerary.DoesNotExist:
+            return None
+
+    def _serialize_saved_itinerary(self, itinerary):
+        return {
+            "id": str(itinerary.id),
+            "title": itinerary.title,
+            "summary": itinerary.summary,
+            "message": itinerary.message,
+            "session_id": itinerary.session_id,
+            "is_finalized": itinerary.is_finalized,
+            "route_plan_items": [
+                self._serialize_route_plan_item(item)
+                for item in itinerary.route_plan_items.all()
+            ],
+            "itinerary_days": [
+                self._serialize_itinerary_day(day)
+                for day in itinerary.itinerary_days.all()
+            ],
+            "rough_budget": self._serialize_itinerary_budget(getattr(itinerary, "rough_budget", None)),
+            "metadata": itinerary.metadata or {},
+        }
+
+    def _serialize_route_plan_item(self, item):
+        return {
+            "id": item.id,
+            "date": item.date.isoformat() if item.date else None,
+            "notes": item.notes,
+            "to_point": item.to_point,
+            "from_point": item.from_point,
+            "start_time": item.start_time.isoformat() if item.start_time else None,
+            "transport_mode": item.transport_mode,
+            "estimated_cost": str(item.estimated_cost) if item.estimated_cost is not None else None,
+            "estimated_duration": str(item.estimated_duration) if item.estimated_duration else None,
+        }
+
+    def _serialize_itinerary_day(self, day):
+        return {
+            "id": day.id,
+            "day": day.day,
+            "date": day.date.isoformat() if day.date else None,
+            "title": day.title,
+            "summary": day.summary,
+            "day_items": [
+                self._serialize_itinerary_day_item(item)
+                for item in day.day_items.all()
+            ],
+        }
+
+    def _serialize_itinerary_day_item(self, item):
+        return {
+            "id": item.id,
+            "time": item.time.isoformat() if item.time else None,
+            "notes": item.notes,
+            "title": item.title,
+            "item_id": str(item.item_id) if item.item_id else None,
+            "item_type": item.item_type,
+            "description": item.description,
+            "estimated_cost": str(item.estimated_cost) if item.estimated_cost is not None else None,
+        }
+
+    def _serialize_itinerary_budget(self, budget):
+        if not budget:
+            return None
+        return {
+            "id": str(budget.id),
+            "transport": str(budget.transport) if budget.transport is not None else None,
+            "food": str(budget.food) if budget.food is not None else None,
+            "activities": str(budget.activities) if budget.activities is not None else None,
+            "tickets_or_entry": str(budget.tickets_or_entry) if budget.tickets_or_entry is not None else None,
+            "miscellaneous": str(budget.miscellaneous) if budget.miscellaneous is not None else None,
+            "total_estimated_budget": (
+                str(budget.total_estimated_budget)
+                if budget.total_estimated_budget is not None
+                else None
+            ),
+            "budget_note": budget.budget_note,
+            "metadata": budget.metadata or {},
+        }
 
 
 class TripPlanningPrepartionAPIView(UserTripQuerysetMixin, GenericAPIView):
@@ -464,12 +631,13 @@ class TripPlanningPrepartionAPIView(UserTripQuerysetMixin, GenericAPIView):
         serializer.is_valid(raise_exception=True)
 
         trip = get_object_or_404(self.get_trip_queryset(), pk=serializer.validated_data["trip_id"])
-        existing_preparation = (trip.agent_context or {}).get("trip_preparation")
-        if existing_preparation:
-            return APIResponse.success(
-                data=existing_preparation,
-                message="Trip agent preparation fetched successfully.",
-            )
+        if trip.is_trip_preparation_complete:
+            saved_preparation = self._get_saved_preparation(trip)
+            if saved_preparation:
+                return APIResponse.success(
+                    data=self._serialize_saved_preparation(saved_preparation),
+                    message="Trip preparation fetched successfully.",
+                )
 
         trip_context = build_itinerary_planning_context(trip)
 
@@ -501,7 +669,7 @@ class TripPlanningPrepartionAPIView(UserTripQuerysetMixin, GenericAPIView):
         create_agent_message(
             session=session,
             sender=AgentMessageSender.AGENT,
-            content=preparation.get("message") or preparation.get("revision_instruction", ""),
+            content=preparation.get("message", ""),
             payload={
                 "trip_preparation": preparation,
                 "cost": plan_agent_response.get("cost"),
@@ -518,10 +686,79 @@ class TripPlanningPrepartionAPIView(UserTripQuerysetMixin, GenericAPIView):
                 status=status.HTTP_502_BAD_GATEWAY,
             )
 
+        saved_preparation = self._get_saved_preparation(trip)
         return APIResponse.success(
-            data=preparation,
-            message="Trip agent preparation created successfully.",
+            data=self._serialize_saved_preparation(saved_preparation) if saved_preparation else preparation,
+            message="Trip preparation created successfully.",
         )
+
+    def _get_saved_preparation(self, trip):
+        try:
+            return (
+                TripPreparation.objects.prefetch_related(
+                    "packing_items",
+                    "required_documents",
+                    "heads_up",
+                )
+                .get(trip=trip)
+            )
+        except TripPreparation.DoesNotExist:
+            return None
+
+    def _serialize_saved_preparation(self, preparation):
+        return {
+            "id": str(preparation.id),
+            "title": preparation.title,
+            "summary": preparation.summary,
+            "message": preparation.message,
+            "is_finalized": preparation.is_finalized,
+            "session_id": preparation.session_id,
+            "packing_items": [
+                self._serialize_packing_item(item)
+                for item in preparation.packing_items.all()
+            ],
+            "required_documents": [
+                self._serialize_required_document(item)
+                for item in preparation.required_documents.all()
+            ],
+            "heads_up": [
+                self._serialize_heads_up(item)
+                for item in preparation.heads_up.all()
+            ],
+            "metadata": preparation.metadata or {},
+        }
+
+    def _serialize_packing_item(self, item):
+        return {
+            "id": str(item.id),
+            "item": item.item,
+            "quantity": item.quantity,
+            "category": item.category,
+            "priority": item.priority,
+            "sort_order": item.sort_order,
+            "additional_notes": item.additional_notes,
+        }
+
+    def _serialize_required_document(self, item):
+        return {
+            "id": str(item.id),
+            "document_name": item.document_name,
+            "document_url": item.document_url,
+            "document_url_public_id": item.document_url_public_id,
+            "required_level": item.required_level,
+            "sort_order": item.sort_order,
+            "additional_note": item.additional_note,
+        }
+
+    def _serialize_heads_up(self, item):
+        return {
+            "id": str(item.id),
+            "title": item.title,
+            "category": item.category,
+            "severity": item.severity,
+            "sort_order": item.sort_order,
+            "additional_note": item.additional_note,
+        }
 
 
 class TripPlanningOverviewAPIView(UserTripQuerysetMixin, GenericAPIView):
@@ -570,7 +807,8 @@ class TripPlanningOverviewAPIView(UserTripQuerysetMixin, GenericAPIView):
         planning_progress = {
             "current_step": trip.current_step,
             "is_qna_complete": bool((agent_context.get("preference_qna") or {}).get("context")),
-            "is_recommendation_complete": bool(recommendations.get("is_discovery_complete")),
+            "is_recommendation_complete": trip.is_recommendation_complete
+            or bool(recommendations.get("is_discovery_complete")),
             "is_itinerary_complete": bool(itinerary.get("is_itinerary_complete")),
             "is_preparation_complete": bool(preparation.get("is_preparation_complete")),
         }
@@ -603,9 +841,13 @@ class TripPlanningOverviewAPIView(UserTripQuerysetMixin, GenericAPIView):
             "destinations": destinations,
             "planning_progress": planning_progress,
             "recommendations_overview": {
-                "tour_spots_count": len(recommendations.get("tour_spot_ids") or []),
+                "attractions_count": len(
+                    recommendations.get("attraction_ids") or recommendations.get("tour_spot_ids") or []
+                ),
                 "activities_count": len(recommendations.get("activity_ids") or []),
-                "food_items_count": len(recommendations.get("food_item_ids") or []),
+                "cuisines_count": len(
+                    recommendations.get("cuisine_ids") or recommendations.get("food_item_ids") or []
+                ),
             },
             "itinerary_overview": {
                 "title": itinerary.get("title", ""),

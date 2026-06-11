@@ -207,15 +207,14 @@ def _parse_trip_recommendations_response(raw_text: Optional[str]) -> Optional[di
     messages = data.get("messages") if isinstance(data.get("messages"), dict) else {}
     return {
         "is_discovery_complete": is_discovery_complete,
-        "tour_spot_ids": _string_list(data.get("tour_spot_ids")),
+        "attraction_ids": _string_list(data.get("attraction_ids") or data.get("tour_spot_ids")),
         "activity_ids": _string_list(data.get("activity_ids")),
-        "food_item_ids": _string_list(data.get("food_item_ids")),
+        "cuisine_ids": _string_list(data.get("cuisine_ids") or data.get("food_item_ids")),
         "messages": {
-            "tour_spots": str(messages.get("tour_spots") or "").strip(),
+            "attractions": str(messages.get("attractions") or messages.get("tour_spots") or "").strip(),
             "activities": str(messages.get("activities") or "").strip(),
-            "foods": str(messages.get("foods") or "").strip(),
+            "cuisines": str(messages.get("cuisines") or messages.get("foods") or "").strip(),
         },
-        "selection_instruction": str(data.get("selection_instruction") or "").strip(),
     }
 
 
@@ -242,7 +241,6 @@ def _parse_trip_itinerary_response(raw_text: Optional[str]) -> Optional[dict[str
         "route_plan": data.get("route_plan") if isinstance(data.get("route_plan"), list) else [],
         "rough_budget": rough_budget,
         "message": str(data.get("message") or "").strip(),
-        "revision_instruction": str(data.get("revision_instruction") or "").strip(),
     }
 
 
@@ -268,7 +266,6 @@ def _parse_trip_preparation_response(raw_text: Optional[str]) -> Optional[dict[s
         "required_documents": _dict_list(data.get("required_documents")),
         "heads_up": _dict_list(data.get("heads_up")),
         "message": str(data.get("message") or "").strip(),
-        "revision_instruction": str(data.get("revision_instruction") or "").strip(),
     }
 
 

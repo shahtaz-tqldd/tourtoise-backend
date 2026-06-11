@@ -1,4 +1,8 @@
 import json
+import re
+from datetime import datetime, timedelta
+from decimal import Decimal, InvalidOperation
+from uuid import UUID
 
 from asgiref.sync import async_to_sync
 from django.db import transaction
@@ -8,8 +12,17 @@ from destinations.models import Activity, Attraction, Cuisine
 from trips.models import (
     TripAgentConversationSession,
     TripAgentMessage,
+    TripActivityRecommendationItem,
+    TripAttractionRecommendationItem,
+    TripCuisineRecommendationItem,
     TripHeadsUpInfoItem,
+    TripItinerary,
+    TripItineraryBudget,
+    TripItineraryDay,
+    TripItineraryDayItem,
     TripPreparation,
+    TripRecommendations,
+    TripRoutePlanItem,
     TripPreparationPackingItem,
     TripRequiredDocumentItem,
 )
@@ -181,13 +194,21 @@ def build_itinerary_planning_context(trip):
         "preferences": trip.preferences or {},
         "preference_context": (agent_context.get("preference_qna") or {}).get("context"),
         "selected_recommendations": {
-            "tour_spots": _serialize_selected_attractions(recommendations.get("tour_spot_ids", [])),
+            "attractions": _serialize_selected_attractions(_recommendation_ids(recommendations, "attraction")),
             "activities": _serialize_selected_activities(recommendations.get("activity_ids", [])),
-            "food_items": _serialize_selected_cuisines(recommendations.get("food_item_ids", [])),
+            "cuisines": _serialize_selected_cuisines(_recommendation_ids(recommendations, "cuisine")),
         },
         "recommendation_messages": recommendations.get("messages", {}),
         "itinerary_design": agent_context.get("itinerary_design") or {},
     }
+
+
+def _recommendation_ids(recommendations, item_type):
+    if item_type == "attraction":
+        return recommendations.get("attraction_ids") or recommendations.get("tour_spot_ids") or []
+    if item_type == "cuisine":
+        return recommendations.get("cuisine_ids") or recommendations.get("food_item_ids") or []
+    return recommendations.get(f"{item_type}_ids") or []
 
 
 def _serialize_selected_attractions(selected_ids):
@@ -282,35 +303,95 @@ def update_trip_agent_context_from_qna(trip, agent_response, session, user):
 
 def update_trip_agent_context_from_recommendations(trip, agent_response, session, user):
     recommendations = agent_response.get("response") or {}
-    if not recommendations.get("is_discovery_complete"):
-        trip.updated_by = user
-        trip.save(update_fields=["updated_by", "updated_at"])
-        return {
-            "is_discovery_complete": False,
-            "tour_spot_ids": recommendations.get("tour_spot_ids", []),
-            "activity_ids": recommendations.get("activity_ids", []),
-            "food_item_ids": recommendations.get("food_item_ids", []),
-            "messages": recommendations.get("messages", {}),
-            "selection_instruction": recommendations.get("selection_instruction", ""),
-            "session_id": str(session.id),
-            "external_session_id": session.external_session_id,
-        }
-
-    agent_context = trip.agent_context or {}
-    agent_context["recommendations"] = {
+    messages = recommendations.get("messages") if isinstance(recommendations.get("messages"), dict) else {}
+    normalized_recommendations = {
         "is_discovery_complete": recommendations.get("is_discovery_complete", False),
-        "tour_spot_ids": recommendations.get("tour_spot_ids", []),
+        "attraction_ids": recommendations.get("attraction_ids") or recommendations.get("tour_spot_ids", []),
         "activity_ids": recommendations.get("activity_ids", []),
-        "food_item_ids": recommendations.get("food_item_ids", []),
-        "messages": recommendations.get("messages", {}),
-        "selection_instruction": recommendations.get("selection_instruction", ""),
+        "cuisine_ids": recommendations.get("cuisine_ids") or recommendations.get("food_item_ids", []),
+        "messages": {
+            "attractions": messages.get("attractions") or messages.get("tour_spots") or "",
+            "activities": messages.get("activities") or "",
+            "cuisines": messages.get("cuisines") or messages.get("foods") or "",
+        },
         "session_id": str(session.id),
         "external_session_id": session.external_session_id,
     }
-    trip.agent_context = agent_context
-    trip.current_step = max(trip.current_step, 4)
-    trip.updated_by = user
-    trip.save(update_fields=["agent_context", "current_step", "updated_by", "updated_at"])
+
+    if not recommendations.get("is_discovery_complete"):
+        trip.updated_by = user
+        trip.save(update_fields=["updated_by", "updated_at"])
+        return normalized_recommendations
+
+    agent_context = trip.agent_context or {}
+    agent_context["recommendations"] = normalized_recommendations
+
+    with transaction.atomic():
+        trip_recommendations, _ = TripRecommendations.objects.update_or_create(
+            trip=trip,
+            defaults={
+                "attraction_recommendation_message": normalized_recommendations["messages"]["attractions"],
+                "cusine_recommendation_message": normalized_recommendations["messages"]["cuisines"],
+                "activity_recommendation_message": normalized_recommendations["messages"]["activities"],
+                "session_id": str(session.id),
+                "is_finalized": True,
+                "metadata": {
+                    "external_session_id": session.external_session_id,
+                },
+            },
+        )
+        TripAttractionRecommendationItem.objects.filter(recommendation=trip_recommendations).delete()
+        TripActivityRecommendationItem.objects.filter(recommendation=trip_recommendations).delete()
+        TripCuisineRecommendationItem.objects.filter(recommendation=trip_recommendations).delete()
+
+        attraction_ids = set(
+            str(item.id)
+            for item in Attraction.objects.filter(id__in=normalized_recommendations["attraction_ids"])
+        )
+        activity_ids = set(
+            str(item.id)
+            for item in Activity.objects.filter(id__in=normalized_recommendations["activity_ids"])
+        )
+        cuisine_ids = set(
+            str(item.id)
+            for item in Cuisine.objects.filter(id__in=normalized_recommendations["cuisine_ids"])
+        )
+
+        TripAttractionRecommendationItem.objects.bulk_create(
+            [
+                TripAttractionRecommendationItem(recommendation=trip_recommendations, attraction_id=item_id)
+                for item_id in normalized_recommendations["attraction_ids"]
+                if str(item_id) in attraction_ids
+            ]
+        )
+        TripActivityRecommendationItem.objects.bulk_create(
+            [
+                TripActivityRecommendationItem(recommendation=trip_recommendations, activity_id=item_id)
+                for item_id in normalized_recommendations["activity_ids"]
+                if str(item_id) in activity_ids
+            ]
+        )
+        TripCuisineRecommendationItem.objects.bulk_create(
+            [
+                TripCuisineRecommendationItem(recommendation=trip_recommendations, cuisine_id=item_id)
+                for item_id in normalized_recommendations["cuisine_ids"]
+                if str(item_id) in cuisine_ids
+            ]
+        )
+
+        trip.agent_context = agent_context
+        trip.current_step = max(trip.current_step, 4)
+        trip.is_recommendation_complete = True
+        trip.updated_by = user
+        trip.save(
+            update_fields=[
+                "agent_context",
+                "current_step",
+                "is_recommendation_complete",
+                "updated_by",
+                "updated_at",
+            ]
+        )
 
     session.is_active = False
     session.updated_by = user
@@ -320,44 +401,223 @@ def update_trip_agent_context_from_recommendations(trip, agent_response, session
 
 def update_trip_agent_context_from_itinerary(trip, agent_response, session, user):
     itinerary = agent_response.get("response") or {}
-    if not itinerary.get("is_itinerary_complete"):
-        trip.updated_by = user
-        trip.save(update_fields=["updated_by", "updated_at"])
-        return {
-            "is_itinerary_complete": False,
-            "title": itinerary.get("title", ""),
-            "summary": itinerary.get("summary", ""),
-            "day_wise_plan": itinerary.get("day_wise_plan", []),
-            "route_plan": itinerary.get("route_plan", []),
-            "rough_budget": itinerary.get("rough_budget", {}),
-            "message": itinerary.get("message", ""),
-            "revision_instruction": itinerary.get("revision_instruction", ""),
-            "session_id": str(session.id),
-            "external_session_id": session.external_session_id,
-        }
-
-    agent_context = trip.agent_context or {}
-    agent_context["itinerary_design"] = {
+    normalized_itinerary = {
         "is_itinerary_complete": itinerary.get("is_itinerary_complete", False),
         "title": itinerary.get("title", ""),
         "summary": itinerary.get("summary", ""),
-        "day_wise_plan": itinerary.get("day_wise_plan", []),
-        "route_plan": itinerary.get("route_plan", []),
-        "rough_budget": itinerary.get("rough_budget", {}),
+        "day_wise_plan": itinerary.get("day_wise_plan") if isinstance(itinerary.get("day_wise_plan"), list) else [],
+        "route_plan": itinerary.get("route_plan") if isinstance(itinerary.get("route_plan"), list) else [],
+        "rough_budget": itinerary.get("rough_budget") if isinstance(itinerary.get("rough_budget"), dict) else {},
         "message": itinerary.get("message", ""),
-        "revision_instruction": itinerary.get("revision_instruction", ""),
         "session_id": str(session.id),
         "external_session_id": session.external_session_id,
     }
-    trip.agent_context = agent_context
-    trip.current_step = max(trip.current_step, 5)
-    trip.updated_by = user
-    trip.save(update_fields=["agent_context", "current_step", "updated_by", "updated_at"])
 
-    session.is_active = False
-    session.updated_by = user
-    session.save(update_fields=["is_active", "updated_by", "updated_at"])
-    return agent_context["itinerary_design"]
+    if not normalized_itinerary["is_itinerary_complete"]:
+        trip.updated_by = user
+        trip.save(update_fields=["updated_by", "updated_at"])
+        return normalized_itinerary
+
+    with transaction.atomic():
+        structured_itinerary, _ = TripItinerary.objects.update_or_create(
+            trip=trip,
+            defaults={
+                "title": normalized_itinerary["title"],
+                "summary": normalized_itinerary["summary"],
+                "message": normalized_itinerary["message"],
+                "session_id": str(session.id),
+                "is_finalized": True,
+                "metadata": {
+                    "external_session_id": session.external_session_id,
+                },
+            },
+        )
+
+        structured_itinerary.route_plan_items.all().delete()
+        structured_itinerary.itinerary_days.all().delete()
+
+        TripRoutePlanItem.objects.bulk_create(
+            [
+                TripRoutePlanItem(
+                    itinerary=structured_itinerary,
+                    date=_parse_date_value(item.get("date")),
+                    start_time=_parse_time_value(item.get("start_time")),
+                    from_point=item.get("from_point") or "",
+                    to_point=item.get("to_point") or "",
+                    transport_mode=item.get("transport_mode") or "",
+                    estimated_duration=_parse_duration_value(item.get("estimated_duration")),
+                    estimated_cost=_parse_decimal_value(item.get("estimated_cost")),
+                    notes=item.get("notes") or "",
+                )
+                for item in normalized_itinerary["route_plan"]
+                if item.get("from_point") and item.get("to_point")
+            ]
+        )
+
+        created_days = set()
+        for day_data in normalized_itinerary["day_wise_plan"]:
+            day_number = _parse_positive_int(day_data.get("day"))
+            if not day_number or day_number in created_days or not day_data.get("title"):
+                continue
+            created_days.add(day_number)
+
+            itinerary_day = TripItineraryDay.objects.create(
+                itinerary=structured_itinerary,
+                day=day_number,
+                date=_parse_date_value(day_data.get("date")),
+                title=day_data.get("title") or "",
+                summary=day_data.get("summary") or "",
+            )
+            day_items = day_data.get("items") if isinstance(day_data.get("items"), list) else []
+            TripItineraryDayItem.objects.bulk_create(
+                [
+                    TripItineraryDayItem(
+                        trip_itinerary_day=itinerary_day,
+                        time=_parse_time_value(item.get("time")),
+                        title=item.get("title") or "",
+                        item_type=item.get("item_type") or "",
+                        item_id=_parse_uuid_value(item.get("item_id")),
+                        description=item.get("description") or "",
+                        estimated_cost=_parse_decimal_value(item.get("estimated_cost")),
+                        notes=item.get("notes") or "",
+                    )
+                    for item in day_items
+                    if item.get("title")
+                ]
+            )
+
+        rough_budget = normalized_itinerary["rough_budget"]
+        TripItineraryBudget.objects.update_or_create(
+            itinerary=structured_itinerary,
+            defaults={
+                "transport": _parse_decimal_value(rough_budget.get("transport")),
+                "food": _parse_decimal_value(rough_budget.get("food")),
+                "activities": _parse_decimal_value(rough_budget.get("activities")),
+                "tickets_or_entry": _parse_decimal_value(rough_budget.get("tickets_or_entry")),
+                "miscellaneous": _parse_decimal_value(rough_budget.get("miscellaneous")),
+                "total_estimated_budget": _parse_decimal_value(rough_budget.get("total_estimated_budget")),
+                "budget_note": rough_budget.get("budget_note") or "",
+                "metadata": {
+                    "raw_budget": rough_budget,
+                },
+                "created_by": user,
+                "updated_by": user,
+            },
+        )
+
+        agent_context = trip.agent_context or {}
+        agent_context["itinerary_design"] = normalized_itinerary
+        trip.agent_context = agent_context
+        trip.current_step = max(trip.current_step, 5)
+        trip.is_itinerary_design_complete = True
+        trip.updated_by = user
+        trip.save(
+            update_fields=[
+                "agent_context",
+                "current_step",
+                "is_itinerary_design_complete",
+                "updated_by",
+                "updated_at",
+            ]
+        )
+
+        session.is_active = False
+        session.updated_by = user
+        session.save(update_fields=["is_active", "updated_by", "updated_at"])
+
+    return normalized_itinerary
+
+
+def _parse_date_value(value):
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if hasattr(value, "isoformat") and not isinstance(value, str):
+        return value
+    try:
+        return datetime.strptime(str(value).strip()[:10], "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_time_value(value):
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value.time()
+    if hasattr(value, "hour") and hasattr(value, "minute") and not isinstance(value, str):
+        return value
+
+    value = str(value).strip()
+    for time_format in ("%I:%M %p", "%I %p", "%H:%M:%S", "%H:%M"):
+        try:
+            return datetime.strptime(value.upper(), time_format).time()
+        except ValueError:
+            continue
+    return None
+
+
+def _parse_decimal_value(value):
+    if value in (None, ""):
+        return None
+    if isinstance(value, Decimal):
+        return value
+    number_match = re.search(r"-?\d+(?:,\d{3})*(?:\.\d+)?|-?\d+(?:\.\d+)?", str(value))
+    if not number_match:
+        return None
+    try:
+        return Decimal(number_match.group(0).replace(",", ""))
+    except InvalidOperation:
+        return None
+
+
+def _parse_duration_value(value):
+    if not value:
+        return None
+    if isinstance(value, timedelta):
+        return value
+
+    text = str(value).strip().lower()
+    clock_match = re.match(r"^(?P<hours>\d+):(?P<minutes>\d{1,2})(?::(?P<seconds>\d{1,2}))?$", text)
+    if clock_match:
+        return timedelta(
+            hours=int(clock_match.group("hours")),
+            minutes=int(clock_match.group("minutes")),
+            seconds=int(clock_match.group("seconds") or 0),
+        )
+
+    hours = minutes = 0
+    hour_match = re.search(r"(\d+(?:\.\d+)?)\s*(?:h|hr|hrs|hour|hours)", text)
+    minute_match = re.search(r"(\d+(?:\.\d+)?)\s*(?:m|min|mins|minute|minutes)", text)
+    if hour_match:
+        hours = float(hour_match.group(1))
+    if minute_match:
+        minutes = float(minute_match.group(1))
+    if hours or minutes:
+        return timedelta(minutes=int(hours * 60 + minutes))
+
+    number_match = re.search(r"\d+(?:\.\d+)?", text)
+    if number_match:
+        return timedelta(minutes=int(float(number_match.group(0))))
+    return None
+
+
+def _parse_uuid_value(value):
+    if not value:
+        return None
+    try:
+        return UUID(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_positive_int(value):
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
 
 
 def update_trip_agent_context_from_preparation(trip, agent_response, session, user):
@@ -370,7 +630,6 @@ def update_trip_agent_context_from_preparation(trip, agent_response, session, us
         "required_documents": preparation.get("required_documents", []),
         "heads_up": preparation.get("heads_up", []),
         "message": preparation.get("message", ""),
-        "revision_instruction": preparation.get("revision_instruction", ""),
         "session_id": str(session.id),
         "external_session_id": session.external_session_id,
     }
@@ -391,7 +650,6 @@ def update_trip_agent_context_from_preparation(trip, agent_response, session, us
                 "session_id": str(session.id),
                 "metadata": {
                     "external_session_id": session.external_session_id,
-                    "revision_instruction": normalized_preparation["revision_instruction"],
                 },
             },
         )

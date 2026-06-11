@@ -17,20 +17,19 @@ class TripPreferenceQNAResponse(BaseModel):
 
 
 class TripRecommendationMessages(BaseModel):
-    tour_spots: str = Field(default="")
+    attractions: str = Field(default="")
     activities: str = Field(default="")
-    foods: str = Field(default="")
+    cuisines: str = Field(default="")
 
 
 class TripDestinationRecommendationsResponse(BaseModel):
     is_discovery_complete: bool = Field(
         description="True when destination item recommendations have been selected.",
     )
-    tour_spot_ids: list[str] = Field(default_factory=list)
+    attraction_ids: list[str] = Field(default_factory=list)
     activity_ids: list[str] = Field(default_factory=list)
-    food_item_ids: list[str] = Field(default_factory=list)
+    cuisine_ids: list[str] = Field(default_factory=list)
     messages: TripRecommendationMessages = Field(default_factory=TripRecommendationMessages)
-    selection_instruction: str = Field(default="")
 
 class ItineraryPlanItem(BaseModel):
     time: str = Field(
@@ -40,11 +39,11 @@ class ItineraryPlanItem(BaseModel):
         description="Short title for this itinerary item."
     )
     item_type: str = Field(
-        description="One of: tour_spot, activity, food, transfer, rest, free_time."
+        description="One of: attraction, activity, cuisine, transfer, rest, free_time."
     )
     item_id: Optional[str] = Field(
         default=None,
-        description="Related tour spot, activity, or food item ID if available."
+        description="Related attraction, activity, or cuisine ID if available."
     )
     description: str = Field(
         description="Short practical description of what the traveler will do."
@@ -110,9 +109,6 @@ class TripItineraryDesignResponse(BaseModel):
     message: str = Field(
         description="Short user-facing message explaining the generated plan."
     )
-    revision_instruction: str = Field(
-        description="Short instruction asking the user what they want to change."
-    )
 
 class PackingItem(BaseModel):
     item: str = Field(description="Name of the item to pack.")
@@ -160,6 +156,3 @@ class TripPreparationResponse(BaseModel):
     required_documents: list[TravelDocumentItem] = Field(default_factory=list)
     heads_up: list[TravelHeadsUpItem] = Field(default_factory=list)
     message: str = Field(description="Short user-facing message.")
-    revision_instruction: str = Field(
-        description="Short instruction asking the user what they want to adjust."
-    )

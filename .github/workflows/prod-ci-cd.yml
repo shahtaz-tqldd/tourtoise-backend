@@ -1,0 +1,128 @@
+name: Prod CI/CD
+
+on:
+  push:
+    branches:
+      - prod
+  pull_request:
+    branches:
+      - prod
+  workflow_dispatch:
+
+concurrency:
+  group: prod-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    name: Test and build
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: tourtoise_db
+          POSTGRES_USER: tourtoise_db_owner
+          POSTGRES_PASSWORD: tourtoise_db_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U tourtoise_db_owner -d tourtoise_db"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      APP_ENV: test
+      DEBUG: "false"
+      APP_SECRET: ci-secret-key
+      ALLOWED_HOSTS: 127.0.0.1,localhost
+      DB_NAME: tourtoise_db
+      DB_USER: tourtoise_db_owner
+      DB_PASSWORD: tourtoise_db_password
+      DB_HOST: 127.0.0.1
+      DB_PORT: "5432"
+      DB_SSL_REQUIRE: "false"
+      CELERY_BROKER_URL: redis://127.0.0.1:6379/0
+      CELERY_RESULT_BACKEND: redis://127.0.0.1:6379/0
+      FIREBASE_VERIFY_ID_TOKEN: "false"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Django system checks
+        run: python manage.py check
+
+      - name: Check migrations
+        run: python manage.py makemigrations --check --dry-run
+
+      - name: Run tests
+        run: python manage.py test
+
+      - name: Build production Docker image
+        run: docker build -f docker/Dockerfile -t tourtoise-core:${{ github.sha }} .
+
+  deploy:
+    name: Deploy production
+    needs: ci
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/prod'
+    environment: production
+
+    env:
+      PROD_HOST: ${{ secrets.PROD_HOST }}
+      PROD_USER: ${{ secrets.PROD_USER }}
+      PROD_PORT: ${{ secrets.PROD_PORT || '22' }}
+      PROD_APP_DIR: ${{ secrets.PROD_APP_DIR || '/var/www/tourtoise-core' }}
+      PROD_SSH_KEY: ${{ secrets.PROD_SSH_KEY }}
+
+    steps:
+      - name: Configure SSH
+        run: |
+          test -n "$PROD_HOST"
+          test -n "$PROD_USER"
+          test -n "$PROD_SSH_KEY"
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$PROD_SSH_KEY" > ~/.ssh/prod_deploy_key
+          chmod 600 ~/.ssh/prod_deploy_key
+          ssh-keyscan -p "$PROD_PORT" -H "$PROD_HOST" >> ~/.ssh/known_hosts
+
+      - name: Deploy with Docker Compose
+        run: |
+          ssh -i ~/.ssh/prod_deploy_key -p "$PROD_PORT" "$PROD_USER@$PROD_HOST" \
+            "PROD_APP_DIR='$PROD_APP_DIR' bash -s" <<'REMOTE'
+          set -euo pipefail
+
+          cd "$PROD_APP_DIR"
+          git fetch origin prod
+          git checkout prod
+          git pull --ff-only origin prod
+          docker compose -p tourtoise-core-prod --env-file .env -f docker/compose.prod.yml up --build -d
+          docker image prune -f
+          REMOTE

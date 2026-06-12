@@ -5,13 +5,15 @@ from app.settings.env import BASE_DIR, PROJECT_DIR, env, env_bool, env_int, env_
 APP_ENV = env("APP_ENV", "dev")
 SECRET_KEY = env("APP_SECRET", "django-insecure-change-me")
 DEBUG = APP_ENV == "dev" or env_bool("DEBUG", False)
-ALLOWED_HOSTS = env_list("ALLOWED_HOSTS", "127.0.0.1,localhost")
+ALLOWED_HOSTS = env_list("ALLOWED_HOSTS")
 CSRF_TRUSTED_ORIGINS = env_list("CSRF_TRUSTED_ORIGINS")
-CORS_ALLOWED_ORIGINS = env_list(
-    "CORS_ALLOWED_ORIGINS",
-    "http://localhost:5173,http://127.0.0.1:5173",
-)
+CORS_ALLOWED_ORIGINS = env_list("CORS_ALLOWED_ORIGINS")
 CORS_ALLOW_CREDENTIALS = True
+SECURE_PROXY_SSL_HEADER = (
+    ("HTTP_X_FORWARDED_PROTO", "https")
+    if env_bool("SECURE_PROXY_SSL_HEADER_ENABLED", APP_ENV == "prod")
+    else None
+)
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 LOG_LEVEL = env("LOG_LEVEL", "INFO")

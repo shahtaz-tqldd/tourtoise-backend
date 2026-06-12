@@ -1,5 +1,9 @@
 # tourtoise backend
 
+## Deployment
+
+CI/CD is configured with GitHub Actions for the `prod` branch. See [docs/ci-cd.md](docs/ci-cd.md) for required GitHub secrets and production server setup.
+
 ## Accounts
 - User
 - User Profile

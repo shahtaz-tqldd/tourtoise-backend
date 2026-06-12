@@ -1,6 +1,7 @@
 from django.utils import timezone
 from rest_framework import serializers
 
+from app.utils.cloudinary import cloudinary_thumbnail_url
 from destinations.models import (
     Activity,
     ActivityImage,
@@ -124,9 +125,31 @@ class ClientCuisineSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+class ClientDestinationAttractionSerializer(ClientAttractionSerializer):
+    class Meta(ClientAttractionSerializer.Meta):
+        fields = tuple(field for field in ClientAttractionSerializer.Meta.fields if field != "id")
+        read_only_fields = fields
+
+
+class ClientDestinationActivitySerializer(ClientActivitySerializer):
+    class Meta(ClientActivitySerializer.Meta):
+        fields = tuple(field for field in ClientActivitySerializer.Meta.fields if field != "id")
+        read_only_fields = fields
+
+
+class ClientDestinationCuisineSerializer(ClientCuisineSerializer):
+    class Meta(ClientCuisineSerializer.Meta):
+        fields = tuple(field for field in ClientCuisineSerializer.Meta.fields if field != "id")
+        read_only_fields = fields
+
+
 class ClientDestinationListSerializer(serializers.ModelSerializer):
+    cover_image = serializers.SerializerMethodField()
     is_now_best_time = serializers.SerializerMethodField()
     tags = serializers.SerializerMethodField()
+
+    def get_cover_image(self, obj):
+        return cloudinary_thumbnail_url(obj.cover_image, 800)
 
     def get_is_now_best_time(self, obj):
         return timezone.localdate().month in obj.best_travel_months
@@ -152,9 +175,9 @@ class ClientDestinationListSerializer(serializers.ModelSerializer):
 class ClientDestinationDetailSerializer(serializers.ModelSerializer):
     tags = DestinationTagSerializer(many=True, read_only=True)
     images = DestinationImageSerializer(many=True, read_only=True)
-    attractions = ClientAttractionSerializer(many=True, read_only=True)
-    activities = ClientActivitySerializer(many=True, read_only=True)
-    cuisines = ClientCuisineSerializer(many=True, read_only=True)
+    attractions = ClientDestinationAttractionSerializer(many=True, read_only=True)
+    activities = ClientDestinationActivitySerializer(many=True, read_only=True)
+    cuisines = ClientDestinationCuisineSerializer(many=True, read_only=True)
 
     class Meta:
         model = Destination

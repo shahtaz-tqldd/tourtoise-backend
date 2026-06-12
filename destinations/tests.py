@@ -1,5 +1,6 @@
 import csv
 import io
+from unittest.mock import patch
 
 from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -151,6 +152,38 @@ class ClientDestinationListSerializerTests(TestCase):
         self.assertTrue(data["is_now_best_time"])
         self.assertEqual(data["tags"], ["Life", "Comen"])
 
+    def test_returns_cloudinary_cover_image_thumbnail(self):
+        destination = Destination.objects.create(
+            name="Lombok",
+            country="Indonesia",
+            country_code="IDN",
+            region="West Nusa Tenggara",
+            destination_type=DestinationType.ISLAND,
+            latitude=-8.6500,
+            longitude=116.3249,
+            tagline="Island escape",
+            overview="Beaches and volcanoes.",
+            cover_image=(
+                "https://res.cloudinary.com/dqyv780cz/image/upload/"
+                "v1781276591/tourtoise/destinations/gallery/lombok.jpg"
+            ),
+            min_stay_days=2,
+            max_stay_days=5,
+            budget_tier=BudgetTier.MID,
+            best_travel_months=[],
+            currency="Indonesian Rupiah",
+            currency_code="IDR",
+            status=Status.PUBLISHED,
+        )
+
+        data = ClientDestinationListSerializer(destination).data
+
+        self.assertEqual(
+            data["cover_image"],
+            "https://res.cloudinary.com/dqyv780cz/image/upload/c_scale,w_600/"
+            "v1781276591/tourtoise/destinations/gallery/lombok.jpg",
+        )
+
 
 class ClientDestinationDetailSerializerTests(TestCase):
     def test_returns_child_lists_with_images_without_ids(self):
@@ -299,6 +332,13 @@ class AdminDestinationDetailSerializerTests(TestCase):
 
 
 class AdminDestinationWriteSerializerTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_superuser(
+            email="admin-write@example.com",
+            password="password",
+        )
+        self.request = type("Request", (), {"user": self.user, "FILES": {}})()
+
     def test_create_does_not_require_country_or_currency_code(self):
         serializer = AdminDestinationWriteSerializer(
             data={
@@ -318,6 +358,44 @@ class AdminDestinationWriteSerializerTests(TestCase):
         self.assertTrue(serializer.is_valid(), serializer.errors)
         self.assertNotIn("country_code", serializer.validated_data)
         self.assertNotIn("currency_code", serializer.validated_data)
+
+    @patch("destinations.api.v1.admin.serializers.delete_image")
+    def test_update_removes_gallery_images_by_id_from_cloudinary_and_database(self, delete_image_mock):
+        destination = Destination.objects.create(
+            name="Pokhara",
+            country="Nepal",
+            country_code="NPL",
+            region="Gandaki",
+            destination_type=DestinationType.CITY,
+            latitude=28.2096,
+            longitude=83.9856,
+            tagline="Lakeside city",
+            overview="Gateway to the Annapurna region.",
+            cover_image="https://example.com/destination.jpg",
+            min_stay_days=2,
+            max_stay_days=5,
+            budget_tier=BudgetTier.MID,
+            currency="Nepalese Rupee",
+            currency_code="NPR",
+            status=Status.PUBLISHED,
+        )
+        image = DestinationImage.objects.create(
+            destination=destination,
+            image_url="https://res.cloudinary.com/demo/image/upload/v1/tourtoise/gallery/pokhara.jpg",
+        )
+
+        serializer = AdminDestinationWriteSerializer(
+            destination,
+            data={"removed_gallery_image_ids": [str(image.id)]},
+            partial=True,
+            context={"request": self.request},
+        )
+
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        serializer.save()
+
+        self.assertFalse(DestinationImage.objects.filter(id=image.id).exists())
+        delete_image_mock.assert_called_once_with(image_url=image.image_url)
 
 
 class AdminDestinationBulkUploadSerializerTests(TestCase):

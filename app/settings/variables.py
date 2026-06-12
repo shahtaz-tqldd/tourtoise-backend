@@ -81,7 +81,7 @@ CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = env("CELERY_TIMEZONE", "UTC")
 CELERY_RESULT_EXTENDED = True
-CELERY_IMPORTS = ("accounts.tasks",)
+CELERY_IMPORTS = ("accounts.tasks", "destinations.tasks")
 
 # ADK
 ADK_DB_URL = env("ADK_DB_URL")

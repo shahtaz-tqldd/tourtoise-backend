@@ -157,6 +157,13 @@ class TripListApiTests(TestCase):
         plan_trip = Trip.objects.create(
             user=self.user,
             title="Amalfi Plan",
+            agent_context={
+                "saved_plan_snapshot": {
+                    "destinations": [
+                        {"slug": "amalfi-coast-ita", "name": "Amalfi Coast"},
+                    ],
+                },
+            },
             created_by=self.user,
             updated_by=self.user,
         )

@@ -37,6 +37,8 @@ trip_urlpatterns = [
 
 urlpatterns = [
     path("", include(trip_urlpatterns)),
+    path("agent-active/", views.TripAgentInitAPIView.as_view(), name="trip-agent-active"),
+    path("agent/create-message/", views.TripAgentCreateMessageAPIView.as_view(), name="trip-agent-create-message-legacy"),
     path("planning/", include(planning_urlpatterns)),
     path("<uuid:trip_id>/destinations/", include(trip_destination_urlpatterns)),
 ]

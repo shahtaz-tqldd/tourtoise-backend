@@ -17,6 +17,7 @@ v1_admin_urls = [
 
 urlpatterns = [
     path("admin/", admin.site.urls),
+    path("auth/accounts/", include("accounts.api.v1.client.urls")),
     path("api/v1/", include(v1_client_urls)),
     path("api/v1/admin/", include(v1_admin_urls)),
 ]

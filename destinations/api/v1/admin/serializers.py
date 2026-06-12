@@ -2,14 +2,16 @@ import csv
 import io
 import json
 from decimal import Decimal, InvalidOperation
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from django.conf import settings
-from django.db import transaction
+from django.core.files.storage import default_storage
+from django.db import models, transaction
 from django.utils.text import slugify
 from rest_framework import serializers
 
-from app.utils.cloudinary import delete_image, upload_image
+from app.utils.cloudinary import delete_image
+from destinations.tasks import upload_destination_gallery_image, upload_model_image
 from destinations.choices import (
     ActivityType,
     AttractionType,
@@ -355,6 +357,7 @@ class AdminDestinationWriteSerializer(serializers.ModelSerializer):
     best_travel_months = FlexibleJSONField(required=False)
     cultural_tips = FlexibleJSONField(required=False)
     remove_image_urls = FlexibleJSONField(required=False, write_only=True)
+    removed_gallery_image_ids = FlexibleJSONField(required=False, write_only=True)
     clear_cover_image = serializers.BooleanField(required=False, write_only=True, default=False)
     cover_image_file = serializers.ImageField(required=False, allow_null=True, write_only=True)
     gallery_images = serializers.ListField(
@@ -394,6 +397,7 @@ class AdminDestinationWriteSerializer(serializers.ModelSerializer):
             "data_source",
             "gallery_images",
             "remove_image_urls",
+            "removed_gallery_image_ids",
             "clear_cover_image",
         )
         extra_kwargs = {
@@ -495,6 +499,21 @@ class AdminDestinationWriteSerializer(serializers.ModelSerializer):
             return []
         return self._ensure_string_list(value, field_name="remove_image_urls")
 
+    def validate_removed_gallery_image_ids(self, value):
+        image_ids = self._ensure_uuid_list(value, field_name="removed_gallery_image_ids")
+        if not image_ids or self.instance is None:
+            return image_ids
+
+        existing_ids = set(
+            self.instance.images.filter(id__in=image_ids).values_list("id", flat=True)
+        )
+        missing_ids = [str(image_id) for image_id in image_ids if image_id not in existing_ids]
+        if missing_ids:
+            raise serializers.ValidationError(
+                f"Gallery image id(s) are not valid for this destination: {', '.join(missing_ids)}."
+            )
+        return image_ids
+
     def validate(self, attrs):
         cover_image = attrs.get("cover_image", "")
         cover_image_file = attrs.get("cover_image_file", serializers.empty)
@@ -529,6 +548,7 @@ class AdminDestinationWriteSerializer(serializers.ModelSerializer):
         cover_image_file = validated_data.pop("cover_image_file", serializers.empty)
         gallery_images = validated_data.pop("gallery_images", [])
         validated_data.pop("remove_image_urls", [])
+        validated_data.pop("removed_gallery_image_ids", [])
         validated_data.pop("clear_cover_image", False)
 
         request = self.context["request"]
@@ -557,6 +577,7 @@ class AdminDestinationWriteSerializer(serializers.ModelSerializer):
         cover_image_file = validated_data.pop("cover_image_file", serializers.empty)
         gallery_images = validated_data.pop("gallery_images", [])
         remove_image_urls = validated_data.pop("remove_image_urls", [])
+        removed_gallery_image_ids = validated_data.pop("removed_gallery_image_ids", [])
         clear_cover_image = validated_data.pop("clear_cover_image", False)
         previous_cover_image = instance.cover_image
 
@@ -574,7 +595,7 @@ class AdminDestinationWriteSerializer(serializers.ModelSerializer):
             self._sync_cover_image(instance, None, keep_existing=True)
         else:
             self._sync_cover_image(instance, cover_image_file, keep_existing=True)
-        self._delete_gallery_images(instance, remove_image_urls)
+        self._delete_gallery_images(instance, image_urls=remove_image_urls, image_ids=removed_gallery_image_ids)
         self._create_gallery_images(instance, gallery_images)
         self._sync_nested_cover_images("attractions", attractions_data)
         self._sync_nested_cover_images("activities", activities_data)
@@ -587,6 +608,16 @@ class AdminDestinationWriteSerializer(serializers.ModelSerializer):
         if not isinstance(value, list):
             raise serializers.ValidationError(f"Send {field_name} as a JSON array.")
         return [str(item).strip() for item in value if str(item).strip()]
+
+    def _ensure_uuid_list(self, value, *, field_name):
+        values = self._ensure_string_list(value, field_name=field_name)
+        image_ids = []
+        for item in values:
+            try:
+                image_ids.append(UUID(item))
+            except (TypeError, ValueError) as exc:
+                raise serializers.ValidationError(f"Send valid UUID values for {field_name}.") from exc
+        return image_ids
 
     def _validate_nested_resource(self, value, *, serializer_class, field_name):
         if value in (None, ""):
@@ -671,37 +702,36 @@ class AdminDestinationWriteSerializer(serializers.ModelSerializer):
             destination.save(update_fields=["cover_image", "updated_at"])
             return
 
-        if keep_existing and destination.cover_image:
-            delete_image(image_url=destination.cover_image)
-
-        upload = upload_image(
+        self._enqueue_model_image_upload(
             cover_image_file,
+            instance=destination,
+            field_name="cover_image",
             folder=f"{settings.CLOUDINARY_FOLDER}/destinations/covers",
             public_id=self._build_cover_public_id(destination),
+            previous_image_url=destination.cover_image if keep_existing else None,
         )
-        destination.cover_image = upload["url"]
-        destination.save(update_fields=["cover_image", "updated_at"])
 
     def _create_gallery_images(self, destination, gallery_images):
         request = self.context["request"]
         existing_count = destination.images.count()
         for index, image_file in enumerate(gallery_images, start=existing_count + 1):
-            upload = upload_image(
+            self._enqueue_gallery_image_upload(
                 image_file,
+                destination=destination,
                 folder=f"{settings.CLOUDINARY_FOLDER}/destinations/gallery",
                 public_id=self._build_gallery_public_id(destination, index),
-            )
-            DestinationImage.objects.create(
-                destination=destination,
-                image_url=upload["url"],
                 sort_order=index,
-                created_by=request.user,
+                created_by_id=request.user.id,
             )
 
-    def _delete_gallery_images(self, destination, remove_image_urls):
-        if not remove_image_urls:
+    def _delete_gallery_images(self, destination, *, image_urls=None, image_ids=None):
+        image_urls = image_urls or []
+        image_ids = image_ids or []
+        if not image_urls and not image_ids:
             return
-        images_to_remove = destination.images.filter(image_url__in=remove_image_urls)
+        images_to_remove = destination.images.filter(
+            models.Q(image_url__in=image_urls) | models.Q(id__in=image_ids)
+        )
         for image in images_to_remove:
             delete_image(image_url=image.image_url)
             image.delete()
@@ -727,16 +757,68 @@ class AdminDestinationWriteSerializer(serializers.ModelSerializer):
             self._sync_child_cover_image(instance, image_file, field_name=field_name)
 
     def _sync_child_cover_image(self, instance, image_file, *, field_name):
-        if instance.cover_image:
-            delete_image(image_url=instance.cover_image)
-
-        upload = upload_image(
+        self._enqueue_model_image_upload(
             image_file,
+            instance=instance,
+            field_name="cover_image",
             folder=f"{settings.CLOUDINARY_FOLDER}/destinations/{field_name}/covers",
             public_id=self._build_child_cover_public_id(instance),
+            previous_image_url=instance.cover_image,
         )
-        instance.cover_image = upload["url"]
-        instance.save(update_fields=["cover_image", "updated_at"])
+
+    def _enqueue_model_image_upload(
+        self,
+        image_file,
+        *,
+        instance,
+        field_name,
+        folder,
+        public_id,
+        previous_image_url=None,
+    ):
+        def enqueue():
+            storage_path = self._save_pending_upload(image_file)
+            upload_model_image.delay(
+                storage_path=storage_path,
+                app_label=instance._meta.app_label,
+                model_name=instance._meta.object_name,
+                object_id=str(instance.pk),
+                field_name=field_name,
+                folder=folder,
+                public_id=public_id,
+                previous_image_url=previous_image_url,
+            )
+
+        transaction.on_commit(enqueue)
+
+    def _enqueue_gallery_image_upload(
+        self,
+        image_file,
+        *,
+        destination,
+        folder,
+        public_id,
+        sort_order,
+        created_by_id,
+    ):
+        def enqueue():
+            storage_path = self._save_pending_upload(image_file)
+            upload_destination_gallery_image.delay(
+                storage_path=storage_path,
+                destination_id=str(destination.pk),
+                folder=folder,
+                public_id=public_id,
+                sort_order=sort_order,
+                created_by_id=str(created_by_id) if created_by_id else None,
+            )
+
+        transaction.on_commit(enqueue)
+
+    def _save_pending_upload(self, image_file):
+        extension = image_file.name.rsplit(".", 1)[-1] if "." in image_file.name else "upload"
+        storage_name = f"pending_uploads/cloudinary/{uuid4().hex}.{extension}"
+        image_file.seek(0)
+        return default_storage.save(storage_name, image_file)
 
     def _build_cover_public_id(self, destination):
         base_name = slugify(destination.name) or uuid4().hex[:8]

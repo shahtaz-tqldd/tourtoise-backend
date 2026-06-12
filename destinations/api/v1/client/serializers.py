@@ -1,6 +1,7 @@
 from django.utils import timezone
 from rest_framework import serializers
 
+from app.utils.cloudinary import cloudinary_thumbnail_url
 from destinations.models import (
     Activity,
     ActivityImage,
@@ -143,8 +144,12 @@ class ClientDestinationCuisineSerializer(ClientCuisineSerializer):
 
 
 class ClientDestinationListSerializer(serializers.ModelSerializer):
+    cover_image = serializers.SerializerMethodField()
     is_now_best_time = serializers.SerializerMethodField()
     tags = serializers.SerializerMethodField()
+
+    def get_cover_image(self, obj):
+        return cloudinary_thumbnail_url(obj.cover_image, 800)
 
     def get_is_now_best_time(self, obj):
         return timezone.localdate().month in obj.best_travel_months

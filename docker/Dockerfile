@@ -18,7 +18,8 @@ RUN pip install --upgrade pip && pip install -r requirements.txt
 
 COPY . .
 
-RUN chmod +x docker/entrypoint.sh startapp.sh \
+RUN mkdir -p /app/media \
+    && chmod +x docker/entrypoint.sh startapp.sh \
     && chown -R appuser:appuser /app
 
 USER appuser

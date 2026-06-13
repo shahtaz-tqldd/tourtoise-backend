@@ -27,6 +27,12 @@ def upload_model_image(
     try:
         with default_storage.open(storage_path, "rb") as image_file:
             upload = upload_image(image_file, folder=folder, public_id=public_id)
+    except FileNotFoundError:
+        return {
+            "result": "skipped",
+            "reason": "pending_file_missing",
+            "storage_path": storage_path,
+        }
     finally:
         default_storage.delete(storage_path)
 
@@ -59,6 +65,12 @@ def upload_destination_gallery_image(
     try:
         with default_storage.open(storage_path, "rb") as image_file:
             upload = upload_image(image_file, folder=folder, public_id=public_id)
+    except FileNotFoundError:
+        return {
+            "result": "skipped",
+            "reason": "pending_file_missing",
+            "storage_path": storage_path,
+        }
     finally:
         default_storage.delete(storage_path)
 

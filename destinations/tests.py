@@ -28,6 +28,7 @@ from destinations.models import (
     Destination,
     DestinationTag,
 )
+from destinations.tasks import upload_destination_gallery_image, upload_model_image
 
 
 class DestinationModelTests(TestCase):
@@ -100,6 +101,75 @@ class DestinationModelTests(TestCase):
         destination.tags.add(tag)
 
         self.assertEqual(list(destination.tags.all()), [tag])
+
+
+class DestinationImageUploadTaskTests(TestCase):
+    def test_model_image_upload_skips_missing_pending_file(self):
+        destination = Destination.objects.create(
+            name="Pokhara",
+            country="Nepal",
+            country_code="NPL",
+            destination_type=DestinationType.CITY,
+            latitude=28.2096,
+            longitude=83.9856,
+            tagline="Lakeside city",
+            overview="Gateway to the Annapurna region.",
+            cover_image="https://example.com/original.jpg",
+            min_stay_days=2,
+            max_stay_days=5,
+            budget_tier=BudgetTier.MID,
+            currency="Nepalese Rupee",
+            currency_code="NPR",
+        )
+
+        with patch("destinations.tasks.upload_image") as upload_image_mock:
+            result = upload_model_image.run(
+                storage_path="pending_uploads/cloudinary/missing.jpg",
+                app_label="destinations",
+                model_name="Destination",
+                object_id=str(destination.pk),
+                field_name="cover_image",
+                folder="tourtoise/destinations/covers",
+                public_id="pokhara-cover",
+            )
+
+        destination.refresh_from_db()
+        self.assertEqual(result["result"], "skipped")
+        self.assertEqual(result["reason"], "pending_file_missing")
+        self.assertEqual(destination.cover_image, "https://example.com/original.jpg")
+        upload_image_mock.assert_not_called()
+
+    def test_gallery_image_upload_skips_missing_pending_file(self):
+        destination = Destination.objects.create(
+            name="Kathmandu",
+            country="Nepal",
+            country_code="NPL",
+            destination_type=DestinationType.CITY,
+            latitude=27.7172,
+            longitude=85.3240,
+            tagline="Historic capital",
+            overview="A cultural and historical destination.",
+            cover_image="https://example.com/cover.jpg",
+            min_stay_days=2,
+            max_stay_days=5,
+            budget_tier=BudgetTier.MID,
+            currency="Nepalese Rupee",
+            currency_code="NPR",
+        )
+
+        with patch("destinations.tasks.upload_image") as upload_image_mock:
+            result = upload_destination_gallery_image.run(
+                storage_path="pending_uploads/cloudinary/missing.jpg",
+                destination_id=str(destination.pk),
+                folder="tourtoise/destinations/gallery",
+                public_id="kathmandu-gallery-1",
+                sort_order=1,
+            )
+
+        self.assertEqual(result["result"], "skipped")
+        self.assertEqual(result["reason"], "pending_file_missing")
+        self.assertEqual(destination.images.count(), 0)
+        upload_image_mock.assert_not_called()
 
 
 class ClientDestinationListSerializerTests(TestCase):

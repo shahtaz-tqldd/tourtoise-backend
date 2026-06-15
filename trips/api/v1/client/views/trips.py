@@ -1,6 +1,7 @@
-from django.db.models import CharField, Prefetch, Q
+from django.db.models import Case, CharField, IntegerField, Q, Value, When
 from django.db.models.functions import Cast
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.generics import GenericAPIView
 from rest_framework.permissions import IsAuthenticated
@@ -86,7 +87,15 @@ class TripListAPIView(TripPaginationMixin, UserTripQuerysetMixin, GenericAPIView
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        queryset = self.get_trip_queryset().order_by("-updated_at")
+        today = timezone.localdate()
+        queryset = self.get_trip_queryset().annotate(
+            start_date_sort_group=Case(
+                When(start_date__gte=today, then=Value(0)),
+                When(start_date__isnull=True, then=Value(2)),
+                default=Value(1),
+                output_field=IntegerField(),
+            )
+        ).order_by("start_date_sort_group", "start_date", "-updated_at")
         params = self.request.query_params
 
         search = params.get("search", "").strip()

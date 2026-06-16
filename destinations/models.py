@@ -1,5 +1,6 @@
 from django.contrib.postgres.fields import ArrayField
 from django.contrib.postgres.indexes import GinIndex
+from django.conf import settings
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.utils.text import slugify
@@ -104,6 +105,31 @@ class DestinationImage(BaseImage):
     destination = models.ForeignKey(
         Destination, on_delete=models.CASCADE, related_name="images"
     )
+
+
+class SavedDestination(BaseModel):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="saved_destinations",
+    )
+    destination = models.ForeignKey(
+        Destination,
+        on_delete=models.CASCADE,
+        related_name="saved_by_users",
+    )
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "destination"],
+                name="unique_saved_destination_user_destination",
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.user} saved {self.destination}"
 
 
 

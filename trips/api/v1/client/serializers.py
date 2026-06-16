@@ -4,7 +4,7 @@ from django.db import transaction
 from django.urls import reverse
 from rest_framework import serializers
 
-from destinations.api.v1.client.serializers import ClientDestinationListSerializer
+from app.utils.cloudinary import cloudinary_thumbnail_url
 from destinations.choices import Status
 from destinations.models import Destination
 from trips.models import Trip, TripAgentMessage, TripItinerary, TripItineraryDay, TripDestination, TripItineraryDayItem
@@ -15,6 +15,18 @@ class TripDestinationSummarySerializer(serializers.ModelSerializer):
         model = Destination
         fields = ("name", "slug", "country", "country_code", "destination_type", "cover_image")
         read_only_fields = fields
+
+
+class TripListPrimaryDestinationSerializer(serializers.ModelSerializer):
+    cover_image = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Destination
+        fields = ("name", "country", "region", "cover_image")
+        read_only_fields = fields
+
+    def get_cover_image(self, obj):
+        return cloudinary_thumbnail_url(obj.cover_image, 800)
 
 
 class TripDestinationSerializer(serializers.ModelSerializer):
@@ -132,7 +144,6 @@ class TripDaySerializer(serializers.ModelSerializer):
 class TripListSerializer(serializers.ModelSerializer):
     primary_destination = serializers.SerializerMethodField()
     destinations_count = serializers.SerializerMethodField()
-    days_count = serializers.SerializerMethodField()
     share_url = serializers.SerializerMethodField()
 
     class Meta:
@@ -141,23 +152,16 @@ class TripListSerializer(serializers.ModelSerializer):
             "id",
             "title",
             "status",
-            "planning_source",
             "visibility",
-            "current_step",
             "start_date",
             "end_date",
             "nights",
+            "destinations_count",
             "duration_days",
             "travelers_count",
             "traveler_type",
-            "total_budget",
-            "budget_currency",
-            "accommodation_preference",
             "primary_destination",
-            "destinations_count",
-            "days_count",
             "share_url",
-            "updated_at",
         )
         read_only_fields = fields
 
@@ -167,18 +171,12 @@ class TripListSerializer(serializers.ModelSerializer):
             primary = next((item for item in obj.trip_destinations.all() if item.is_primary), None)
         if not primary:
             return None
-        return ClientDestinationListSerializer(primary.destination).data
+        return TripListPrimaryDestinationSerializer(primary.destination).data
 
     def get_destinations_count(self, obj):
         if hasattr(obj, "prefetched_trip_destinations"):
             return len(obj.prefetched_trip_destinations)
         return obj.trip_destinations.count()
-
-    def get_days_count(self, obj):
-        try:
-            return obj.trip_itinerary.itinerary_days.count()
-        except TripItinerary.DoesNotExist:
-            return 0
 
     def get_share_url(self, obj):
         request = self.context.get("request")

@@ -1,14 +1,18 @@
 from rest_framework.generics import GenericAPIView
+from django.db.models import BooleanField, Exists, OuterRef, Value
 from django.shortcuts import get_object_or_404
+from rest_framework import status
+from rest_framework.permissions import IsAuthenticated
 
 from app.base.pagination import CustomPagination
 from app.utils.response import APIResponse
 from destinations.api.v1.client.serializers import (
     ClientDestinationDetailSerializer,
     ClientDestinationListSerializer,
+    DestinationSaveSerializer,
 )
 from destinations.api.v1.query import apply_destination_filters
-from destinations.models import Destination
+from destinations.models import Destination, SavedDestination
 
 
 class DestinationPaginationMixin:
@@ -17,7 +21,7 @@ class DestinationPaginationMixin:
     def paginate_with_meta(self, queryset, serializer_class):
         paginator = self.pagination_class()
         page = paginator.paginate_queryset(queryset, self.request, view=self)
-        serializer = serializer_class(page, many=True)
+        serializer = serializer_class(page, many=True, context={"request": self.request})
         return APIResponse.success(
             data=serializer.data,
             meta={
@@ -29,6 +33,19 @@ class DestinationPaginationMixin:
                 "previous": paginator.get_previous_link(),
             },
             message="Destinations fetched successfully.",
+        )
+
+    def with_is_saved(self, queryset):
+        user = self.request.user
+        if not user.is_authenticated:
+            return queryset.annotate(is_saved=Value(False, output_field=BooleanField()))
+        return queryset.annotate(
+            is_saved=Exists(
+                SavedDestination.objects.filter(
+                    user=user,
+                    destination=OuterRef("pk"),
+                )
+            )
         )
 
 
@@ -62,13 +79,14 @@ class ClientDestinationListAPIView(DestinationPaginationMixin, GenericAPIView):
             .prefetch_related("tags")
             .order_by("name")
         )
+        queryset = self.with_is_saved(queryset)
         return apply_destination_filters(queryset, self.request.query_params, include_status=False)
 
     def get(self, request, *args, **kwargs):
         return self.paginate_with_meta(self.get_queryset(), ClientDestinationListSerializer)
 
 
-class ClientDestinationDetailAPIView(GenericAPIView):
+class ClientDestinationDetailAPIView(DestinationPaginationMixin, GenericAPIView):
     """
     Client destination detail API.
 
@@ -82,7 +100,7 @@ class ClientDestinationDetailAPIView(GenericAPIView):
     """
 
     def get_object(self):
-        return get_object_or_404(
+        queryset = self.with_is_saved(
             Destination.objects.filter(status="published")
             .prefetch_related(
                 "tags",
@@ -90,13 +108,105 @@ class ClientDestinationDetailAPIView(GenericAPIView):
                 "attractions__images",
                 "activities__images",
                 "cuisines__images",
-            ),
+            )
+        )
+        return get_object_or_404(
+            queryset,
             slug=self.kwargs["slug"],
         )
 
     def get(self, request, *args, **kwargs):
         destination = self.get_object()
         return APIResponse.success(
-            data=ClientDestinationDetailSerializer(destination).data,
+            data=ClientDestinationDetailSerializer(
+                destination,
+                context={"request": request},
+            ).data,
             message="Destination fetched successfully.",
+        )
+
+
+class ClientSavedDestinationListAPIView(DestinationPaginationMixin, GenericAPIView):
+    """
+    User saved destination list API.
+
+    Frontend request:
+    - Method: GET
+    - Headers: authenticated bearer token
+    - Query params: `page`, `page_size`
+
+    Frontend response:
+    - 200 success with paginated destination rows saved by the current user.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        queryset = (
+            Destination.objects.filter(
+                status="published",
+                saved_by_users__user=self.request.user,
+            )
+            .prefetch_related("tags")
+            .order_by("-saved_by_users__created_at")
+        )
+        return self.with_is_saved(queryset)
+
+    def get(self, request, *args, **kwargs):
+        return self.paginate_with_meta(self.get_queryset(), ClientDestinationListSerializer)
+
+
+class ClientDestinationSaveAPIView(GenericAPIView):
+    """
+    Save or remove a destination from the authenticated user's saved list.
+
+    Frontend request:
+    - Method: POST
+    - Headers: authenticated bearer token
+    - Body: `{ "save": true }` to save, `{ "save": false }` to remove.
+
+    Frontend response:
+    - 200 success with `saved` reflecting the final state.
+    """
+
+    permission_classes = [IsAuthenticated]
+    serializer_class = DestinationSaveSerializer
+
+    def get_destination(self):
+        return get_object_or_404(
+            Destination.objects.filter(status="published"),
+            slug=self.kwargs["destination_slug"],
+        )
+
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        destination = self.get_destination()
+        should_save = serializer.validated_data["save"]
+
+        if should_save:
+            SavedDestination.objects.get_or_create(
+                user=request.user,
+                destination=destination,
+                defaults={
+                    "created_by": request.user,
+                    "updated_by": request.user,
+                },
+            )
+            message = "Destination saved successfully."
+        else:
+            SavedDestination.objects.filter(
+                user=request.user,
+                destination=destination,
+            ).delete()
+            message = "Destination removed from saved list successfully."
+
+        return APIResponse.success(
+            data={
+                "slug": destination.slug,
+                "saved": should_save,
+            },
+            message=message,
+            status=status.HTTP_200_OK,
         )

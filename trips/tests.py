@@ -1,9 +1,10 @@
-from datetime import date
+from datetime import date, timedelta
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.db import IntegrityError
 from django.test import TestCase
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient
 
@@ -157,6 +158,13 @@ class TripListApiTests(TestCase):
         plan_trip = Trip.objects.create(
             user=self.user,
             title="Amalfi Plan",
+            agent_context={
+                "saved_plan_snapshot": {
+                    "destinations": [
+                        {"slug": "amalfi-coast-ita", "name": "Amalfi Coast"},
+                    ],
+                },
+            },
             created_by=self.user,
             updated_by=self.user,
         )
@@ -166,6 +174,62 @@ class TripListApiTests(TestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["meta"]["count"], 1)
         self.assertEqual(response.data["data"][0]["id"], str(plan_trip.id))
+
+    def test_trip_list_uses_summary_payload_shape(self):
+        response = self.client.get(self.url, {"destination_slug": self.bangkok.slug})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        trip = response.data["data"][0]
+        self.assertEqual(
+            list(trip.keys()),
+            [
+                "id",
+                "title",
+                "status",
+                "visibility",
+                "start_date",
+                "end_date",
+                "nights",
+                "destinations_count",
+                "duration_days",
+                "travelers_count",
+                "traveler_type",
+                "primary_destination",
+                "share_url",
+            ],
+        )
+        self.assertEqual(
+            trip["primary_destination"],
+            {
+                "name": "Bangkok",
+                "country": "Bangkok",
+                "region": "",
+                "cover_image": "https://example.com/bangkok.jpg",
+            },
+        )
+
+    def test_trip_list_orders_nearest_upcoming_start_date_first(self):
+        today = timezone.localdate()
+        later_trip = self._create_trip(
+            "Later Trip",
+            self.user,
+            self.paris,
+            start_date=today + timedelta(days=10),
+            end_date=today + timedelta(days=13),
+        )
+        sooner_trip = self._create_trip(
+            "Sooner Trip",
+            self.user,
+            self.bangkok,
+            start_date=today + timedelta(days=3),
+            end_date=today + timedelta(days=5),
+        )
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["data"][0]["id"], str(sooner_trip.id))
+        self.assertEqual(response.data["data"][1]["id"], str(later_trip.id))
 
     def _create_destination(self, name, country_code):
         return Destination.objects.create(
@@ -187,10 +251,12 @@ class TripListApiTests(TestCase):
             updated_by=self.user,
         )
 
-    def _create_trip(self, title, user, destination):
+    def _create_trip(self, title, user, destination, start_date=None, end_date=None):
         trip = Trip.objects.create(
             user=user,
             title=title,
+            start_date=start_date,
+            end_date=end_date,
             created_by=user,
             updated_by=user,
         )

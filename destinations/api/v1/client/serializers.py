@@ -1,6 +1,7 @@
 from django.utils import timezone
 from rest_framework import serializers
 
+from app.utils.cloudinary import cloudinary_thumbnail_url
 from destinations.models import (
     Activity,
     ActivityImage,
@@ -10,6 +11,7 @@ from destinations.models import (
     CuisineImage,
     Destination,
     DestinationImage,
+    SavedDestination,
     DestinationTag,
 )
 
@@ -124,12 +126,45 @@ class ClientCuisineSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+class ClientDestinationAttractionSerializer(ClientAttractionSerializer):
+    class Meta(ClientAttractionSerializer.Meta):
+        fields = tuple(field for field in ClientAttractionSerializer.Meta.fields if field != "id")
+        read_only_fields = fields
+
+
+class ClientDestinationActivitySerializer(ClientActivitySerializer):
+    class Meta(ClientActivitySerializer.Meta):
+        fields = tuple(field for field in ClientActivitySerializer.Meta.fields if field != "id")
+        read_only_fields = fields
+
+
+class ClientDestinationCuisineSerializer(ClientCuisineSerializer):
+    class Meta(ClientCuisineSerializer.Meta):
+        fields = tuple(field for field in ClientCuisineSerializer.Meta.fields if field != "id")
+        read_only_fields = fields
+
+
 class ClientDestinationListSerializer(serializers.ModelSerializer):
+    cover_image = serializers.SerializerMethodField()
     is_now_best_time = serializers.SerializerMethodField()
+    is_saved = serializers.SerializerMethodField()
     tags = serializers.SerializerMethodField()
+
+    def get_cover_image(self, obj):
+        return cloudinary_thumbnail_url(obj.cover_image, 800)
 
     def get_is_now_best_time(self, obj):
         return timezone.localdate().month in obj.best_travel_months
+
+    def get_is_saved(self, obj):
+        if hasattr(obj, "is_saved"):
+            return bool(obj.is_saved)
+
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if not user or not user.is_authenticated:
+            return False
+        return SavedDestination.objects.filter(user=user, destination=obj).exists()
 
     def get_tags(self, obj):
         return [tag.name for tag in obj.tags.all()]
@@ -144,17 +179,26 @@ class ClientDestinationListSerializer(serializers.ModelSerializer):
             "destination_type",
             "cover_image",
             "is_now_best_time",
+            "is_saved",
             "tags",
         )
         read_only_fields = fields
 
 
+class DestinationSaveSerializer(serializers.Serializer):
+    save = serializers.BooleanField()
+
+
 class ClientDestinationDetailSerializer(serializers.ModelSerializer):
     tags = DestinationTagSerializer(many=True, read_only=True)
     images = DestinationImageSerializer(many=True, read_only=True)
-    attractions = ClientAttractionSerializer(many=True, read_only=True)
-    activities = ClientActivitySerializer(many=True, read_only=True)
-    cuisines = ClientCuisineSerializer(many=True, read_only=True)
+    attractions = ClientDestinationAttractionSerializer(many=True, read_only=True)
+    activities = ClientDestinationActivitySerializer(many=True, read_only=True)
+    cuisines = ClientDestinationCuisineSerializer(many=True, read_only=True)
+    is_saved = serializers.SerializerMethodField()
+
+    def get_is_saved(self, obj):
+        return ClientDestinationListSerializer(context=self.context).get_is_saved(obj)
 
     class Meta:
         model = Destination
@@ -170,6 +214,7 @@ class ClientDestinationDetailSerializer(serializers.ModelSerializer):
             "tagline",
             "overview",
             "cover_image",
+            "is_saved",
             "tags",
             "min_stay_days",
             "max_stay_days",

@@ -1,10 +1,13 @@
 import csv
 import io
+from unittest.mock import patch
 
 from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.utils import timezone
+from rest_framework import status as drf_status
+from rest_framework.test import APIClient
 
 from accounts.models import User
 from destinations.api.v1.admin.serializers import (
@@ -26,7 +29,9 @@ from destinations.models import (
     CuisineImage,
     Destination,
     DestinationTag,
+    SavedDestination,
 )
+from destinations.tasks import upload_destination_gallery_image, upload_model_image
 
 
 class DestinationModelTests(TestCase):
@@ -101,6 +106,75 @@ class DestinationModelTests(TestCase):
         self.assertEqual(list(destination.tags.all()), [tag])
 
 
+class DestinationImageUploadTaskTests(TestCase):
+    def test_model_image_upload_skips_missing_pending_file(self):
+        destination = Destination.objects.create(
+            name="Pokhara",
+            country="Nepal",
+            country_code="NPL",
+            destination_type=DestinationType.CITY,
+            latitude=28.2096,
+            longitude=83.9856,
+            tagline="Lakeside city",
+            overview="Gateway to the Annapurna region.",
+            cover_image="https://example.com/original.jpg",
+            min_stay_days=2,
+            max_stay_days=5,
+            budget_tier=BudgetTier.MID,
+            currency="Nepalese Rupee",
+            currency_code="NPR",
+        )
+
+        with patch("destinations.tasks.upload_image") as upload_image_mock:
+            result = upload_model_image.run(
+                storage_path="pending_uploads/cloudinary/missing.jpg",
+                app_label="destinations",
+                model_name="Destination",
+                object_id=str(destination.pk),
+                field_name="cover_image",
+                folder="tourtoise/destinations/covers",
+                public_id="pokhara-cover",
+            )
+
+        destination.refresh_from_db()
+        self.assertEqual(result["result"], "skipped")
+        self.assertEqual(result["reason"], "pending_file_missing")
+        self.assertEqual(destination.cover_image, "https://example.com/original.jpg")
+        upload_image_mock.assert_not_called()
+
+    def test_gallery_image_upload_skips_missing_pending_file(self):
+        destination = Destination.objects.create(
+            name="Kathmandu",
+            country="Nepal",
+            country_code="NPL",
+            destination_type=DestinationType.CITY,
+            latitude=27.7172,
+            longitude=85.3240,
+            tagline="Historic capital",
+            overview="A cultural and historical destination.",
+            cover_image="https://example.com/cover.jpg",
+            min_stay_days=2,
+            max_stay_days=5,
+            budget_tier=BudgetTier.MID,
+            currency="Nepalese Rupee",
+            currency_code="NPR",
+        )
+
+        with patch("destinations.tasks.upload_image") as upload_image_mock:
+            result = upload_destination_gallery_image.run(
+                storage_path="pending_uploads/cloudinary/missing.jpg",
+                destination_id=str(destination.pk),
+                folder="tourtoise/destinations/gallery",
+                public_id="kathmandu-gallery-1",
+                sort_order=1,
+            )
+
+        self.assertEqual(result["result"], "skipped")
+        self.assertEqual(result["reason"], "pending_file_missing")
+        self.assertEqual(destination.images.count(), 0)
+        upload_image_mock.assert_not_called()
+
+
 class ClientDestinationListSerializerTests(TestCase):
     def test_returns_compact_client_list_payload(self):
         current_month = timezone.localdate().month
@@ -140,6 +214,7 @@ class ClientDestinationListSerializerTests(TestCase):
                 "destination_type",
                 "cover_image",
                 "is_now_best_time",
+                "is_saved",
                 "tags",
             },
         )
@@ -149,7 +224,40 @@ class ClientDestinationListSerializerTests(TestCase):
         self.assertEqual(data["destination_type"], "beach")
         self.assertEqual(data["cover_image"], "https://example.com/cover.jpg")
         self.assertTrue(data["is_now_best_time"])
+        self.assertFalse(data["is_saved"])
         self.assertEqual(data["tags"], ["Life", "Comen"])
+
+    def test_returns_cloudinary_cover_image_thumbnail(self):
+        destination = Destination.objects.create(
+            name="Lombok",
+            country="Indonesia",
+            country_code="IDN",
+            region="West Nusa Tenggara",
+            destination_type=DestinationType.ISLAND,
+            latitude=-8.6500,
+            longitude=116.3249,
+            tagline="Island escape",
+            overview="Beaches and volcanoes.",
+            cover_image=(
+                "https://res.cloudinary.com/dqyv780cz/image/upload/"
+                "v1781276591/tourtoise/destinations/gallery/lombok.jpg"
+            ),
+            min_stay_days=2,
+            max_stay_days=5,
+            budget_tier=BudgetTier.MID,
+            best_travel_months=[],
+            currency="Indonesian Rupiah",
+            currency_code="IDR",
+            status=Status.PUBLISHED,
+        )
+
+        data = ClientDestinationListSerializer(destination).data
+
+        self.assertEqual(
+            data["cover_image"],
+            "https://res.cloudinary.com/dqyv780cz/image/upload/c_scale,w_600/"
+            "v1781276591/tourtoise/destinations/gallery/lombok.jpg",
+        )
 
 
 class ClientDestinationDetailSerializerTests(TestCase):
@@ -232,6 +340,157 @@ class ClientDestinationDetailSerializerTests(TestCase):
                 self.assertNotIn("id", image)
 
 
+class ClientSavedDestinationApiTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(email="traveler@example.com", password="testpass123")
+        self.other_user = User.objects.create_user(email="other@example.com", password="testpass123")
+        self.client.force_authenticate(user=self.user)
+        self.bangkok = self._create_destination("Bangkok", "THA")
+        self.paris = self._create_destination("Paris", "FRA")
+
+    def test_saves_destination_for_authenticated_user(self):
+        response = self.client.post(
+            f"/api/v1/destinations/{self.bangkok.slug}/save/",
+            {"save": True},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, drf_status.HTTP_200_OK)
+        self.assertTrue(response.data["data"]["saved"])
+        self.assertTrue(
+            SavedDestination.objects.filter(
+                user=self.user,
+                destination=self.bangkok,
+            ).exists()
+        )
+
+    def test_save_is_idempotent(self):
+        url = f"/api/v1/destinations/{self.bangkok.slug}/save/"
+
+        self.client.post(url, {"save": True}, format="json")
+        response = self.client.post(url, {"save": True}, format="json")
+
+        self.assertEqual(response.status_code, drf_status.HTTP_200_OK)
+        self.assertEqual(
+            SavedDestination.objects.filter(user=self.user, destination=self.bangkok).count(),
+            1,
+        )
+
+    def test_removes_destination_from_saved_list(self):
+        SavedDestination.objects.create(
+            user=self.user,
+            destination=self.bangkok,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+
+        response = self.client.post(
+            f"/api/v1/destinations/{self.bangkok.slug}/save/",
+            {"save": False},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, drf_status.HTTP_200_OK)
+        self.assertFalse(response.data["data"]["saved"])
+        self.assertFalse(
+            SavedDestination.objects.filter(user=self.user, destination=self.bangkok).exists()
+        )
+
+    def test_returns_paginated_saved_destinations_for_authenticated_user_only(self):
+        SavedDestination.objects.create(
+            user=self.user,
+            destination=self.bangkok,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        SavedDestination.objects.create(
+            user=self.user,
+            destination=self.paris,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        SavedDestination.objects.create(
+            user=self.other_user,
+            destination=self._create_destination("Tokyo", "JPN"),
+            created_by=self.other_user,
+            updated_by=self.other_user,
+        )
+
+        response = self.client.get(
+            "/api/v1/destinations/save/lists/",
+            {"page": 1, "page_size": 1},
+        )
+
+        self.assertEqual(response.status_code, drf_status.HTTP_200_OK)
+        self.assertEqual(response.data["meta"]["count"], 2)
+        self.assertEqual(response.data["meta"]["page"], 1)
+        self.assertEqual(response.data["meta"]["page_size"], 1)
+        self.assertEqual(len(response.data["data"]), 1)
+        self.assertIn(
+            response.data["data"][0]["slug"],
+            {self.bangkok.slug, self.paris.slug},
+        )
+
+    def test_rejects_missing_save_value(self):
+        response = self.client.post(
+            f"/api/v1/destinations/{self.bangkok.slug}/save/",
+            {},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, drf_status.HTTP_400_BAD_REQUEST)
+        self.assertIn("save", response.data)
+
+    def test_destination_list_marks_saved_destinations_for_request_user(self):
+        SavedDestination.objects.create(
+            user=self.user,
+            destination=self.bangkok,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+
+        response = self.client.get("/api/v1/destinations/list/")
+
+        self.assertEqual(response.status_code, drf_status.HTTP_200_OK)
+        rows_by_slug = {row["slug"]: row for row in response.data["data"]}
+        self.assertTrue(rows_by_slug[self.bangkok.slug]["is_saved"])
+        self.assertFalse(rows_by_slug[self.paris.slug]["is_saved"])
+
+    def test_destination_detail_marks_saved_destination_for_request_user(self):
+        SavedDestination.objects.create(
+            user=self.user,
+            destination=self.bangkok,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+
+        response = self.client.get(f"/api/v1/destinations/{self.bangkok.slug}/detail/")
+
+        self.assertEqual(response.status_code, drf_status.HTTP_200_OK)
+        self.assertTrue(response.data["data"]["is_saved"])
+
+    def _create_destination(self, name, country_code):
+        return Destination.objects.create(
+            name=name,
+            country=name,
+            country_code=country_code,
+            destination_type=DestinationType.CITY,
+            latitude=13.7563,
+            longitude=100.5018,
+            tagline=f"{name} trip",
+            overview=f"{name} destination.",
+            cover_image=f"https://example.com/{name.lower().replace(' ', '-')}.jpg",
+            budget_tier=BudgetTier.MID,
+            local_languages=["English"],
+            currency="Dollar",
+            currency_code="USD",
+            status=Status.PUBLISHED,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+
+
 class AdminDestinationDetailSerializerTests(TestCase):
     def test_returns_child_lists_with_ids_and_images(self):
         destination = Destination.objects.create(
@@ -299,6 +558,13 @@ class AdminDestinationDetailSerializerTests(TestCase):
 
 
 class AdminDestinationWriteSerializerTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_superuser(
+            email="admin-write@example.com",
+            password="password",
+        )
+        self.request = type("Request", (), {"user": self.user, "FILES": {}})()
+
     def test_create_does_not_require_country_or_currency_code(self):
         serializer = AdminDestinationWriteSerializer(
             data={
@@ -318,6 +584,44 @@ class AdminDestinationWriteSerializerTests(TestCase):
         self.assertTrue(serializer.is_valid(), serializer.errors)
         self.assertNotIn("country_code", serializer.validated_data)
         self.assertNotIn("currency_code", serializer.validated_data)
+
+    @patch("destinations.api.v1.admin.serializers.delete_image")
+    def test_update_removes_gallery_images_by_id_from_cloudinary_and_database(self, delete_image_mock):
+        destination = Destination.objects.create(
+            name="Pokhara",
+            country="Nepal",
+            country_code="NPL",
+            region="Gandaki",
+            destination_type=DestinationType.CITY,
+            latitude=28.2096,
+            longitude=83.9856,
+            tagline="Lakeside city",
+            overview="Gateway to the Annapurna region.",
+            cover_image="https://example.com/destination.jpg",
+            min_stay_days=2,
+            max_stay_days=5,
+            budget_tier=BudgetTier.MID,
+            currency="Nepalese Rupee",
+            currency_code="NPR",
+            status=Status.PUBLISHED,
+        )
+        image = DestinationImage.objects.create(
+            destination=destination,
+            image_url="https://res.cloudinary.com/demo/image/upload/v1/tourtoise/gallery/pokhara.jpg",
+        )
+
+        serializer = AdminDestinationWriteSerializer(
+            destination,
+            data={"removed_gallery_image_ids": [str(image.id)]},
+            partial=True,
+            context={"request": self.request},
+        )
+
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        serializer.save()
+
+        self.assertFalse(DestinationImage.objects.filter(id=image.id).exists())
+        delete_image_mock.assert_called_once_with(image_url=image.image_url)
 
 
 class AdminDestinationBulkUploadSerializerTests(TestCase):

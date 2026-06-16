@@ -181,7 +181,7 @@ class PublicUserDetailsView(GenericAPIView):
 
     def get_object(self):
         return get_object_or_404(
-            User.objects.select_related("profile").filter(profile__is_public_profile=True),
+            User.objects.select_related("profile"),
             profile__username=self.kwargs["username"],
         )
 

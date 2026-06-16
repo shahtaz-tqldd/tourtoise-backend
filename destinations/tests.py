@@ -6,6 +6,8 @@ from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.utils import timezone
+from rest_framework import status as drf_status
+from rest_framework.test import APIClient
 
 from accounts.models import User
 from destinations.api.v1.admin.serializers import (
@@ -27,6 +29,7 @@ from destinations.models import (
     CuisineImage,
     Destination,
     DestinationTag,
+    SavedDestination,
 )
 from destinations.tasks import upload_destination_gallery_image, upload_model_image
 
@@ -211,6 +214,7 @@ class ClientDestinationListSerializerTests(TestCase):
                 "destination_type",
                 "cover_image",
                 "is_now_best_time",
+                "is_saved",
                 "tags",
             },
         )
@@ -220,6 +224,7 @@ class ClientDestinationListSerializerTests(TestCase):
         self.assertEqual(data["destination_type"], "beach")
         self.assertEqual(data["cover_image"], "https://example.com/cover.jpg")
         self.assertTrue(data["is_now_best_time"])
+        self.assertFalse(data["is_saved"])
         self.assertEqual(data["tags"], ["Life", "Comen"])
 
     def test_returns_cloudinary_cover_image_thumbnail(self):
@@ -333,6 +338,157 @@ class ClientDestinationDetailSerializerTests(TestCase):
             self.assertNotIn("id", item)
             for image in item["images"]:
                 self.assertNotIn("id", image)
+
+
+class ClientSavedDestinationApiTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(email="traveler@example.com", password="testpass123")
+        self.other_user = User.objects.create_user(email="other@example.com", password="testpass123")
+        self.client.force_authenticate(user=self.user)
+        self.bangkok = self._create_destination("Bangkok", "THA")
+        self.paris = self._create_destination("Paris", "FRA")
+
+    def test_saves_destination_for_authenticated_user(self):
+        response = self.client.post(
+            f"/api/v1/destinations/{self.bangkok.slug}/save/",
+            {"save": True},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, drf_status.HTTP_200_OK)
+        self.assertTrue(response.data["data"]["saved"])
+        self.assertTrue(
+            SavedDestination.objects.filter(
+                user=self.user,
+                destination=self.bangkok,
+            ).exists()
+        )
+
+    def test_save_is_idempotent(self):
+        url = f"/api/v1/destinations/{self.bangkok.slug}/save/"
+
+        self.client.post(url, {"save": True}, format="json")
+        response = self.client.post(url, {"save": True}, format="json")
+
+        self.assertEqual(response.status_code, drf_status.HTTP_200_OK)
+        self.assertEqual(
+            SavedDestination.objects.filter(user=self.user, destination=self.bangkok).count(),
+            1,
+        )
+
+    def test_removes_destination_from_saved_list(self):
+        SavedDestination.objects.create(
+            user=self.user,
+            destination=self.bangkok,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+
+        response = self.client.post(
+            f"/api/v1/destinations/{self.bangkok.slug}/save/",
+            {"save": False},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, drf_status.HTTP_200_OK)
+        self.assertFalse(response.data["data"]["saved"])
+        self.assertFalse(
+            SavedDestination.objects.filter(user=self.user, destination=self.bangkok).exists()
+        )
+
+    def test_returns_paginated_saved_destinations_for_authenticated_user_only(self):
+        SavedDestination.objects.create(
+            user=self.user,
+            destination=self.bangkok,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        SavedDestination.objects.create(
+            user=self.user,
+            destination=self.paris,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        SavedDestination.objects.create(
+            user=self.other_user,
+            destination=self._create_destination("Tokyo", "JPN"),
+            created_by=self.other_user,
+            updated_by=self.other_user,
+        )
+
+        response = self.client.get(
+            "/api/v1/destinations/save/lists/",
+            {"page": 1, "page_size": 1},
+        )
+
+        self.assertEqual(response.status_code, drf_status.HTTP_200_OK)
+        self.assertEqual(response.data["meta"]["count"], 2)
+        self.assertEqual(response.data["meta"]["page"], 1)
+        self.assertEqual(response.data["meta"]["page_size"], 1)
+        self.assertEqual(len(response.data["data"]), 1)
+        self.assertIn(
+            response.data["data"][0]["slug"],
+            {self.bangkok.slug, self.paris.slug},
+        )
+
+    def test_rejects_missing_save_value(self):
+        response = self.client.post(
+            f"/api/v1/destinations/{self.bangkok.slug}/save/",
+            {},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, drf_status.HTTP_400_BAD_REQUEST)
+        self.assertIn("save", response.data)
+
+    def test_destination_list_marks_saved_destinations_for_request_user(self):
+        SavedDestination.objects.create(
+            user=self.user,
+            destination=self.bangkok,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+
+        response = self.client.get("/api/v1/destinations/list/")
+
+        self.assertEqual(response.status_code, drf_status.HTTP_200_OK)
+        rows_by_slug = {row["slug"]: row for row in response.data["data"]}
+        self.assertTrue(rows_by_slug[self.bangkok.slug]["is_saved"])
+        self.assertFalse(rows_by_slug[self.paris.slug]["is_saved"])
+
+    def test_destination_detail_marks_saved_destination_for_request_user(self):
+        SavedDestination.objects.create(
+            user=self.user,
+            destination=self.bangkok,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+
+        response = self.client.get(f"/api/v1/destinations/{self.bangkok.slug}/detail/")
+
+        self.assertEqual(response.status_code, drf_status.HTTP_200_OK)
+        self.assertTrue(response.data["data"]["is_saved"])
+
+    def _create_destination(self, name, country_code):
+        return Destination.objects.create(
+            name=name,
+            country=name,
+            country_code=country_code,
+            destination_type=DestinationType.CITY,
+            latitude=13.7563,
+            longitude=100.5018,
+            tagline=f"{name} trip",
+            overview=f"{name} destination.",
+            cover_image=f"https://example.com/{name.lower().replace(' ', '-')}.jpg",
+            budget_tier=BudgetTier.MID,
+            local_languages=["English"],
+            currency="Dollar",
+            currency_code="USD",
+            status=Status.PUBLISHED,
+            created_by=self.user,
+            updated_by=self.user,
+        )
 
 
 class AdminDestinationDetailSerializerTests(TestCase):

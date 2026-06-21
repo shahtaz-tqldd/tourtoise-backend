@@ -7,6 +7,7 @@ v1_client_urls = [
     path("accounts/", include("accounts.api.v1.client.urls")),
     path("destinations/", include("destinations.api.v1.client.urls")),
     path("trips/", include("trips.api.v1.client.urls")),
+    path("journals/", include("journals.api.v1.client.urls")),
 ]
 
 v1_admin_urls = [

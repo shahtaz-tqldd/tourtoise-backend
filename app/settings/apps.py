@@ -21,6 +21,7 @@ MODULER_APPS = [
     "accounts.apps.AccountsConfig",
     "destinations.apps.DestinationsConfig",
     "trips.apps.TripsConfig",
+    "journals.apps.JournalsConfig",
 ]
 
 INSTALLED_APPS = DJANGO_BASE_APPS + THIRD_PARTY_APPS + MODULER_APPS

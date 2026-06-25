@@ -22,6 +22,7 @@ MODULER_APPS = [
     "destinations.apps.DestinationsConfig",
     "trips.apps.TripsConfig",
     "journals.apps.JournalsConfig",
+    "chat.apps.ChatConfig",
 ]
 
 INSTALLED_APPS = DJANGO_BASE_APPS + THIRD_PARTY_APPS + MODULER_APPS

@@ -144,9 +144,14 @@ class Attraction(BaseModel):
     slug                 = models.SlugField(max_length=220, blank=True)
     attraction_type      = models.CharField(max_length=20, choices=AttractionType.choices)
     description          = models.TextField()
+    how_to_reach         = models.TextField(null=True, blank=True)
+
+    # address
     latitude             = models.FloatField(null=True, blank=True)
     longitude            = models.FloatField(null=True, blank=True)
     address              = models.CharField(max_length=300, blank=True)
+    
+    # attributes
     cover_image          = models.URLField(blank=True)
     budget_tier          = models.CharField(
                                max_length=10, choices=BudgetTier.choices, blank=True
@@ -155,7 +160,23 @@ class Attraction(BaseModel):
     best_time_of_day     = models.CharField(
                                max_length=15, choices=BestTimeOfDay.choices,
                                default=BestTimeOfDay.ANYTIME
+
                            )
+    
+    picking_reason_list  = models.JSONField(
+                                default=list,
+                                blank=True,
+                                help_text="List for picking this attractions."
+                            )
+    
+    tip_list              = models.JSONField(
+                                default=list,
+                                blank=True,
+                                help_text="List for picking this attractions."
+                            )
+    tags                 = models.ManyToManyField(
+                                "DestinationTag", related_name="attractions", blank=True
+                            )
     entrance_fee_required = models.BooleanField(default=False)
     approx_entrance_fee  = models.CharField(max_length=100, blank=True)  # "NPR 1000 (~$7)"
     sort_order           = models.PositiveSmallIntegerField(default=0)
@@ -171,6 +192,8 @@ class Attraction(BaseModel):
         if not self.slug:
             self.slug = slugify(self.name)
         super().save(*args, **kwargs)
+
+    
 
 
 class AttractionImage(BaseImage):

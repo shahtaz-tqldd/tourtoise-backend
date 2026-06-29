@@ -1,5 +1,6 @@
 from rest_framework.generics import GenericAPIView
-from django.db.models import BooleanField, Exists, OuterRef, Value
+from django.db.models import BooleanField, Exists, F, OuterRef, Prefetch, Value, Window
+from django.db.models.functions import RowNumber
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
@@ -7,18 +8,41 @@ from rest_framework.permissions import IsAuthenticated
 from app.base.pagination import CustomPagination
 from app.utils.response import APIResponse
 from destinations.api.v1.client.serializers import (
+    ClientActivitySerializer,
+    ClientAttractionSerializer,
+    ClientCuisineSerializer,
     ClientDestinationDetailSerializer,
     ClientDestinationListSerializer,
+    ClientDestinationShortDetailSerializer,
     DestinationSaveSerializer,
 )
-from destinations.api.v1.query import apply_destination_filters
-from destinations.models import Destination, SavedDestination
+from destinations.api.v1.query import (
+    apply_activity_filters,
+    apply_attraction_filters,
+    apply_cuisine_filters,
+    apply_destination_filters,
+)
+from destinations.models import Activity, Attraction, Cuisine, Destination, SavedDestination
+
+
+def _limited_child_queryset(model, order_by):
+    return (
+        model.objects.prefetch_related("images")
+        .annotate(
+            detail_row_number=Window(
+                expression=RowNumber(),
+                partition_by=[F("destination_id")],
+                order_by=order_by,
+            )
+        )
+        .filter(detail_row_number__lte=3)
+    )
 
 
 class DestinationPaginationMixin:
     pagination_class = CustomPagination
 
-    def paginate_with_meta(self, queryset, serializer_class):
+    def paginate_with_meta(self, queryset, serializer_class, *, message="Destinations fetched successfully."):
         paginator = self.pagination_class()
         page = paginator.paginate_queryset(queryset, self.request, view=self)
         serializer = serializer_class(page, many=True, context={"request": self.request})
@@ -32,7 +56,7 @@ class DestinationPaginationMixin:
                 "next": paginator.get_next_link(),
                 "previous": paginator.get_previous_link(),
             },
-            message="Destinations fetched successfully.",
+            message=message,
         )
 
     def with_is_saved(self, queryset):
@@ -105,9 +129,27 @@ class ClientDestinationDetailAPIView(DestinationPaginationMixin, GenericAPIView)
             .prefetch_related(
                 "tags",
                 "images",
-                "attractions__images",
-                "activities__images",
-                "cuisines__images",
+                Prefetch(
+                    "attractions",
+                    queryset=_limited_child_queryset(
+                        Attraction,
+                        [F("sort_order").asc(), F("name").asc()],
+                    ),
+                ),
+                Prefetch(
+                    "activities",
+                    queryset=_limited_child_queryset(
+                        Activity,
+                        [F("name").asc()],
+                    ),
+                ),
+                Prefetch(
+                    "cuisines",
+                    queryset=_limited_child_queryset(
+                        Cuisine,
+                        [F("is_must_try").desc(), F("name").asc()],
+                    ),
+                ),
             )
         )
         return get_object_or_404(
@@ -124,6 +166,102 @@ class ClientDestinationDetailAPIView(DestinationPaginationMixin, GenericAPIView)
             ).data,
             message="Destination fetched successfully.",
         )
+
+
+class ClientDestinationShortDetailAPIView(GenericAPIView):
+    """
+    Client destination short detail API.
+
+    Frontend request:
+    - Method: GET
+    - URL param: `slug` from the client list API.
+
+    Frontend response:
+    - 200 success with name, cover_image, and overview for a published destination.
+    """
+
+    def get_object(self):
+        return get_object_or_404(
+            Destination.objects.filter(status="published"),
+            slug=self.kwargs["slug"],
+        )
+
+    def get(self, request, *args, **kwargs):
+        destination = self.get_object()
+        return APIResponse.success(
+            data=ClientDestinationShortDetailSerializer(
+                destination,
+                context={"request": request},
+            ).data,
+            message="Destination short detail fetched successfully.",
+        )
+
+
+class ClientDestinationChildListAPIView(DestinationPaginationMixin, GenericAPIView):
+    """Base client API for a published destination's paginated child resources."""
+
+    model = None
+    serializer_class = None
+    filter_queryset = None
+    resource_label = ""
+
+    def get_destination(self):
+        if not hasattr(self, "_destination"):
+            self._destination = get_object_or_404(
+                Destination.objects.filter(status="published"),
+                slug=self.kwargs["slug"],
+            )
+        return self._destination
+
+    def get_queryset(self):
+        queryset = self.model.objects.filter(destination=self.get_destination()).prefetch_related("images")
+        return self.filter_queryset(queryset, self.request.query_params)
+
+    def get(self, request, *args, **kwargs):
+        return self.paginate_with_meta(
+            self.get_queryset(),
+            self.serializer_class,
+            message=f"{self.resource_label} fetched successfully.",
+        )
+
+
+class ClientDestinationAttractionListAPIView(ClientDestinationChildListAPIView):
+    """GET attractions for a destination slug.
+
+    Filters: page, page_size, search, attraction_type, budget_tier,
+    best_time_of_day, entrance_fee_required, is_featured.
+    """
+
+    model = Attraction
+    serializer_class = ClientAttractionSerializer
+    filter_queryset = staticmethod(apply_attraction_filters)
+    resource_label = "Attractions"
+
+
+class ClientDestinationActivityListAPIView(ClientDestinationChildListAPIView):
+    """GET activities for a destination slug.
+
+    Filters: page, page_size, search, activity_type, budget_tier,
+    difficulty_level (or difficulty), booking_required, is_featured.
+    """
+
+    model = Activity
+    serializer_class = ClientActivitySerializer
+    filter_queryset = staticmethod(apply_activity_filters)
+    resource_label = "Activities"
+
+
+class ClientDestinationCuisineListAPIView(ClientDestinationChildListAPIView):
+    """GET cuisines for a destination slug.
+
+    Filters: page, page_size, search, cuisine_type, spice_level, meal_type,
+    is_vegetarian_friendly (or vegetarian_friendly), is_must_try (or must_try).
+    """
+
+    model = Cuisine
+    serializer_class = ClientCuisineSerializer
+    filter_queryset = staticmethod(apply_cuisine_filters)
+    resource_label = "Cuisines"
 
 
 class ClientSavedDestinationListAPIView(DestinationPaginationMixin, GenericAPIView):

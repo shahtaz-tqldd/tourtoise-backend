@@ -53,6 +53,7 @@ class CuisineImageSerializer(serializers.ModelSerializer):
 
 class ClientAttractionSerializer(serializers.ModelSerializer):
     images = AttractionImageSerializer(many=True, read_only=True)
+    tags = DestinationTagSerializer(many=True, read_only=True)
 
     class Meta:
         model = Attraction
@@ -62,6 +63,7 @@ class ClientAttractionSerializer(serializers.ModelSerializer):
             "slug",
             "attraction_type",
             "description",
+            "how_to_reach",
             "latitude",
             "longitude",
             "address",
@@ -69,6 +71,9 @@ class ClientAttractionSerializer(serializers.ModelSerializer):
             "budget_tier",
             "avg_duration_hours",
             "best_time_of_day",
+            "picking_reason_list",
+            "tip_list",
+            "tags",
             "entrance_fee_required",
             "approx_entrance_fee",
             "sort_order",
@@ -181,6 +186,22 @@ class ClientDestinationListSerializer(serializers.ModelSerializer):
             "is_now_best_time",
             "is_saved",
             "tags",
+        )
+        read_only_fields = fields
+
+
+class ClientDestinationShortDetailSerializer(serializers.ModelSerializer):
+    cover_image = serializers.SerializerMethodField()
+
+    def get_cover_image(self, obj):
+        return cloudinary_thumbnail_url(obj.cover_image, 800)
+
+    class Meta:
+        model = Destination
+        fields = (
+            "name",
+            "cover_image",
+            "overview",
         )
         read_only_fields = fields
 

@@ -11,6 +11,7 @@ from rest_framework.test import APIClient
 
 from accounts.models import User
 from destinations.api.v1.admin.serializers import (
+    AdminAttractionSerializer,
     AdminDestinationBulkUploadSerializer,
     AdminDestinationDetailSerializer,
     AdminDestinationWriteSerializer,
@@ -31,7 +32,11 @@ from destinations.models import (
     DestinationTag,
     SavedDestination,
 )
-from destinations.tasks import upload_destination_gallery_image, upload_model_image
+from destinations.tasks import (
+    upload_destination_gallery_image,
+    upload_model_gallery_image,
+    upload_model_image,
+)
 
 
 class DestinationModelTests(TestCase):
@@ -174,6 +179,48 @@ class DestinationImageUploadTaskTests(TestCase):
         self.assertEqual(destination.images.count(), 0)
         upload_image_mock.assert_not_called()
 
+    def test_model_gallery_image_upload_skips_missing_pending_file(self):
+        destination = Destination.objects.create(
+            name="Kathmandu",
+            country="Nepal",
+            country_code="NPL",
+            destination_type=DestinationType.CITY,
+            latitude=27.7172,
+            longitude=85.3240,
+            tagline="Historic capital",
+            overview="A cultural and historical destination.",
+            cover_image="https://example.com/cover.jpg",
+            min_stay_days=2,
+            max_stay_days=5,
+            budget_tier=BudgetTier.MID,
+            currency="Nepalese Rupee",
+            currency_code="NPR",
+        )
+        attraction = Attraction.objects.create(
+            destination=destination,
+            name="Garden of Dreams",
+            attraction_type="park",
+            description="A restored historic garden.",
+        )
+
+        with patch("destinations.tasks.upload_image") as upload_image_mock:
+            result = upload_model_gallery_image.run(
+                storage_path="pending_uploads/cloudinary/missing.jpg",
+                app_label="destinations",
+                parent_model_name="Attraction",
+                parent_object_id=str(attraction.pk),
+                image_model_name="AttractionImage",
+                relation_name="attraction",
+                folder="tourtoise/destinations/attractions/gallery",
+                public_id="garden-gallery-1",
+                sort_order=1,
+            )
+
+        self.assertEqual(result["result"], "skipped")
+        self.assertEqual(result["reason"], "pending_file_missing")
+        self.assertEqual(attraction.images.count(), 0)
+        upload_image_mock.assert_not_called()
+
 
 class ClientDestinationListSerializerTests(TestCase):
     def test_returns_compact_client_list_payload(self):
@@ -287,7 +334,12 @@ class ClientDestinationDetailSerializerTests(TestCase):
             name="Phewa Lake",
             attraction_type="natural_site",
             description="A scenic freshwater lake.",
+            how_to_reach="Walk from Lakeside.",
+            picking_reason_list=["Boat rides", "Mountain views"],
+            tip_list=["Go near sunset"],
         )
+        attraction_tag = DestinationTag.objects.create(name="Lake", category="experience")
+        attraction.tags.add(attraction_tag)
         activity = Activity.objects.create(
             destination=destination,
             name="Paragliding",
@@ -319,6 +371,10 @@ class ClientDestinationDetailSerializerTests(TestCase):
         data = ClientDestinationDetailSerializer(destination).data
 
         self.assertEqual(data["attractions"][0]["name"], "Phewa Lake")
+        self.assertEqual(data["attractions"][0]["how_to_reach"], "Walk from Lakeside.")
+        self.assertEqual(data["attractions"][0]["picking_reason_list"], ["Boat rides", "Mountain views"])
+        self.assertEqual(data["attractions"][0]["tip_list"], ["Go near sunset"])
+        self.assertEqual(data["attractions"][0]["tags"][0]["name"], "Lake")
         self.assertEqual(
             data["attractions"][0]["images"][0]["image_url"],
             "https://example.com/attraction.jpg",
@@ -338,6 +394,142 @@ class ClientDestinationDetailSerializerTests(TestCase):
             self.assertNotIn("id", item)
             for image in item["images"]:
                 self.assertNotIn("id", image)
+
+
+class ClientDestinationChildListApiTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.destination = Destination.objects.create(
+            name="Pokhara Child APIs",
+            country="Nepal",
+            country_code="NPL",
+            destination_type=DestinationType.CITY,
+            latitude=28.2096,
+            longitude=83.9856,
+            tagline="Lakeside city",
+            overview="Gateway to the Annapurna region.",
+            cover_image="https://example.com/pokhara.jpg",
+            budget_tier=BudgetTier.MID,
+            currency="Nepalese Rupee",
+            currency_code="NPR",
+            status=Status.PUBLISHED,
+        )
+
+    def test_returns_paginated_and_filtered_attractions_for_destination_slug(self):
+        matching = Attraction.objects.create(
+            destination=self.destination,
+            name="World Peace Pagoda",
+            attraction_type="temple",
+            description="A hilltop temple.",
+            entrance_fee_required=True,
+            is_featured=True,
+        )
+        Attraction.objects.create(
+            destination=self.destination,
+            name="Phewa Lake",
+            attraction_type="natural_site",
+            description="A scenic lake.",
+        )
+
+        response = self.client.get(
+            f"/api/v1/destinations/{self.destination.slug}/attractions/",
+            {
+                "attraction_type": "temple",
+                "entrance_fee_required": "true",
+                "is_featured": "true",
+                "page_size": 1,
+            },
+        )
+
+        self.assertEqual(response.status_code, drf_status.HTTP_200_OK)
+        self.assertEqual(response.data["meta"]["count"], 1)
+        self.assertEqual(response.data["meta"]["page_size"], 1)
+        self.assertEqual(response.data["data"][0]["slug"], matching.slug)
+
+    def test_returns_activities_and_cuisines_for_destination_slug(self):
+        activity = Activity.objects.create(
+            destination=self.destination,
+            name="Paragliding",
+            activity_type="adventure",
+            description="Tandem paragliding.",
+            budget_tier=BudgetTier.PREMIUM,
+            booking_required=True,
+        )
+        cuisine = Cuisine.objects.create(
+            destination=self.destination,
+            name="Thakali Set",
+            description="Traditional rice meal.",
+            meal_type="lunch",
+            is_vegetarian_friendly=True,
+        )
+
+        activity_response = self.client.get(
+            f"/api/v1/destinations/{self.destination.slug}/activities/",
+            {"activity_type": "adventure", "booking_required": "true"},
+        )
+        cuisine_response = self.client.get(
+            f"/api/v1/destinations/{self.destination.slug}/cuisines/",
+            {"meal_type": "lunch", "vegetarian_friendly": "true"},
+        )
+
+        self.assertEqual(activity_response.status_code, drf_status.HTTP_200_OK)
+        self.assertEqual(activity_response.data["data"][0]["slug"], activity.slug)
+        self.assertEqual(cuisine_response.status_code, drf_status.HTTP_200_OK)
+        self.assertEqual(cuisine_response.data["data"][0]["slug"], cuisine.slug)
+
+    def test_hides_children_of_unpublished_destination(self):
+        self.destination.status = Status.DRAFT
+        self.destination.save(update_fields=["status"])
+
+        response = self.client.get(
+            f"/api/v1/destinations/{self.destination.slug}/attractions/",
+        )
+
+        self.assertEqual(response.status_code, drf_status.HTTP_404_NOT_FOUND)
+
+
+class ClientDestinationShortDetailApiTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.destination = Destination.objects.create(
+            name="Pokhara Short Detail",
+            country="Nepal",
+            country_code="NPL",
+            destination_type=DestinationType.CITY,
+            latitude=28.2096,
+            longitude=83.9856,
+            tagline="Lakeside city",
+            overview="Gateway to the Annapurna region.",
+            cover_image="https://example.com/pokhara.jpg",
+            budget_tier=BudgetTier.MID,
+            currency="Nepalese Rupee",
+            currency_code="NPR",
+            status=Status.PUBLISHED,
+        )
+
+    def test_returns_short_detail_for_published_destination_slug(self):
+        response = self.client.get(
+            f"/api/v1/destinations/{self.destination.slug}/short-detail/",
+        )
+
+        self.assertEqual(response.status_code, drf_status.HTTP_200_OK)
+        self.assertEqual(
+            set(response.data["data"].keys()),
+            {"name", "cover_image", "overview"},
+        )
+        self.assertEqual(response.data["data"]["name"], self.destination.name)
+        self.assertEqual(response.data["data"]["cover_image"], self.destination.cover_image)
+        self.assertEqual(response.data["data"]["overview"], self.destination.overview)
+
+    def test_hides_unpublished_destination(self):
+        self.destination.status = Status.DRAFT
+        self.destination.save(update_fields=["status"])
+
+        response = self.client.get(
+            f"/api/v1/destinations/{self.destination.slug}/short-detail/",
+        )
+
+        self.assertEqual(response.status_code, drf_status.HTTP_404_NOT_FOUND)
 
 
 class ClientSavedDestinationApiTests(TestCase):
@@ -470,6 +662,34 @@ class ClientSavedDestinationApiTests(TestCase):
         self.assertEqual(response.status_code, drf_status.HTTP_200_OK)
         self.assertTrue(response.data["data"]["is_saved"])
 
+    def test_destination_detail_limits_child_sections_to_three_items(self):
+        for index in range(4):
+            Attraction.objects.create(
+                destination=self.bangkok,
+                name=f"Attraction {index}",
+                attraction_type="natural_site",
+                description="A scenic place.",
+            )
+            Activity.objects.create(
+                destination=self.bangkok,
+                name=f"Activity {index}",
+                activity_type="adventure",
+                description="An outdoor activity.",
+                budget_tier=BudgetTier.MID,
+            )
+            Cuisine.objects.create(
+                destination=self.bangkok,
+                name=f"Cuisine {index}",
+                description="A local dish.",
+            )
+
+        response = self.client.get(f"/api/v1/destinations/{self.bangkok.slug}/detail/")
+
+        self.assertEqual(response.status_code, drf_status.HTTP_200_OK)
+        self.assertEqual(len(response.data["data"]["attractions"]), 3)
+        self.assertEqual(len(response.data["data"]["activities"]), 3)
+        self.assertEqual(len(response.data["data"]["cuisines"]), 3)
+
     def _create_destination(self, name, country_code):
         return Destination.objects.create(
             name=name,
@@ -518,7 +738,12 @@ class AdminDestinationDetailSerializerTests(TestCase):
             name="World Peace Pagoda",
             attraction_type="monument",
             description="Hilltop monument with wide views.",
+            how_to_reach="Take a taxi to the trailhead, then walk uphill.",
+            picking_reason_list=["Panoramic views"],
+            tip_list=["Start early"],
         )
+        attraction_tag = DestinationTag.objects.create(name="Viewpoint", category="experience")
+        attraction.tags.add(attraction_tag)
         activity = Activity.objects.create(
             destination=destination,
             name="Lake Kayaking",
@@ -548,6 +773,13 @@ class AdminDestinationDetailSerializerTests(TestCase):
 
         self.assertEqual(data["attractions"][0]["id"], str(attraction.id))
         self.assertEqual(str(data["attractions"][0]["destination"]), str(destination.id))
+        self.assertEqual(
+            data["attractions"][0]["how_to_reach"],
+            "Take a taxi to the trailhead, then walk uphill.",
+        )
+        self.assertEqual(data["attractions"][0]["picking_reason_list"], ["Panoramic views"])
+        self.assertEqual(data["attractions"][0]["tip_list"], ["Start early"])
+        self.assertEqual(data["attractions"][0]["tags"][0]["id"], str(attraction_tag.id))
         self.assertEqual(data["attractions"][0]["images"][0]["id"], str(attraction_image.id))
         self.assertEqual(data["activities"][0]["id"], str(activity.id))
         self.assertEqual(str(data["activities"][0]["destination"]), str(destination.id))
@@ -555,6 +787,70 @@ class AdminDestinationDetailSerializerTests(TestCase):
         self.assertEqual(data["cuisines"][0]["id"], str(cuisine.id))
         self.assertEqual(str(data["cuisines"][0]["destination"]), str(destination.id))
         self.assertEqual(data["cuisines"][0]["images"][0]["id"], str(cuisine_image.id))
+
+
+class AdminAttractionSerializerTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_superuser(
+            email="attraction-admin@example.com",
+            password="password",
+        )
+        self.request = type("Request", (), {"user": self.user, "FILES": {}})()
+        self.destination = Destination.objects.create(
+            name="Pokhara Attractions",
+            country="Nepal",
+            country_code="NPL",
+            region="Gandaki",
+            destination_type=DestinationType.CITY,
+            latitude=28.2096,
+            longitude=83.9856,
+            tagline="Lakeside city",
+            overview="Gateway to the Annapurna region.",
+            cover_image="https://example.com/destination.jpg",
+            min_stay_days=2,
+            max_stay_days=5,
+            budget_tier=BudgetTier.MID,
+            currency="Nepalese Rupee",
+            currency_code="NPR",
+            status=Status.PUBLISHED,
+        )
+
+    @patch("destinations.api.v1.admin.serializers.upload_model_gallery_image.delay")
+    @patch(
+        "destinations.api.v1.admin.serializers.default_storage.save",
+        return_value="pending_uploads/cloudinary/attraction.gif",
+    )
+    def test_create_accepts_new_fields_tags_and_gallery_images(self, storage_save_mock, upload_delay_mock):
+        tag = DestinationTag.objects.create(name="Lake", category="experience")
+        image = SimpleUploadedFile(
+            "lake.gif",
+            b"GIF87a\x01\x00\x01\x00\x80\x01\x00\x00\x00\x00ccc,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;",
+            content_type="image/gif",
+        )
+        serializer = AdminAttractionSerializer(
+            data={
+                "name": "Phewa Lake",
+                "attraction_type": "natural_site",
+                "description": "A scenic freshwater lake.",
+                "how_to_reach": "Walk from Lakeside.",
+                "picking_reason_list": '["Boat rides","Mountain views"]',
+                "tip_list": '["Go near sunset"]',
+                "tag_ids": [str(tag.id)],
+                "attraction_images": [image],
+            },
+            context={"request": self.request, "destination": self.destination},
+        )
+
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        with self.captureOnCommitCallbacks(execute=True):
+            attraction = serializer.save()
+
+        self.assertEqual(attraction.how_to_reach, "Walk from Lakeside.")
+        self.assertEqual(attraction.picking_reason_list, ["Boat rides", "Mountain views"])
+        self.assertEqual(attraction.tip_list, ["Go near sunset"])
+        self.assertEqual(list(attraction.tags.all()), [tag])
+        storage_save_mock.assert_called_once()
+        upload_delay_mock.assert_called_once()
 
 
 class AdminDestinationWriteSerializerTests(TestCase):
@@ -660,6 +956,9 @@ class AdminDestinationBulkUploadSerializerTests(TestCase):
             "status",
             "data_source",
             "attraction_type",
+            "how_to_reach",
+            "picking_reason_list",
+            "tip_list",
             "activity_type",
             "description",
             "meal_type",
@@ -702,6 +1001,10 @@ class AdminDestinationBulkUploadSerializerTests(TestCase):
                     "image_urls": "https://example.com/phewa-gallery.jpg",
                     "image_captions": "Lake photo",
                     "attraction_type": "natural_site",
+                    "how_to_reach": "Walk from Lakeside.",
+                    "tags": "Lake:experience",
+                    "picking_reason_list": "Boat rides;Mountain views",
+                    "tip_list": "Go near sunset",
                     "description": "A scenic freshwater lake.",
                 },
                 {
@@ -743,7 +1046,12 @@ class AdminDestinationBulkUploadSerializerTests(TestCase):
         self.assertEqual(result["created"]["cuisines"], 1)
         self.assertEqual(destination.country_code, "NPL")
         self.assertEqual(destination.images.first().image_url, "https://example.com/gallery.jpg")
-        self.assertEqual(destination.attractions.first().images.first().image_url, "https://example.com/phewa-gallery.jpg")
+        attraction = destination.attractions.first()
+        self.assertEqual(attraction.images.first().image_url, "https://example.com/phewa-gallery.jpg")
+        self.assertEqual(attraction.how_to_reach, "Walk from Lakeside.")
+        self.assertEqual(attraction.picking_reason_list, ["Boat rides", "Mountain views"])
+        self.assertEqual(attraction.tip_list, ["Go near sunset"])
+        self.assertEqual(attraction.tags.first().name, "Lake")
         self.assertEqual(destination.tags.count(), 2)
 
     def test_rejects_existing_destination_slug(self):

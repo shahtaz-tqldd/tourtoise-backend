@@ -212,7 +212,7 @@ def _recommendation_ids(recommendations, item_type):
 
 
 def _serialize_selected_attractions(selected_ids):
-    items = Attraction.objects.filter(id__in=selected_ids)
+    items = Attraction.objects.filter(id__in=selected_ids).prefetch_related("tags", "images")
     item_map = {str(item.id): item for item in items}
     return [
         {
@@ -220,12 +220,17 @@ def _serialize_selected_attractions(selected_ids):
             "name": item.name,
             "type": item.attraction_type,
             "description": item.description,
+            "how_to_reach": item.how_to_reach,
             "address": item.address,
             "latitude": item.latitude,
             "longitude": item.longitude,
             "budget_tier": item.budget_tier,
             "avg_duration_hours": item.avg_duration_hours,
             "best_time_of_day": item.best_time_of_day,
+            "picking_reason_list": item.picking_reason_list,
+            "tip_list": item.tip_list,
+            "tags": [tag.name for tag in item.tags.all()],
+            "images": [image.image_url for image in item.images.all()],
             "entrance_fee_required": item.entrance_fee_required,
             "approx_entrance_fee": item.approx_entrance_fee,
         }

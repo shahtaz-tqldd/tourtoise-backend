@@ -11,7 +11,11 @@ from django.utils.text import slugify
 from rest_framework import serializers
 
 from app.utils.cloudinary import delete_image
-from destinations.tasks import upload_destination_gallery_image, upload_model_image
+from destinations.tasks import (
+    upload_destination_gallery_image,
+    upload_model_gallery_image,
+    upload_model_image,
+)
 from destinations.choices import (
     ActivityType,
     AttractionType,
@@ -87,6 +91,20 @@ class CuisineImageSerializer(serializers.ModelSerializer):
 
 class AdminAttractionSerializer(serializers.ModelSerializer):
     images = AttractionImageSerializer(many=True, read_only=True)
+    tags = DestinationTagSerializer(many=True, read_only=True)
+    tag_ids = serializers.PrimaryKeyRelatedField(
+        queryset=DestinationTag.objects.all(),
+        many=True,
+        required=False,
+        write_only=True,
+    )
+    picking_reason_list = FlexibleJSONField(required=False)
+    tip_list = FlexibleJSONField(required=False)
+    attraction_images = serializers.ListField(
+        child=serializers.ImageField(),
+        required=False,
+        write_only=True,
+    )
 
     class Meta:
         model = Attraction
@@ -97,6 +115,7 @@ class AdminAttractionSerializer(serializers.ModelSerializer):
             "slug",
             "attraction_type",
             "description",
+            "how_to_reach",
             "latitude",
             "longitude",
             "address",
@@ -104,16 +123,22 @@ class AdminAttractionSerializer(serializers.ModelSerializer):
             "budget_tier",
             "avg_duration_hours",
             "best_time_of_day",
+            "picking_reason_list",
+            "tip_list",
+            "tags",
+            "tag_ids",
             "entrance_fee_required",
             "approx_entrance_fee",
             "sort_order",
             "is_featured",
             "images",
+            "attraction_images",
             "created_at",
             "updated_at",
         )
         read_only_fields = ("id", "destination", "slug", "created_at", "updated_at")
         extra_kwargs = {
+            "how_to_reach": {"required": False, "allow_blank": True, "allow_null": True},
             "address": {"required": False, "allow_blank": True},
             "cover_image": {"required": False, "allow_blank": True},
             "budget_tier": {"required": False, "allow_blank": True},
@@ -126,14 +151,26 @@ class AdminAttractionSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         request = self.context["request"]
+        tag_ids = validated_data.pop("tag_ids", [])
+        attraction_images = validated_data.pop("attraction_images", [])
         validated_data["destination"] = self.context["destination"]
         validated_data["created_by"] = request.user
         validated_data["updated_by"] = request.user
-        return super().create(validated_data)
+        attraction = super().create(validated_data)
+        if tag_ids:
+            attraction.tags.set(tag_ids)
+        self._create_attraction_images(attraction, attraction_images)
+        return attraction
 
     def update(self, instance, validated_data):
+        tag_ids = validated_data.pop("tag_ids", None)
+        attraction_images = validated_data.pop("attraction_images", [])
         validated_data["updated_by"] = self.context["request"].user
-        return super().update(instance, validated_data)
+        attraction = super().update(instance, validated_data)
+        if tag_ids is not None:
+            attraction.tags.set(tag_ids)
+        self._create_attraction_images(attraction, attraction_images)
+        return attraction
 
     def _validate_unique_slug(self, attrs):
         destination = self.context.get("destination")
@@ -148,6 +185,45 @@ class AdminAttractionSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 {"name": "An attraction with this name already exists for this destination."}
             )
+
+    def _create_attraction_images(self, attraction, attraction_images):
+        request = self.context["request"]
+        existing_count = attraction.images.count()
+        for index, image_file in enumerate(attraction_images, start=existing_count + 1):
+            self._enqueue_attraction_image_upload(
+                image_file,
+                attraction=attraction,
+                sort_order=index,
+                created_by_id=request.user.id,
+            )
+
+    def _enqueue_attraction_image_upload(self, image_file, *, attraction, sort_order, created_by_id):
+        def enqueue():
+            storage_path = self._save_pending_upload(image_file)
+            upload_model_gallery_image.delay(
+                storage_path=storage_path,
+                app_label=attraction._meta.app_label,
+                parent_model_name=attraction._meta.object_name,
+                parent_object_id=str(attraction.pk),
+                image_model_name=AttractionImage._meta.object_name,
+                relation_name="attraction",
+                folder=f"{settings.CLOUDINARY_FOLDER}/destinations/attractions/gallery",
+                public_id=self._build_attraction_gallery_public_id(attraction, sort_order),
+                sort_order=sort_order,
+                created_by_id=str(created_by_id) if created_by_id else None,
+            )
+
+        transaction.on_commit(enqueue)
+
+    def _save_pending_upload(self, image_file):
+        extension = image_file.name.rsplit(".", 1)[-1] if "." in image_file.name else "upload"
+        storage_name = f"pending_uploads/cloudinary/{uuid4().hex}.{extension}"
+        image_file.seek(0)
+        return default_storage.save(storage_name, image_file)
+
+    def _build_attraction_gallery_public_id(self, attraction, index):
+        base_name = slugify(attraction.name) or uuid4().hex[:8]
+        return f"{base_name}-{attraction.id}-gallery-{index}"
 
 
 class AdminActivitySerializer(serializers.ModelSerializer):
@@ -869,15 +945,19 @@ BULK_DESTINATION_TEMPLATE = {
             "name",
             "attraction_type",
             "description",
+            "how_to_reach",
             "latitude",
             "longitude",
             "address",
             "cover_image",
             "image_urls",
             "image_captions",
+            "tags",
             "budget_tier",
             "avg_duration_hours",
             "best_time_of_day",
+            "picking_reason_list",
+            "tip_list",
             "entrance_fee_required",
             "approx_entrance_fee",
             "sort_order",
@@ -946,9 +1026,12 @@ BULK_DESTINATION_TEMPLATE = {
         "status",
         "data_source",
         "attraction_type",
+        "how_to_reach",
         "address",
         "avg_duration_hours",
         "best_time_of_day",
+        "picking_reason_list",
+        "tip_list",
         "entrance_fee_required",
         "approx_entrance_fee",
         "sort_order",
@@ -1003,8 +1086,12 @@ BULK_DESTINATION_TEMPLATE = {
             "name": "Phewa Lake",
             "attraction_type": "natural_site",
             "description": "A scenic freshwater lake.",
+            "how_to_reach": "Walk from Lakeside or take a short taxi ride.",
             "cover_image": "https://example.com/phewa-cover.jpg",
             "image_urls": "https://example.com/phewa-1.jpg",
+            "tags": "Lake:experience;Family:vibe",
+            "picking_reason_list": "Boat rides;Mountain views",
+            "tip_list": "Go near sunset;Carry cash",
         },
         "activities": {
             "destination_key": "pokhara-npl",
@@ -1039,7 +1126,7 @@ BULK_DESTINATION_TEMPLATE = {
         "XLSX uploads should use four sheet names: destinations, attractions, activities, cuisines.",
         "CSV uploads should use one combined sheet with record_type values: destination, attraction, activity, cuisine.",
         "destination_key is required and links attraction/activity/cuisine rows to a destination row.",
-        "Use semicolon-separated values for list fields: image_urls, image_captions, tags, local_languages, best_travel_months, cultural_tips.",
+        "Use semicolon-separated values for list fields: image_urls, image_captions, tags, local_languages, best_travel_months, cultural_tips, picking_reason_list, tip_list.",
         "tags format is Name:category;Name:category, for example Lake:experience;Adventure:activity.",
     ],
 }
@@ -1311,12 +1398,16 @@ class AdminDestinationBulkUploadSerializer(serializers.Serializer):
                 item.update(
                     {
                         "attraction_type": self._choice(row["attraction_type"], AttractionType, "attraction_type", index),
+                        "how_to_reach": row.get("how_to_reach", ""),
                         "latitude": self._optional_float(row.get("latitude"), "latitude", index),
                         "longitude": self._optional_float(row.get("longitude"), "longitude", index),
                         "address": row.get("address", ""),
+                        "tags": self._tags(row.get("tags"), index),
                         "budget_tier": self._choice(row.get("budget_tier"), BudgetTier, "budget_tier", index, default=""),
                         "avg_duration_hours": self._optional_integer(row.get("avg_duration_hours"), "avg_duration_hours", index),
                         "best_time_of_day": self._choice(row.get("best_time_of_day"), BestTimeOfDay, "best_time_of_day", index, default=BestTimeOfDay.ANYTIME),
+                        "picking_reason_list": self._string_list(row.get("picking_reason_list")),
+                        "tip_list": self._string_list(row.get("tip_list")),
                         "entrance_fee_required": self._boolean(row.get("entrance_fee_required"), default=False),
                         "approx_entrance_fee": row.get("approx_entrance_fee", ""),
                         "sort_order": self._integer(row.get("sort_order"), "sort_order", index, default=0),
@@ -1366,6 +1457,7 @@ class AdminDestinationBulkUploadSerializer(serializers.Serializer):
         for item in items:
             image_urls = item.pop("image_urls", [])
             image_captions = item.pop("image_captions", [])
+            tags = item.pop("tags", [])
             destination = destinations_by_key[item.pop("destination_key")]
             child = model.objects.create(
                 **item,
@@ -1373,6 +1465,8 @@ class AdminDestinationBulkUploadSerializer(serializers.Serializer):
                 created_by=user,
                 updated_by=user,
             )
+            if tags:
+                self._sync_tags(child, tags, user)
             child_count += 1
             image_count += self._create_images(image_model, image_relation, child, image_urls, image_captions, user)
         return child_count, image_count

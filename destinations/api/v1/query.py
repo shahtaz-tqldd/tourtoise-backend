@@ -67,3 +67,92 @@ def apply_destination_filters(queryset, query_params, *, include_status=False):
             queryset = queryset.filter(data_source__in=data_sources)
 
     return queryset.distinct()
+
+
+def _apply_search_filter(queryset, search, fields):
+    if not search:
+        return queryset
+
+    condition = Q()
+    for field in fields:
+        condition |= Q(**{f"{field}__icontains": search})
+    return queryset.filter(condition)
+
+
+def _apply_multi_value_filter(queryset, query_params, parameter, field=None):
+    values = get_multi_value_query_param(query_params, parameter)
+    if values:
+        queryset = queryset.filter(**{f"{field or parameter}__in": values})
+    return queryset
+
+
+def _get_boolean_query_param(query_params, *parameters):
+    for parameter in parameters:
+        value = query_params.get(parameter)
+        if value is None:
+            continue
+        normalized_value = value.strip().lower()
+        if normalized_value in {"true", "1", "yes"}:
+            return True
+        if normalized_value in {"false", "0", "no"}:
+            return False
+    return None
+
+
+def apply_attraction_filters(queryset, query_params):
+    """Apply client-facing filters to a destination's attractions."""
+    queryset = _apply_search_filter(
+        queryset,
+        query_params.get("search", "").strip(),
+        ("name", "description", "address"),
+    )
+    for parameter in ("attraction_type", "budget_tier", "best_time_of_day"):
+        queryset = _apply_multi_value_filter(queryset, query_params, parameter)
+
+    entrance_fee_required = _get_boolean_query_param(query_params, "entrance_fee_required")
+    if entrance_fee_required is not None:
+        queryset = queryset.filter(entrance_fee_required=entrance_fee_required)
+    is_featured = _get_boolean_query_param(query_params, "is_featured", "featured")
+    if is_featured is not None:
+        queryset = queryset.filter(is_featured=is_featured)
+    return queryset
+
+
+def apply_activity_filters(queryset, query_params):
+    """Apply client-facing filters to a destination's activities."""
+    queryset = _apply_search_filter(
+        queryset,
+        query_params.get("search", "").strip(),
+        ("name", "description", "best_season"),
+    )
+    for parameter in ("activity_type", "budget_tier", "difficulty_level"):
+        queryset = _apply_multi_value_filter(queryset, query_params, parameter)
+    queryset = _apply_multi_value_filter(queryset, query_params, "difficulty", "difficulty_level")
+
+    booking_required = _get_boolean_query_param(query_params, "booking_required")
+    if booking_required is not None:
+        queryset = queryset.filter(booking_required=booking_required)
+    is_featured = _get_boolean_query_param(query_params, "is_featured", "featured")
+    if is_featured is not None:
+        queryset = queryset.filter(is_featured=is_featured)
+    return queryset
+
+
+def apply_cuisine_filters(queryset, query_params):
+    """Apply client-facing filters to a destination's cuisines."""
+    queryset = _apply_search_filter(
+        queryset,
+        query_params.get("search", "").strip(),
+        ("name", "cuisine_type", "description", "ingredients_note"),
+    )
+    for parameter in ("cuisine_type", "spice_level", "meal_type"):
+        queryset = _apply_multi_value_filter(queryset, query_params, parameter)
+
+    for parameter, aliases in (
+        ("is_vegetarian_friendly", ("is_vegetarian_friendly", "vegetarian_friendly")),
+        ("is_must_try", ("is_must_try", "must_try")),
+    ):
+        value = _get_boolean_query_param(query_params, *aliases)
+        if value is not None:
+            queryset = queryset.filter(**{parameter: value})
+    return queryset

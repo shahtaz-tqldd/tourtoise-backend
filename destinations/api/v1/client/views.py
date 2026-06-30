@@ -147,7 +147,7 @@ class ClientDestinationDetailAPIView(DestinationPaginationMixin, GenericAPIView)
                     "cuisines",
                     queryset=_limited_child_queryset(
                         Cuisine,
-                        [F("is_must_try").desc(), F("name").asc()],
+                        [F("is_featured").desc(), F("name").asc()],
                     ),
                 ),
             )
@@ -177,7 +177,7 @@ class ClientDestinationShortDetailAPIView(GenericAPIView):
     - URL param: `slug` from the client list API.
 
     Frontend response:
-    - 200 success with name, cover_image, and overview for a published destination.
+    - 200 success with name, cover_image, and description for a published destination.
     """
 
     def get_object(self):
@@ -255,7 +255,7 @@ class ClientDestinationCuisineListAPIView(ClientDestinationChildListAPIView):
     """GET cuisines for a destination slug.
 
     Filters: page, page_size, search, cuisine_type, spice_level, meal_type,
-    is_vegetarian_friendly (or vegetarian_friendly), is_must_try (or must_try).
+    is_vegetarian_friendly (or vegetarian_friendly), is_featured (or featured).
     """
 
     model = Cuisine

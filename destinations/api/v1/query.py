@@ -18,7 +18,7 @@ def apply_destination_filters(queryset, query_params, *, include_status=False):
             | Q(country__icontains=search)
             | Q(region__icontains=search)
             | Q(tagline__icontains=search)
-            | Q(overview__icontains=search)
+            | Q(description__icontains=search)
             | Q(tags__name__icontains=search)
         )
 
@@ -34,9 +34,12 @@ def apply_destination_filters(queryset, query_params, *, include_status=False):
     if budget_tiers:
         queryset = queryset.filter(budget_tier__in=budget_tiers)
 
-    difficulties = get_multi_value_query_param(query_params, "difficulty")
+    difficulties = (
+        get_multi_value_query_param(query_params, "difficulty_level")
+        or get_multi_value_query_param(query_params, "difficulty")
+    )
     if difficulties:
-        queryset = queryset.filter(difficulty__in=difficulties)
+        queryset = queryset.filter(difficulty_level__in=difficulties)
 
     tag_slugs = get_multi_value_query_param(query_params, "tag")
     if tag_slugs:
@@ -61,10 +64,6 @@ def apply_destination_filters(queryset, query_params, *, include_status=False):
         statuses = get_multi_value_query_param(query_params, "status")
         if statuses:
             queryset = queryset.filter(status__in=statuses)
-
-        data_sources = get_multi_value_query_param(query_params, "data_source")
-        if data_sources:
-            queryset = queryset.filter(data_source__in=data_sources)
 
     return queryset.distinct()
 
@@ -143,14 +142,14 @@ def apply_cuisine_filters(queryset, query_params):
     queryset = _apply_search_filter(
         queryset,
         query_params.get("search", "").strip(),
-        ("name", "cuisine_type", "description", "ingredients_note"),
+        ("name", "cuisine_type", "description"),
     )
     for parameter in ("cuisine_type", "spice_level", "meal_type"):
         queryset = _apply_multi_value_filter(queryset, query_params, parameter)
 
     for parameter, aliases in (
         ("is_vegetarian_friendly", ("is_vegetarian_friendly", "vegetarian_friendly")),
-        ("is_must_try", ("is_must_try", "must_try")),
+        ("is_featured", ("is_featured", "featured")),
     ):
         value = _get_boolean_query_param(query_params, *aliases)
         if value is not None:

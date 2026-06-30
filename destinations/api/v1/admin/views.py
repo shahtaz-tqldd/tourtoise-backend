@@ -9,13 +9,19 @@ from app.base.pagination import CustomPagination
 from app.utils.cloudinary import delete_image
 from app.utils.response import APIResponse
 from destinations.api.v1.admin.serializers import (
+    AdminActivityBulkUploadSerializer,
     AdminActivitySerializer,
+    AdminAttractionBulkUploadSerializer,
     AdminAttractionSerializer,
+    AdminCuisineBulkUploadSerializer,
     AdminCuisineSerializer,
     AdminDestinationBulkUploadSerializer,
     AdminDestinationDetailSerializer,
     AdminDestinationListSerializer,
     AdminDestinationWriteSerializer,
+    BULK_ACTIVITY_TEMPLATE,
+    BULK_ATTRACTION_TEMPLATE,
+    BULK_CUISINE_TEMPLATE,
     BULK_DESTINATION_TEMPLATE,
 )
 from destinations.api.v1.query import apply_destination_filters
@@ -66,7 +72,7 @@ class DestinationChildListCreateAPIView(DestinationPaginationMixin, GenericAPIVi
 
     def get_queryset(self):
         destination = self.get_destination()
-        return self.model.objects.filter(destination=destination)
+        return self.model.objects.filter(destination=destination).prefetch_related("images")
 
     def get_serializer_context(self):
         context = super().get_serializer_context()
@@ -107,7 +113,7 @@ class DestinationChildDetailAPIView(GenericAPIView):
 
     def get_object(self):
         return get_object_or_404(
-            self.model,
+            self.model.objects.prefetch_related("images"),
             pk=self.kwargs[self.lookup_kwarg],
             destination=self.get_destination(),
         )
@@ -136,53 +142,128 @@ class DestinationChildDetailAPIView(GenericAPIView):
 
     def delete(self, request, *args, **kwargs):
         item = self.get_object()
+        if getattr(item, "cover_image", ""):
+            delete_image(image_url=item.cover_image)
+        for image in item.images.all():
+            delete_image(image_url=image.image_url)
         item.delete()
         return APIResponse.success(message=f"{self.resource_label} deleted successfully.")
 
 
-class AdminDestinationAttractionListCreateAPIView(DestinationChildListCreateAPIView):
+class DestinationChildBulkTemplateAPIView(GenericAPIView):
+    permission_classes = [IsAuthenticated, IsSuperAdmin]
+    template_data = None
+    resource_label = ""
+
+    def get(self, request, *args, **kwargs):
+        return APIResponse.success(
+            data=self.template_data,
+            message=f"{self.resource_label} bulk template fetched successfully.",
+        )
+
+
+class DestinationChildBulkUploadAPIView(GenericAPIView):
+    permission_classes = [IsAuthenticated, IsSuperAdmin]
+    parser_classes = [MultiPartParser, FormParser]
+    serializer_class = None
+    resource_label = ""
+
+    def get_destination(self):
+        if hasattr(self, "_destination"):
+            return self._destination
+        self._destination = get_object_or_404(Destination, pk=self.kwargs["destination_id"])
+        return self._destination
+
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(
+            data=request.data,
+            context={
+                "request": request,
+                "destination": self.get_destination(),
+            },
+        )
+        serializer.is_valid(raise_exception=True)
+        result = serializer.save()
+        return APIResponse.success(
+            data=result,
+            message=f"Bulk {self.resource_label.lower()} created successfully.",
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class DestinationAttractionListCreateAPIView(DestinationChildListCreateAPIView):
     model = Attraction
     serializer_class = AdminAttractionSerializer
     resource_label = "Attractions"
     singular_label = "Attraction"
 
 
-class AdminDestinationAttractionDetailAPIView(DestinationChildDetailAPIView):
+class DestinationAttractionDetailAPIView(DestinationChildDetailAPIView):
     model = Attraction
     serializer_class = AdminAttractionSerializer
     lookup_kwarg = "attraction_id"
     resource_label = "Attraction"
 
 
-class AdminDestinationActivityListCreateAPIView(DestinationChildListCreateAPIView):
+class DestinationAttractionBulkTemplateAPIView(DestinationChildBulkTemplateAPIView):
+    template_data = BULK_ATTRACTION_TEMPLATE
+    resource_label = "Attractions"
+
+
+class DestinationAttractionBulkUploadAPIView(DestinationChildBulkUploadAPIView):
+    serializer_class = AdminAttractionBulkUploadSerializer
+    resource_label = "Attractions"
+
+
+class DestinationActivityListCreateAPIView(DestinationChildListCreateAPIView):
     model = Activity
     serializer_class = AdminActivitySerializer
     resource_label = "Activities"
     singular_label = "Activity"
 
 
-class AdminDestinationActivityDetailAPIView(DestinationChildDetailAPIView):
+class DestinationActivityDetailAPIView(DestinationChildDetailAPIView):
     model = Activity
     serializer_class = AdminActivitySerializer
     lookup_kwarg = "activity_id"
     resource_label = "Activity"
 
 
-class AdminDestinationCuisineListCreateAPIView(DestinationChildListCreateAPIView):
+class DestinationActivityBulkTemplateAPIView(DestinationChildBulkTemplateAPIView):
+    template_data = BULK_ACTIVITY_TEMPLATE
+    resource_label = "Activities"
+
+
+class DestinationActivityBulkUploadAPIView(DestinationChildBulkUploadAPIView):
+    serializer_class = AdminActivityBulkUploadSerializer
+    resource_label = "Activities"
+
+
+class DestinationCuisineListCreateAPIView(DestinationChildListCreateAPIView):
     model = Cuisine
     serializer_class = AdminCuisineSerializer
     resource_label = "Cuisines"
     singular_label = "Cuisine"
 
 
-class AdminDestinationCuisineDetailAPIView(DestinationChildDetailAPIView):
+class DestinationCuisineDetailAPIView(DestinationChildDetailAPIView):
     model = Cuisine
     serializer_class = AdminCuisineSerializer
     lookup_kwarg = "cuisine_id"
     resource_label = "Cuisine"
 
 
-class AdminDestinationCreateAPIView(GenericAPIView):
+class DestinationCuisineBulkTemplateAPIView(DestinationChildBulkTemplateAPIView):
+    template_data = BULK_CUISINE_TEMPLATE
+    resource_label = "Cuisines"
+
+
+class DestinationCuisineBulkUploadAPIView(DestinationChildBulkUploadAPIView):
+    serializer_class = AdminCuisineBulkUploadSerializer
+    resource_label = "Cuisines"
+
+
+class DestinationCreateAPIView(GenericAPIView):
     """
     Admin create destination API.
 
@@ -190,8 +271,8 @@ class AdminDestinationCreateAPIView(GenericAPIView):
     - Method: POST
     - Content-Type: multipart/form-data
     - Send scalar fields normally: name, country, destination_type, latitude, longitude,
-      tagline, overview, min_stay_days, max_stay_days, budget_tier, difficulty, currency,
-      status, data_source, region, getting_around, visa_notes.
+      tagline, description, min_stay_days, max_stay_days, budget_tier, difficulty_level,
+      currency, currency_code, status, region, getting_around, visa_notes, notes.
     - Send array/object fields as JSON strings in multipart:
       `tags=[{"name":"Beach","category":"experience"}]`
       `attractions=[{"name":"Phewa Lake","attraction_type":"natural_site","description":"..."}]`
@@ -199,10 +280,11 @@ class AdminDestinationCreateAPIView(GenericAPIView):
       `cuisines=[{"name":"Thakali Set","description":"..."}]`
       `local_languages=["English","Thai"]`
       `best_travel_months=[11,12,1]`
-      `cultural_tips=["Dress modestly at temples","Carry cash for local markets"]`
+      `notes=["Dress modestly at temples","Carry cash for local markets"]`
     - Send one `cover_image_file` for the main image, or a plain `cover_image` URL.
     - Send child cover image files by index, for example `attractions[0].cover_image_file`.
     - Send repeated `gallery_images` files for gallery uploads.
+    - Child create/update endpoints accept repeated `images` files and `removed_images=["https://..."]`.
 
     Frontend response:
     - 201 success with the created destination object including `id`, `slug`, nested `tags`, and `images`.
@@ -223,7 +305,7 @@ class AdminDestinationCreateAPIView(GenericAPIView):
         )
 
 
-class AdminDestinationBulkTemplateAPIView(GenericAPIView):
+class DestinationBulkTemplateAPIView(GenericAPIView):
     """
     Admin bulk destination template API.
 
@@ -243,7 +325,7 @@ class AdminDestinationBulkTemplateAPIView(GenericAPIView):
         )
 
 
-class AdminDestinationBulkUploadAPIView(GenericAPIView):
+class DestinationBulkUploadAPIView(GenericAPIView):
     """
     Admin bulk destination upload API.
 
@@ -274,7 +356,7 @@ class AdminDestinationBulkUploadAPIView(GenericAPIView):
         )
 
 
-class AdminDestinationUpdateAPIView(GenericAPIView):
+class DestinationUpdateAPIView(GenericAPIView):
     """
     Admin update destination API.
 
@@ -321,7 +403,7 @@ class AdminDestinationUpdateAPIView(GenericAPIView):
         )
 
 
-class AdminDestinationDeleteAPIView(GenericAPIView):
+class DestinationDeleteAPIView(GenericAPIView):
     """
     Admin delete destination API.
 
@@ -353,7 +435,7 @@ class AdminDestinationDeleteAPIView(GenericAPIView):
         return APIResponse.success(message="Destination deleted successfully.")
 
 
-class AdminDestinationListAPIView(DestinationPaginationMixin, GenericAPIView):
+class DestinationListAPIView(DestinationPaginationMixin, GenericAPIView):
     """
     Admin destination list API.
 
@@ -365,11 +447,10 @@ class AdminDestinationListAPIView(DestinationPaginationMixin, GenericAPIView):
       `destination_type=city,beach`
       `country_code=NPL,THA`
       `budget_tier=budget,mid`
-      `difficulty=easy,moderate`
+      `difficulty_level=easy,moderate`
       `tag=heritage,romantic`
       `best_travel_month=10,11`
       `status=draft,published`
-      `data_source=manual`
       `region=South Asia`
     - Multiple filters can be combined in the same request.
 
@@ -388,7 +469,7 @@ class AdminDestinationListAPIView(DestinationPaginationMixin, GenericAPIView):
         return self.paginate_with_meta(self.get_queryset(), AdminDestinationListSerializer)
 
 
-class AdminDestinationDetailAPIView(GenericAPIView):
+class DestinationDetailAPIView(GenericAPIView):
     """
     Admin destination detail API.
 

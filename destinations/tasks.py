@@ -1,8 +1,10 @@
 from celery import shared_task
 from django.apps import apps
+from django.core.exceptions import ObjectDoesNotExist
 from django.core.files.storage import default_storage
 from django.db import transaction
 
+from app.services.vector_store import DestinationVectorService
 from app.utils.cloudinary import delete_image, upload_image
 
 
@@ -129,3 +131,41 @@ def upload_model_gallery_image(
         )
 
     return {"result": "uploaded", "url": upload["url"], "public_id": upload["public_id"]}
+
+
+@shared_task
+def process_vector_operations(operations):
+    service = DestinationVectorService()
+
+    for operation in operations:
+        action = operation["action"]
+        source_type = operation["source_type"]
+        source_id = operation["source_id"]
+        destination_id = operation["destination_id"]
+
+        try:
+            if action == "index_tree":
+                service.index_destination_tree(source_id)
+                continue
+
+            if action == "delete_tree":
+                service.remove_destination_tree(destination_id)
+                continue
+
+            if action == "index":
+                if source_type == "attraction":
+                    service.index_attraction(source_id)
+                elif source_type == "activity":
+                    service.index_activity(source_id)
+                elif source_type == "cuisine":
+                    service.index_cuisine(source_id)
+                elif source_type == "destination":
+                    service.index_destination(source_id)
+                continue
+
+            if action == "delete":
+                service.remove_source(source_type, source_id)
+        except ObjectDoesNotExist:
+            continue
+
+    return {"result": "processed", "count": len(operations)}

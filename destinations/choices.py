@@ -28,12 +28,6 @@ class Status(models.TextChoices):
     ARCHIVED  = "archived",  "Archived"
 
 
-class DataSource(models.TextChoices):
-    MANUAL  = "manual",  "Manual"
-    CRAWLER = "crawler", "Crawler"
-    HYBRID  = "hybrid",  "Hybrid"
-
-
 class TagCategory(models.TextChoices):
     EXPERIENCE = "experience", "Experience"   # hiking, temples, beaches
     VIBE       = "vibe",       "Vibe"         # romantic, solo, family

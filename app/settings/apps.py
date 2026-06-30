@@ -8,6 +8,7 @@ DJANGO_BASE_APPS = [
 ]
 
 THIRD_PARTY_APPS = [
+    "django.contrib.postgres",
     "rest_framework",
     "corsheaders",
     "django_celery_results",
@@ -23,6 +24,7 @@ MODULER_APPS = [
     "trips.apps.TripsConfig",
     "journals.apps.JournalsConfig",
     "chat.apps.ChatConfig",
+    "vector_store.apps.VectorStoreConfig",
 ]
 
 INSTALLED_APPS = DJANGO_BASE_APPS + THIRD_PARTY_APPS + MODULER_APPS

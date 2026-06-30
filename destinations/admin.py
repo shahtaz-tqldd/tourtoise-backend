@@ -37,7 +37,7 @@ class ActivityInline(admin.TabularInline):
 class CuisineInline(admin.TabularInline):
     model = Cuisine
     extra = 0
-    fields = ("name", "cuisine_type", "meal_type", "is_must_try")
+    fields = ("name", "cuisine_type", "meal_type", "is_featured")
     show_change_link = True
 
 
@@ -69,17 +69,15 @@ class DestinationAdmin(admin.ModelAdmin):
         "country",
         "destination_type",
         "budget_tier",
-        "difficulty",
+        "difficulty_level",
         "status",
-        "data_source",
         "created_at",
     )
     list_filter = (
         "destination_type",
         "budget_tier",
-        "difficulty",
+        "difficulty_level",
         "status",
-        "data_source",
         "country_code",
     )
     search_fields = ("name", "country", "region", "slug", "tagline", "tags__name")
@@ -89,11 +87,11 @@ class DestinationAdmin(admin.ModelAdmin):
     ordering = ("name",)
 
     fieldsets = (
-        ("Core", {"fields": ("id", "name", "slug", "destination_type", "status", "data_source")}),
+        ("Core", {"fields": ("id", "name", "slug", "destination_type", "status")}),
         ("Location", {"fields": ("country", "country_code", "region", "latitude", "longitude")}),
         (
             "Content",
-            {"fields": ("tagline", "overview", "cover_image", "tags")},
+            {"fields": ("tagline", "description", "cover_image", "tags")},
         ),
         (
             "Travel Info",
@@ -102,14 +100,14 @@ class DestinationAdmin(admin.ModelAdmin):
                     "min_stay_days",
                     "max_stay_days",
                     "budget_tier",
-                    "difficulty",
+                    "difficulty_level",
                     "local_languages",
                     "best_travel_months",
                     "currency",
                     "currency_code",
                     "getting_around",
                     "visa_notes",
-                    "cultural_tips",
+                    "notes",
                 )
             },
         ),
@@ -173,9 +171,9 @@ class CuisineAdmin(admin.ModelAdmin):
         "cuisine_type",
         "meal_type",
         "spice_level",
-        "is_must_try",
+        "is_featured",
     )
-    list_filter = ("meal_type", "spice_level", "is_must_try", "is_vegetarian_friendly")
+    list_filter = ("meal_type", "spice_level", "is_featured", "is_vegetarian_friendly")
     search_fields = ("name", "destination__name", "slug", "cuisine_type")
     readonly_fields = ("id", "slug", "created_at", "updated_at", "created_by", "updated_by")
     autocomplete_fields = ("destination",)

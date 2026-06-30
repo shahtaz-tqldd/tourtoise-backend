@@ -1,7 +1,8 @@
-name: tourtoise-core-prod
+name: tourtoise
 
 services:
-  tourtoise-core-wsgi:
+  wsgi:
+    container_name: tourtoise_api
     build:
       context: ..
       dockerfile: docker/Dockerfile
@@ -16,6 +17,7 @@ services:
       DB_HOST: postgres
       DB_PORT: 5432
       ADK_DB_URL: postgresql+asyncpg://${DB_USER:-tourtoise_db_owner}:${DB_PASSWORD:-tourtoise_db_password}@postgres:5432/adk_session_db
+      VECTOR_DB_URL: postgresql://${VECTOR_DB_USER:-tourtoise_db_owner}:${VECTOR_DB_PASSWORD:-tourtoise_db_password}@postgres:5432/${VECTOR_DB_NAME:-tourtoise_vector_db}
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
     volumes:
@@ -28,7 +30,8 @@ services:
       redis:
         condition: service_healthy
 
-  tourtoise-core-asgi:
+  asgi:
+    container_name: tourtoise_app
     build:
       context: ..
       dockerfile: docker/Dockerfile
@@ -41,6 +44,7 @@ services:
       DB_HOST: postgres
       DB_PORT: 5432
       ADK_DB_URL: postgresql+asyncpg://${DB_USER:-tourtoise_db_owner}:${DB_PASSWORD:-tourtoise_db_password}@postgres:5432/adk_session_db
+      VECTOR_DB_URL: postgresql://${VECTOR_DB_USER:-tourtoise_db_owner}:${VECTOR_DB_PASSWORD:-tourtoise_db_password}@postgres:5432/${VECTOR_DB_NAME:-tourtoise_vector_db}
       DJANGO_CREATE_SUPERUSER: "0"
       DJANGO_WAIT_FOR_MIGRATIONS: "1"
       CELERY_BROKER_URL: redis://redis:6379/0
@@ -55,7 +59,8 @@ services:
       redis:
         condition: service_healthy
 
-  tourtoise-core-celery-worker:
+  celery-worker:
+    container_name: tourtoise_celery
     build:
       context: ..
       dockerfile: docker/Dockerfile
@@ -68,6 +73,7 @@ services:
       DB_HOST: postgres
       DB_PORT: 5432
       ADK_DB_URL: postgresql+asyncpg://${DB_USER:-tourtoise_db_owner}:${DB_PASSWORD:-tourtoise_db_password}@postgres:5432/adk_session_db
+      VECTOR_DB_URL: postgresql://${VECTOR_DB_USER:-tourtoise_db_owner}:${VECTOR_DB_PASSWORD:-tourtoise_db_password}@postgres:5432/${VECTOR_DB_NAME:-tourtoise_vector_db}
       DJANGO_CREATE_SUPERUSER: "0"
       DJANGO_WAIT_FOR_MIGRATIONS: "1"
       CELERY_BROKER_URL: redis://redis:6379/0
@@ -80,7 +86,8 @@ services:
       redis:
         condition: service_healthy
 
-  tourtoise-core-celery-beat:
+  celery-beat:
+    container_name: tourtoise_celery_beat
     build:
       context: ..
       dockerfile: docker/Dockerfile
@@ -93,6 +100,7 @@ services:
       DB_HOST: postgres
       DB_PORT: 5432
       ADK_DB_URL: postgresql+asyncpg://${DB_USER:-tourtoise_db_owner}:${DB_PASSWORD:-tourtoise_db_password}@postgres:5432/adk_session_db
+      VECTOR_DB_URL: postgresql://${VECTOR_DB_USER:-tourtoise_db_owner}:${VECTOR_DB_PASSWORD:-tourtoise_db_password}@postgres:5432/${VECTOR_DB_NAME:-tourtoise_vector_db}
       DJANGO_CREATE_SUPERUSER: "0"
       DJANGO_WAIT_FOR_MIGRATIONS: "1"
       CELERY_BROKER_URL: redis://redis:6379/0
@@ -104,14 +112,15 @@ services:
         condition: service_healthy
 
   postgres:
-    image: postgres:16-alpine
+    container_name: tourtoise_psql
+    image: pgvector/pgvector:pg16
     env_file:
       - ../.env
     environment:
       POSTGRES_DB: ${DB_NAME:-tourtoise_db}
       POSTGRES_USER: ${DB_USER:-tourtoise_db_owner}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-tourtoise_db_password}
-      POSTGRES_ADDITIONAL_DATABASES: adk_session_db
+      POSTGRES_ADDITIONAL_DATABASES: adk_session_db,${VECTOR_DB_NAME:-tourtoise_vector_db}
     volumes:
       - postgres_prod_data:/var/lib/postgresql/data
       - ./postgres/init-additional-databases.sh:/docker-entrypoint-initdb.d/10-create-additional-databases.sh:ro
@@ -122,6 +131,7 @@ services:
       retries: 10
 
   redis:
+    container_name: tourtoise_redis
     image: redis:7-alpine
     command: redis-server --appendonly yes
     volumes:

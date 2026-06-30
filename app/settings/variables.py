@@ -1,6 +1,6 @@
 from datetime import timedelta
 
-from app.settings.env import BASE_DIR, PROJECT_DIR, env, env_bool, env_int, env_list
+from app.settings.env import BASE_DIR, PROJECT_DIR, env, env_bool, env_float, env_int, env_list
 
 APP_ENV = env("APP_ENV", "dev")
 SECRET_KEY = env("APP_SECRET", "django-insecure-change-me")
@@ -86,9 +86,11 @@ ADK_DB_URL = env("ADK_DB_URL")
 VECTOR_DB_URL = env("VECTOR_DB_URL")
 
 # GEMINI EMBEDDINGS
-GEMINI_API_KEY = env("GEMINI_API_KEY", "")
+GOOGLE_CLOUD_PROJECT_ID = env("GOOGLE_CLOUD_PROJECT_ID", "")
+GOOGLE_CLOUD_LOCATION = env("GOOGLE_CLOUD_LOCATION", "")
 GEMINI_EMBEDDING_MODEL = env("GEMINI_EMBEDDING_MODEL", "gemini-embedding-2")
 GEMINI_EMBEDDING_DIMENSIONS = env_int("GEMINI_EMBEDDING_DIMENSIONS", 1536)
+GEMINI_EMBEDDING_REQUEST_DELAY_SECONDS = env_float("GEMINI_EMBEDDING_REQUEST_DELAY_SECONDS", 13.0)
 
 
 # CLOUDINARY

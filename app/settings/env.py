@@ -28,6 +28,13 @@ def env_int(key, default=0):
     return int(value)
 
 
+def env_float(key, default=0.0):
+    value = os.getenv(key)
+    if value in {None, ""}:
+        return default
+    return float(value)
+
+
 def env_list(key, default=""):
     value = os.getenv(key, default)
     if not value:

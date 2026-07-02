@@ -499,13 +499,15 @@ class ClientDestinationShortDetailApiTests(TestCase):
             latitude=28.2096,
             longitude=83.9856,
             tagline="Lakeside city",
-            overview="Gateway to the Annapurna region.",
+            description="Gateway to the Annapurna region.",
             cover_image="https://example.com/pokhara.jpg",
             budget_tier=BudgetTier.MID,
             currency="Nepalese Rupee",
             currency_code="NPR",
             status=Status.PUBLISHED,
         )
+        tag = DestinationTag.objects.create(name="Lake", category="experience")
+        self.destination.tags.add(tag)
 
     def test_returns_short_detail_for_published_destination_slug(self):
         response = self.client.get(
@@ -515,11 +517,26 @@ class ClientDestinationShortDetailApiTests(TestCase):
         self.assertEqual(response.status_code, drf_status.HTTP_200_OK)
         self.assertEqual(
             set(response.data["data"].keys()),
-            {"name", "cover_image", "overview"},
+            {
+                "name",
+                "slug",
+                "country",
+                "region",
+                "destination_type",
+                "tagline",
+                "cover_image",
+                "description",
+                "budget_tier",
+                "difficulty_level",
+                "best_travel_months",
+                "tags",
+            },
         )
         self.assertEqual(response.data["data"]["name"], self.destination.name)
         self.assertEqual(response.data["data"]["cover_image"], self.destination.cover_image)
-        self.assertEqual(response.data["data"]["overview"], self.destination.overview)
+        self.assertEqual(response.data["data"]["tagline"], self.destination.tagline)
+        self.assertEqual(response.data["data"]["description"], self.destination.description)
+        self.assertEqual(response.data["data"]["tags"], ["Lake"])
 
     def test_hides_unpublished_destination(self):
         self.destination.status = Status.DRAFT

@@ -18,6 +18,7 @@ from destinations.api.v1.admin.serializers import (
     AdminDestinationBulkUploadSerializer,
     AdminDestinationDetailSerializer,
     AdminDestinationListSerializer,
+    AdminDestinationShortDetailSerializer,
     AdminDestinationWriteSerializer,
     BULK_ACTIVITY_TEMPLATE,
     BULK_ATTRACTION_TEMPLATE,
@@ -501,4 +502,32 @@ class DestinationDetailAPIView(GenericAPIView):
         return APIResponse.success(
             data=AdminDestinationDetailSerializer(destination).data,
             message="Destination fetched successfully.",
+        )
+
+
+class DestinationShortDetailAPIView(GenericAPIView):
+    """
+    Admin destination short detail API.
+
+    Frontend request:
+    - Method: GET
+    - URL param: `destination_id` (UUID).
+
+    Frontend response:
+    - 200 success with compact destination details including name, tagline, cover image, and tags.
+    """
+
+    permission_classes = [IsAuthenticated, IsSuperAdmin]
+
+    def get_object(self):
+        return get_object_or_404(
+            Destination.objects.prefetch_related("tags"),
+            pk=self.kwargs["destination_id"],
+        )
+
+    def get(self, request, *args, **kwargs):
+        destination = self.get_object()
+        return APIResponse.success(
+            data=AdminDestinationShortDetailSerializer(destination).data,
+            message="Destination short detail fetched successfully.",
         )

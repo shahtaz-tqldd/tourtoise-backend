@@ -469,6 +469,30 @@ class AdminDestinationListSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+class AdminDestinationShortDetailSerializer(serializers.ModelSerializer):
+    tags = DestinationTagSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Destination
+        fields = (
+            "id",
+            "name",
+            "slug",
+            "country",
+            "region",
+            "destination_type",
+            "tagline",
+            "description",
+            "cover_image",
+            "budget_tier",
+            "difficulty_level",
+            "best_travel_months",
+            "tags",
+            "status",
+        )
+        read_only_fields = fields
+
+
 class AdminDestinationDetailSerializer(serializers.ModelSerializer):
     tags = DestinationTagSerializer(many=True, read_only=True)
     images = DestinationImageSerializer(many=True, read_only=True)

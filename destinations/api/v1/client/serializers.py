@@ -194,16 +194,29 @@ class ClientDestinationListSerializer(serializers.ModelSerializer):
 
 class ClientDestinationShortDetailSerializer(serializers.ModelSerializer):
     cover_image = serializers.SerializerMethodField()
+    tags = serializers.SerializerMethodField()
 
     def get_cover_image(self, obj):
         return cloudinary_thumbnail_url(obj.cover_image, 800)
+
+    def get_tags(self, obj):
+        return [tag.name for tag in obj.tags.all()]
 
     class Meta:
         model = Destination
         fields = (
             "name",
+            "slug",
+            "country",
+            "region",
+            "destination_type",
+            "tagline",
             "cover_image",
             "description",
+            "budget_tier",
+            "difficulty_level",
+            "best_travel_months",
+            "tags",
         )
         read_only_fields = fields
 

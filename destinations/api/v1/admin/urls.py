@@ -4,6 +4,7 @@ from destinations.api.v1.admin import views
 
 destinations_apis = [
     path("detail/", views.DestinationDetailAPIView.as_view(), name="destination-details"),
+    path("short-details/", views.DestinationShortDetailAPIView.as_view(), name="destination-details"),
     path("update/", views.DestinationUpdateAPIView.as_view(), name="destination-update"),
     path("delete/", views.DestinationDeleteAPIView.as_view(), name="destination-delete"),    
 ]

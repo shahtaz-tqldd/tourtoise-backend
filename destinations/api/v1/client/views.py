@@ -182,7 +182,7 @@ class ClientDestinationShortDetailAPIView(GenericAPIView):
 
     def get_object(self):
         return get_object_or_404(
-            Destination.objects.filter(status="published"),
+            Destination.objects.filter(status="published").prefetch_related("tags"),
             slug=self.kwargs["slug"],
         )
 

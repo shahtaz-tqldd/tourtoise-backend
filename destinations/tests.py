@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import TestCase
+from django.test import SimpleTestCase, TestCase
 from django.utils import timezone
 from rest_framework import status as drf_status
 from rest_framework.test import APIClient
@@ -37,6 +37,7 @@ from destinations.tasks import (
     upload_model_gallery_image,
     upload_model_image,
 )
+from destinations import signals as destination_signals
 
 
 class DestinationModelTests(TestCase):
@@ -109,6 +110,32 @@ class DestinationModelTests(TestCase):
         destination.tags.add(tag)
 
         self.assertEqual(list(destination.tags.all()), [tag])
+
+
+class DestinationVectorSignalTests(SimpleTestCase):
+    def test_save_signals_queue_vector_index_only_on_create(self):
+        destination = Destination(id=1)
+        attraction = Attraction(id=2, destination_id=1)
+        activity = Activity(id=3, destination_id=1)
+        cuisine = Cuisine(id=4, destination_id=1)
+
+        save_receivers = (
+            (destination_signals.queue_destination_vector_index, Destination, destination),
+            (destination_signals.queue_attraction_vector_index, Attraction, attraction),
+            (destination_signals.queue_activity_vector_index, Activity, activity),
+            (destination_signals.queue_cuisine_vector_index, Cuisine, cuisine),
+        )
+
+        with patch("destinations.signals._queue_vector_operation") as queue_mock:
+            for receiver, sender, instance in save_receivers:
+                receiver(sender=sender, instance=instance, created=False)
+
+            queue_mock.assert_not_called()
+
+            for receiver, sender, instance in save_receivers:
+                receiver(sender=sender, instance=instance, created=True)
+
+            self.assertEqual(queue_mock.call_count, len(save_receivers))
 
 
 class DestinationImageUploadTaskTests(TestCase):

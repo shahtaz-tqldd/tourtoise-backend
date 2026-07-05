@@ -80,7 +80,10 @@ def _normalize_vector_operations(operations):
 
 
 @receiver(post_save, sender=Destination)
-def queue_destination_vector_index(sender, instance, **kwargs):
+def queue_destination_vector_index(sender, instance, created, **kwargs):
+    if not created:
+        return
+
     _queue_vector_operation(
         {
             "action": "index_tree",
@@ -92,7 +95,10 @@ def queue_destination_vector_index(sender, instance, **kwargs):
 
 
 @receiver(post_save, sender=Attraction)
-def queue_attraction_vector_index(sender, instance, **kwargs):
+def queue_attraction_vector_index(sender, instance, created, **kwargs):
+    if not created:
+        return
+
     _queue_vector_operation(
         {
             "action": "index",
@@ -104,7 +110,10 @@ def queue_attraction_vector_index(sender, instance, **kwargs):
 
 
 @receiver(post_save, sender=Activity)
-def queue_activity_vector_index(sender, instance, **kwargs):
+def queue_activity_vector_index(sender, instance, created, **kwargs):
+    if not created:
+        return
+
     _queue_vector_operation(
         {
             "action": "index",
@@ -116,7 +125,10 @@ def queue_activity_vector_index(sender, instance, **kwargs):
 
 
 @receiver(post_save, sender=Cuisine)
-def queue_cuisine_vector_index(sender, instance, **kwargs):
+def queue_cuisine_vector_index(sender, instance, created, **kwargs):
+    if not created:
+        return
+
     _queue_vector_operation(
         {
             "action": "index",

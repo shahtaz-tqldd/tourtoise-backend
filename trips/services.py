@@ -102,7 +102,7 @@ def build_trip_snapshot(trip):
         "origin_country": trip.origin_country,
         "budget": str(trip.total_budget) if trip.total_budget is not None else None,
         "destinations": destinations,
-    }
+    } 
 
 
 def run_plan_agent_for_session(

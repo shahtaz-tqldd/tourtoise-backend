@@ -1,4 +1,4 @@
-from django.db.models import Case, CharField, IntegerField, Q, Value, When
+from django.db.models import Case, CharField, IntegerField, Prefetch, Q, Value, When
 from django.db.models.functions import Cast
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -12,8 +12,11 @@ from trips.api.v1.client.serializers import (
     PublicTripDetailSerializer,
     TripDetailSerializer,
     TripListSerializer,
+    TripShareTokenSerializer,
+    TripVisibilitySerializer,
     TripWriteSerializer,
 )
+from trips.choices import TripVisibility
 
 from trips.models import (
     Trip,
@@ -222,6 +225,68 @@ class TripDeleteAPIView(UserTripQuerysetMixin, GenericAPIView):
         return APIResponse.success(message="Trip deleted successfully.")
 
 
+class TripShareTokenAPIView(UserTripQuerysetMixin, GenericAPIView):
+    """
+    Create or fetch a shareable trip token and link.
+
+    Frontend request:
+    - Method: POST
+    - Headers: authenticated bearer token
+    - URL param: `trip_id`
+    - Optional body: `{ "regenerate": true }` to rotate the token.
+
+    Frontend response:
+    - 200 success with `share_token`, `share_url`, and `visibility=public`.
+    """
+
+    permission_classes = [IsAuthenticated]
+    serializer_class = TripShareTokenSerializer
+
+    def post(self, request, *args, **kwargs):
+        trip = self.get_trip_by_id()
+        serializer = self.get_serializer(
+            data=request.data,
+            context={"request": request, "trip": trip},
+        )
+        serializer.is_valid(raise_exception=True)
+        trip = serializer.save()
+        return APIResponse.success(
+            data=TripShareTokenSerializer(trip, context={"request": request}).data,
+            message="Trip share link created successfully.",
+        )
+
+
+class TripVisibilityUpdateAPIView(UserTripQuerysetMixin, GenericAPIView):
+    """
+    Change trip visibility.
+
+    Frontend request:
+    - Method: PATCH
+    - Headers: authenticated bearer token
+    - URL param: `trip_id`
+    - Body: `{ "visibility": "public" }` or `{ "visibility": "private" }`
+
+    Frontend response:
+    - 200 success with current visibility and share link when public.
+    """
+
+    permission_classes = [IsAuthenticated]
+    serializer_class = TripVisibilitySerializer
+
+    def patch(self, request, *args, **kwargs):
+        trip = self.get_trip_by_id()
+        serializer = self.get_serializer(
+            data=request.data,
+            context={"request": request, "trip": trip},
+        )
+        serializer.is_valid(raise_exception=True)
+        trip = serializer.save()
+        return APIResponse.success(
+            data=TripVisibilitySerializer(trip, context={"request": request}).data,
+            message="Trip visibility updated successfully.",
+        )
+
+
 class PublicTripDetailAPIView(GenericAPIView):
     """
     Public shared trip detail API.
@@ -230,7 +295,7 @@ class PublicTripDetailAPIView(GenericAPIView):
     - Method: GET
     - No authentication required.
     - URL param: `share_token`
-    - Only trips with `visibility=link_only` are accessible through this endpoint.
+    - Only trips with `visibility=public` are accessible through this endpoint.
 
     Frontend response:
     - 200 success with share-safe trip details for public viewing.
@@ -239,7 +304,7 @@ class PublicTripDetailAPIView(GenericAPIView):
 
     def get_object(self):
         return get_object_or_404(
-            Trip.objects.filter(visibility="link_only").prefetch_related(
+            Trip.objects.filter(visibility=TripVisibility.PUBLIC).prefetch_related(
                 Prefetch(
                     "trip_destinations",
                     queryset=TripDestination.objects.select_related("destination").order_by("sort_order"),

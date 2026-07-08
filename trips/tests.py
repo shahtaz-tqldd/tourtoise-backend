@@ -355,6 +355,94 @@ class TripCreateApiTests(TestCase):
         )
 
 
+class TripSharingApiTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(email="traveler@example.com", password="testpass123")
+        self.other_user = User.objects.create_user(email="other@example.com", password="testpass123")
+        self.client.force_authenticate(user=self.user)
+        self.trip = Trip.objects.create(
+            user=self.user,
+            title="Shareable Trip",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+
+    def test_creates_share_link_and_makes_trip_public(self):
+        response = self.client.post(f"/api/v1/trips/{self.trip.id}/share-token/", {}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.trip.refresh_from_db()
+        self.assertEqual(self.trip.visibility, "public")
+        self.assertEqual(response.data["data"]["share_token"], str(self.trip.share_token))
+        self.assertIn(f"/api/v1/trips/public/{self.trip.share_token}/detail/", response.data["data"]["share_url"])
+
+    def test_share_token_endpoint_keeps_existing_token_by_default(self):
+        original_token = self.trip.share_token
+
+        response = self.client.post(f"/api/v1/trips/{self.trip.id}/share-token/", {}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.trip.refresh_from_db()
+        self.assertEqual(self.trip.share_token, original_token)
+
+    def test_share_token_endpoint_can_regenerate_token(self):
+        original_token = self.trip.share_token
+
+        response = self.client.post(
+            f"/api/v1/trips/{self.trip.id}/share-token/",
+            {"regenerate": True},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.trip.refresh_from_db()
+        self.assertNotEqual(self.trip.share_token, original_token)
+        self.assertEqual(response.data["data"]["share_token"], str(self.trip.share_token))
+
+    def test_public_detail_is_available_only_for_public_trips(self):
+        private_response = self.client.get(f"/api/v1/trips/public/{self.trip.share_token}/detail/")
+        self.assertEqual(private_response.status_code, status.HTTP_404_NOT_FOUND)
+
+        self.trip.visibility = "public"
+        self.trip.save(update_fields=["visibility"])
+        public_response = self.client.get(f"/api/v1/trips/public/{self.trip.share_token}/detail/")
+
+        self.assertEqual(public_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(public_response.data["data"]["id"], str(self.trip.id))
+
+    def test_visibility_endpoint_can_make_trip_private(self):
+        self.trip.visibility = "public"
+        self.trip.save(update_fields=["visibility"])
+
+        response = self.client.patch(
+            f"/api/v1/trips/{self.trip.id}/visibility/",
+            {"visibility": "private"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.trip.refresh_from_db()
+        self.assertEqual(self.trip.visibility, "private")
+        self.assertIsNone(response.data["data"]["share_url"])
+
+    def test_visibility_endpoint_rejects_other_user_trip(self):
+        other_trip = Trip.objects.create(
+            user=self.other_user,
+            title="Other Trip",
+            created_by=self.other_user,
+            updated_by=self.other_user,
+        )
+
+        response = self.client.patch(
+            f"/api/v1/trips/{other_trip.id}/visibility/",
+            {"visibility": "public"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+
 class TripAgentActiveApiTests(TestCase):
     def setUp(self):
         self.client = APIClient()

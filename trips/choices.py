@@ -13,7 +13,7 @@ class TripStatus(models.TextChoices):
 
 class TripVisibility(models.TextChoices):
     PRIVATE = "private", "Private"
-    LINK_ONLY = "link_only", "Link Only"
+    PUBLIC = "public", "Public"
 
 
 class TripPace(models.TextChoices):

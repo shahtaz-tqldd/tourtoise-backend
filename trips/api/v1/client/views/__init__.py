@@ -4,7 +4,9 @@ from .trips import (
   TripDeleteAPIView,
   TripDetailAPIView,
   TripListAPIView,
+  TripShareTokenAPIView,
   TripUpdateAPIView,
+  TripVisibilityUpdateAPIView,
 )
 from .trip_extensions import (
   TripDayCreateAPIView,

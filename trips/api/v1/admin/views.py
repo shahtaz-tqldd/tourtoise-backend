@@ -42,7 +42,7 @@ class AdminTripListAPIView(TripPaginationMixin, GenericAPIView):
       `page`, `page_size`
       `search=summer`
       `status=draft,ready`
-      `visibility=private,link_only`
+      `visibility=private,public`
       `planning_source=agent,hybrid`
       `user_email=traveler@example.com`
     - Multiple filters can be combined.

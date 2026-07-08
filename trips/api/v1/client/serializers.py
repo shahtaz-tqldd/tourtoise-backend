@@ -1,12 +1,15 @@
 from datetime import timedelta
+from uuid import uuid4
 
 from django.db import transaction
+from django.conf import settings
 from django.urls import reverse
 from rest_framework import serializers
 
 from app.utils.cloudinary import cloudinary_thumbnail_url
 from destinations.choices import Status
 from destinations.models import Destination
+from trips.choices import TripVisibility
 from trips.models import Trip, TripAgentMessage, TripItinerary, TripItineraryDay, TripDestination, TripItineraryDayItem
 
 
@@ -180,11 +183,9 @@ class TripListSerializer(serializers.ModelSerializer):
 
     def get_share_url(self, obj):
         request = self.context.get("request")
-        if obj.visibility != "link_only" or not request:
+        if obj.visibility != TripVisibility.PUBLIC or not request:
             return None
-        return request.build_absolute_uri(
-            reverse("public-trip-detail", kwargs={"share_token": obj.share_token})
-        )
+        return f"{settings.USER_FRONTEND_URL}/trip/public/{obj.share_token}"
 
 
 class TripDetailSerializer(serializers.ModelSerializer):
@@ -231,11 +232,9 @@ class TripDetailSerializer(serializers.ModelSerializer):
 
     def get_share_url(self, obj):
         request = self.context.get("request")
-        if obj.visibility != "link_only" or not request:
+        if obj.visibility != TripVisibility.PUBLIC or not request:
             return None
-        return request.build_absolute_uri(
-            reverse("public-trip-detail", kwargs={"share_token": obj.share_token})
-        )
+        return f"{settings.USER_FRONTEND_URL}/trip/public/{obj.share_token}"
 
     def get_days(self, obj):
         try:
@@ -287,9 +286,7 @@ class PublicTripDetailSerializer(serializers.ModelSerializer):
         request = self.context.get("request")
         if not request:
             return None
-        return request.build_absolute_uri(
-            reverse("public-trip-detail", kwargs={"share_token": obj.share_token})
-        )
+        return f"{settings.USER_FRONTEND_URL}/trip/public/{obj.share_token}"
 
     def get_days(self, obj):
         try:
@@ -410,6 +407,73 @@ class TripWriteSerializer(serializers.ModelSerializer):
             for index, slug in enumerate(destination_slugs, start=1)
         ]
         TripDestination.objects.bulk_create(trip_destinations)
+
+
+class TripShareTokenSerializer(serializers.Serializer):
+    regenerate = serializers.BooleanField(required=False, default=False)
+    id = serializers.UUIDField(source="trip.id", read_only=True)
+    visibility = serializers.CharField(source="trip.visibility", read_only=True)
+    share_token = serializers.UUIDField(source="trip.share_token", read_only=True)
+    share_url = serializers.SerializerMethodField()
+
+    def save(self, **kwargs):
+        trip = self.context["trip"]
+        request = self.context["request"]
+
+        if self.validated_data.get("regenerate"):
+            trip.share_token = uuid4()
+        trip.visibility = TripVisibility.PUBLIC
+        trip.updated_by = request.user
+        trip.save(update_fields=["share_token", "visibility", "updated_by", "updated_at"])
+        self.instance = trip
+        return trip
+
+    def get_share_url(self, obj):
+        trip = obj if isinstance(obj, Trip) else obj.get("trip")
+        request = self.context.get("request")
+        if not request or not trip:
+            return None
+        return f"{settings.USER_FRONTEND_URL}/trip/public/{obj.share_token}"
+
+    def to_representation(self, instance):
+        trip = instance if isinstance(instance, Trip) else self.instance
+        return {
+            "id": str(trip.id),
+            "visibility": trip.visibility,
+            "share_token": str(trip.share_token),
+            "share_url": self.get_share_url(trip),
+        }
+
+
+class TripVisibilitySerializer(serializers.Serializer):
+    visibility = serializers.ChoiceField(choices=TripVisibility.choices)
+    id = serializers.UUIDField(source="trip.id", read_only=True)
+    share_url = serializers.SerializerMethodField()
+
+    def save(self, **kwargs):
+        trip = self.context["trip"]
+        request = self.context["request"]
+        trip.visibility = self.validated_data["visibility"]
+        trip.updated_by = request.user
+        trip.save(update_fields=["visibility", "updated_by", "updated_at"])
+        self.instance = trip
+        return trip
+
+    def get_share_url(self, obj):
+        trip = obj if isinstance(obj, Trip) else obj.get("trip")
+        request = self.context.get("request")
+        if not request or not trip or trip.visibility != TripVisibility.PUBLIC:
+            return None
+        return f"{settings.USER_FRONTEND_URL}/trip/public/{obj.share_token}"
+
+    def to_representation(self, instance):
+        trip = instance if isinstance(instance, Trip) else self.instance
+        return {
+            "id": str(trip.id),
+            "visibility": trip.visibility,
+            "share_token": str(trip.share_token),
+            "share_url": self.get_share_url(trip),
+        }
 
 
 

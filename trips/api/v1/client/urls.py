@@ -31,6 +31,8 @@ trip_urlpatterns = [
     path("list/", views.TripListAPIView.as_view(), name="trip-list"),
     path("<uuid:trip_id>/detail/", views.TripDetailAPIView.as_view(), name="trip-detail"),
     path("public/<uuid:share_token>/detail/", views.PublicTripDetailAPIView.as_view(), name="public-trip-detail"),
+    path("<uuid:trip_id>/share-token/", views.TripShareTokenAPIView.as_view(), name="trip-share-token"),
+    path("<uuid:trip_id>/visibility/", views.TripVisibilityUpdateAPIView.as_view(), name="trip-visibility-update"),
     path("<uuid:trip_id>/update/", views.TripUpdateAPIView.as_view(), name="trip-update"),
     path("<uuid:trip_id>/delete/", views.TripDeleteAPIView.as_view(), name="trip-delete"),
 ]

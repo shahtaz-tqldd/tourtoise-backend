@@ -108,6 +108,7 @@ class DestinationAdmin(admin.ModelAdmin):
                     "getting_around",
                     "visa_notes",
                     "notes",
+                    "picking_reasons",
                 )
             },
         ),

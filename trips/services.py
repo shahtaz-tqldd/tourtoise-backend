@@ -82,15 +82,14 @@ def build_trip_snapshot(trip):
                 "country": destination.country,
                 "region": destination.region,
                 "type": destination.destination_type,
-                "overview": destination.overview,
+                "overview": destination.description,
                 "budget_tier": destination.budget_tier,
-                "difficulty": destination.difficulty,
                 "min_stay_days": destination.min_stay_days,
                 "max_stay_days": destination.max_stay_days,
                 "best_travel_months": destination.best_travel_months,
                 "getting_around": destination.getting_around,
                 "visa_notes": destination.visa_notes,
-                "cultural_tips": destination.cultural_tips,
+                "notes": destination.notes,
             }
         )
 

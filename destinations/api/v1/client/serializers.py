@@ -263,6 +263,7 @@ class ClientDestinationDetailSerializer(serializers.ModelSerializer):
             "getting_around",
             "visa_notes",
             "notes",
+            "picking_reasons",
             "images",
             "attractions",
             "activities",

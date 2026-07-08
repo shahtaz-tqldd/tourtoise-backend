@@ -69,31 +69,11 @@ class TripAgentInitAPIView(UserTripQuerysetMixin, GenericAPIView):
             self.get_trip_queryset(),
             pk=serializer.validated_data["trip_id"],
         )
-        normalized_payload = serializer.normalized_preferences()
-
-        if not serializer.validated_data["let_agent_decide"]:
-            trip.agent_active = False
-            trip.agent_active_failed_message = ""
-            trip.preferences = {"agent_customization": normalized_payload}
-            trip.updated_by = request.user
-            trip.save(
-                update_fields=[
-                    "agent_active",
-                    "agent_active_failed_message",
-                    "preferences",
-                    "updated_by",
-                    "updated_at",
-                ]
-            )
-            update_user_profile_from_agent_preferences(request.user, normalized_payload)
-            return APIResponse.success(
-                data={
-                    "agent_active": False,
-                    "agent_active_failed_message": "",
-                    "agent_message": "Agent is not active because let_agent_decide is false.",
-                },
-                message="Trip agent preferences updated successfully.",
-            )
+        submitted_payload = serializer.normalized_preferences()
+        if serializer.validated_data["let_agent_decide"]:
+            normalized_payload = self._agent_decided_preferences(request.user, submitted_payload)
+        else:
+            normalized_payload = submitted_payload
 
         trip_snapshot = build_trip_snapshot(trip)
         session = get_or_create_agent_conversation_session(trip, request.user, current_step=2)
@@ -155,9 +135,22 @@ class TripAgentInitAPIView(UserTripQuerysetMixin, GenericAPIView):
                 "is_qna_complete": qna_response.get("is_qna_complete", False),
                 "context": qna_response.get("context"),
                 "current_step": trip.current_step,
+                "preferences": normalized_payload,
             },
             message="Trip agent preferences updated successfully.",
         )
+
+    def _agent_decided_preferences(self, user, fallback_payload):
+        profile = getattr(user, "profile", None)
+        if not profile:
+            return fallback_payload
+
+        return {
+            "travel_pace": profile.travel_pace or fallback_payload["travel_pace"],
+            "interest_tags": profile.travel_interests or fallback_payload["interest_tags"],
+            "dietary_needs": profile.dietary_preferences or fallback_payload["dietary_needs"],
+            "mobility_constraints": profile.mobility_constraints or fallback_payload["mobility_constraints"],
+        }
 
 
 class TripAgentCreateMessageAPIView(UserTripQuerysetMixin, GenericAPIView):

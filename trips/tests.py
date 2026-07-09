@@ -334,6 +334,55 @@ class TripCreateApiTests(TestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("destination_slugs", response.data)
 
+    def test_create_rejects_overlapping_trip_date_range_for_same_user(self):
+        Trip.objects.create(
+            user=self.user,
+            title="Existing Trip",
+            start_date=date(2026, 6, 10),
+            end_date=date(2026, 6, 15),
+            created_by=self.user,
+            updated_by=self.user,
+        )
+
+        response = self.client.post(
+            self.url,
+            {
+                "title": "Overlapping Trip",
+                "start_date": "2026-06-14",
+                "end_date": "2026-06-18",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            str(response.data["non_field_errors"][0]),
+            "Between this date range there are another trip exists.",
+        )
+
+    def test_create_allows_overlapping_trip_date_range_for_different_user(self):
+        other_user = User.objects.create_user(email="other@example.com", password="testpass123")
+        Trip.objects.create(
+            user=other_user,
+            title="Other User Trip",
+            start_date=date(2026, 6, 10),
+            end_date=date(2026, 6, 15),
+            created_by=other_user,
+            updated_by=other_user,
+        )
+
+        response = self.client.post(
+            self.url,
+            {
+                "title": "Same Dates",
+                "start_date": "2026-06-14",
+                "end_date": "2026-06-18",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
     def _create_destination(self, name, country_code):
         return Destination.objects.create(
             name=name,
@@ -353,6 +402,60 @@ class TripCreateApiTests(TestCase):
             created_by=self.user,
             updated_by=self.user,
         )
+
+
+class TripUpdateApiTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(email="traveler@example.com", password="testpass123")
+        self.client.force_authenticate(user=self.user)
+        self.trip = Trip.objects.create(
+            user=self.user,
+            title="Original Trip",
+            start_date=date(2026, 6, 1),
+            end_date=date(2026, 6, 5),
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        self.url = f"/api/v1/trips/{self.trip.id}/update/"
+
+    def test_update_rejects_overlapping_trip_date_range_for_same_user(self):
+        Trip.objects.create(
+            user=self.user,
+            title="Existing Trip",
+            start_date=date(2026, 6, 10),
+            end_date=date(2026, 6, 15),
+            created_by=self.user,
+            updated_by=self.user,
+        )
+
+        response = self.client.patch(
+            self.url,
+            {
+                "start_date": "2026-06-15",
+                "end_date": "2026-06-18",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            str(response.data["non_field_errors"][0]),
+            "Between this date range there are another trip exists.",
+        )
+
+    def test_update_allows_current_trip_existing_date_range(self):
+        response = self.client.patch(
+            self.url,
+            {
+                "title": "Renamed Trip",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.trip.refresh_from_db()
+        self.assertEqual(self.trip.title, "Renamed Trip")
 
 
 class TripSharingApiTests(TestCase):

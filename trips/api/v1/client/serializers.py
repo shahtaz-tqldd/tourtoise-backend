@@ -8,15 +8,22 @@ from rest_framework import serializers
 
 from app.utils.cloudinary import cloudinary_thumbnail_url
 from destinations.choices import Status
-from destinations.models import Destination
+from destinations.models import Destination, DestinationTag
 from trips.choices import TripVisibility
 from trips.models import Trip, TripAgentMessage, TripItinerary, TripItineraryDay, TripDestination, TripItineraryDayItem
 
 
+class DestinationTagSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DestinationTag
+        fields = ("name", "category")
+        read_only_fields = fields
+
 class TripDestinationSummarySerializer(serializers.ModelSerializer):
+    tags = DestinationTagSerializer(many=True, read_only=True)
     class Meta:
         model = Destination
-        fields = ("name", "slug", "country", "country_code", "destination_type", "cover_image")
+        fields = ("name", "tagline", "slug", "country", "region", "destination_type", "cover_image", "tags")
         read_only_fields = fields
 
 
@@ -297,6 +304,8 @@ class PublicTripDetailSerializer(serializers.ModelSerializer):
 
 
 class TripWriteSerializer(serializers.ModelSerializer):
+    DATE_RANGE_OVERLAP_MESSAGE = "Between this date range there are another trip exists."
+
     days = serializers.IntegerField(write_only=True, min_value=1, max_value=365, required=False)
     destination_slugs = serializers.ListField(
         child=serializers.SlugField(),
@@ -348,6 +357,9 @@ class TripWriteSerializer(serializers.ModelSerializer):
         if start_date and end_date and end_date < start_date:
             raise serializers.ValidationError({"end_date": "end_date must be after or equal to start_date."})
 
+        if start_date and end_date:
+            self._validate_date_range_has_no_trip_overlap(start_date, end_date)
+
         if destination_slugs:
             duplicates = sorted({slug for slug in destination_slugs if destination_slugs.count(slug) > 1})
             if duplicates:
@@ -366,6 +378,19 @@ class TripWriteSerializer(serializers.ModelSerializer):
                 )
 
         return attrs
+
+    def _validate_date_range_has_no_trip_overlap(self, start_date, end_date):
+        request = self.context["request"]
+        overlapping_trips = Trip.objects.filter(
+            user=request.user,
+            start_date__lte=end_date,
+            end_date__gte=start_date,
+        )
+        if self.instance:
+            overlapping_trips = overlapping_trips.exclude(pk=self.instance.pk)
+
+        if overlapping_trips.exists():
+            raise serializers.ValidationError({"non_field_errors": [self.DATE_RANGE_OVERLAP_MESSAGE]})
 
     def create(self, validated_data):
         request = self.context["request"]

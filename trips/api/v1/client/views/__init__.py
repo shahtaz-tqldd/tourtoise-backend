@@ -30,3 +30,10 @@ from .planning import (
   ActivateTripPlanAPIView,
   run_plan_agent_for_session,
 )
+from .notes import (
+  TripNoteCreateAPIView,
+  TripNoteDeleteAPIView,
+  TripNoteDetailAPIView,
+  TripNoteListAPIView,
+  TripNoteUpdateAPIView,
+)

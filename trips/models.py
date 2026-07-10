@@ -4,7 +4,7 @@ from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.db.models import Q
 
-from app.base.models import BaseModel
+from app.base.models import BaseModel, BaseImage
 from destinations.models import Activity, Attraction, Cuisine, Destination
 from trips.choices import (
     AccommodationPreference,
@@ -55,7 +55,7 @@ class Trip(BaseModel):
         blank=True,
     )
     
-    origin_city = models.CharField(max_length=120, blank=True)
+    origin_cty = models.CharField(max_length=120, blank=True)
     origin_country = models.CharField(max_length=120, blank=True)
     start_location_address = models.CharField(max_length=500, blank=True)
     start_location_latitude = models.FloatField(null=True, blank=True)
@@ -638,3 +638,26 @@ class TripAgentMessage(BaseModel):
 
     def __str__(self):
         return f"{self.sender} message {self.sequence} for {self.session_id}"
+
+
+# trip notes
+class TripNote(BaseModel):
+    trip = models.ForeignKey(
+        Trip,
+        on_delete=models.CASCADE,
+        related_name="trip_notes",
+    )
+    content = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["trip", "created_at"]),
+        ]
+
+    def __str__(self):
+        return f"Note for {self.trip.title}"
+
+
+class TripNoteImage(BaseImage):
+    note = models.ForeignKey(TripNote, on_delete=models.CASCADE, related_name="trip_note_images")

@@ -10,7 +10,16 @@ from app.utils.cloudinary import cloudinary_thumbnail_url
 from destinations.choices import Status
 from destinations.models import Destination, DestinationTag
 from trips.choices import TripVisibility
-from trips.models import Trip, TripAgentMessage, TripItinerary, TripItineraryDay, TripDestination, TripItineraryDayItem
+from trips.models import (
+    Trip,
+    TripAgentMessage,
+    TripItinerary,
+    TripItineraryDay,
+    TripDestination,
+    TripItineraryDayItem,
+    TripNote,
+    TripNoteImage,
+)
 
 
 class DestinationTagSerializer(serializers.ModelSerializer):
@@ -118,6 +127,88 @@ class TripItineraryItemSerializer(serializers.ModelSerializer):
         instance.updated_by = self.context["request"].user
         instance.save()
         return instance
+
+
+class TripNoteImageSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TripNoteImage
+        fields = ("id", "image_url", "caption", "sort_order", "created_at")
+        read_only_fields = ("id", "created_at")
+
+
+class TripNoteSerializer(serializers.ModelSerializer):
+    images = TripNoteImageSerializer(source="trip_note_images", many=True, required=False)
+
+    class Meta:
+        model = TripNote
+        fields = (
+            "id",
+            "trip",
+            "content",
+            "images",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = ("id", "trip", "created_at", "updated_at")
+
+    def validate(self, attrs):
+        content = attrs.get("content", getattr(self.instance, "content", "")).strip()
+        images = attrs.get("trip_note_images")
+        has_existing_images = bool(self.instance and self.instance.trip_note_images.exists())
+
+        if not content and images == []:
+            raise serializers.ValidationError("A note must include content or at least one image.")
+
+        if not content and images is None and not has_existing_images:
+            raise serializers.ValidationError("A note must include content or at least one image.")
+
+        return attrs
+
+    def create(self, validated_data):
+        request = self.context["request"]
+        trip = self.context["trip"]
+        images = validated_data.pop("trip_note_images", [])
+
+        with transaction.atomic():
+            note = TripNote.objects.create(
+                trip=trip,
+                created_by=request.user,
+                updated_by=request.user,
+                **validated_data,
+            )
+            self._replace_images(note, images)
+            return note
+
+    def update(self, instance, validated_data):
+        images = validated_data.pop("trip_note_images", None)
+
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.updated_by = self.context["request"].user
+
+        with transaction.atomic():
+            instance.save()
+            if images is not None:
+                self._replace_images(instance, images)
+            return instance
+
+    def _replace_images(self, note, images):
+        request = self.context["request"]
+        note.trip_note_images.all().delete()
+        TripNoteImage.objects.bulk_create(
+            [
+                TripNoteImage(
+                    note=note,
+                    image_url=image["image_url"],
+                    caption=image.get("caption", ""),
+                    sort_order=image.get("sort_order", index),
+                    created_by=request.user,
+                )
+                for index, image in enumerate(images, start=1)
+            ]
+        )
+        if hasattr(note, "_prefetched_objects_cache"):
+            note._prefetched_objects_cache.pop("trip_note_images", None)
 
 
 class TripDaySerializer(serializers.ModelSerializer):

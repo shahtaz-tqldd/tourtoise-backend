@@ -26,6 +26,14 @@ trip_destination_urlpatterns = [
     ),
 ]
 
+trip_notes = [
+    path("create/", views.TripNoteCreateAPIView.as_view(), name="trip-note-create"),
+    path("list/", views.TripNoteListAPIView.as_view(), name="trip-note-list"),
+    path("<uuid:note_id>/details/", views.TripNoteDetailAPIView.as_view(), name="trip-note-detail"),
+    path("<uuid:note_id>/update/", views.TripNoteUpdateAPIView.as_view(), name="trip-note-update"),
+    path("<uuid:note_id>/delete/", views.TripNoteDeleteAPIView.as_view(), name="trip-note-delete"),
+]
+
 trip_urlpatterns = [
     path("create/", views.TripCreateAPIView.as_view(), name="trip-create"),
     path("list/", views.TripListAPIView.as_view(), name="trip-list"),
@@ -43,4 +51,5 @@ urlpatterns = [
     path("agent/create-message/", views.TripAgentCreateMessageAPIView.as_view(), name="trip-agent-create-message-legacy"),
     path("planning/", include(planning_urlpatterns)),
     path("<uuid:trip_id>/destinations/", include(trip_destination_urlpatterns)),
+    path("<uuid:trip_id>/notes/", include(trip_notes)),
 ]

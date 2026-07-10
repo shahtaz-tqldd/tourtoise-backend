@@ -55,7 +55,7 @@ class Trip(BaseModel):
         blank=True,
     )
     
-    origin_cty = models.CharField(max_length=120, blank=True)
+    origin_city = models.CharField(max_length=120, blank=True)
     origin_country = models.CharField(max_length=120, blank=True)
     start_location_address = models.CharField(max_length=500, blank=True)
     start_location_latitude = models.FloatField(null=True, blank=True)

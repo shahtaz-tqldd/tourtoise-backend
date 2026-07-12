@@ -29,10 +29,37 @@ trip_destination_urlpatterns = [
 trip_notes = [
     path("create/", views.TripNoteCreateAPIView.as_view(), name="trip-note-create"),
     path("list/", views.TripNoteListAPIView.as_view(), name="trip-note-list"),
-    path("<uuid:note_id>/details/", views.TripNoteDetailAPIView.as_view(), name="trip-note-detail"),
-    path("<uuid:note_id>/update/", views.TripNoteUpdateAPIView.as_view(), name="trip-note-update"),
-    path("<uuid:note_id>/delete/", views.TripNoteDeleteAPIView.as_view(), name="trip-note-delete"),
+    path("<uuid:note_id>/", views.TripNoteDetailAPIView.as_view(), name="trip-note-detail"),
 ]
+
+trip_packing_items = [
+    path("", views.TripPreparationPackingItemListCreateAPIView.as_view(), name="trip-packing-item-list-create"),
+    path(
+        "<uuid:packing_item_id>/",
+        views.TripPreparationPackingItemDetailAPIView.as_view(),
+        name="trip-packing-item-detail",
+    ),
+]
+
+trip_heads_up_items = [
+    path("", views.TripHeadsUpInfoItemListCreateAPIView.as_view(), name="trip-heads-up-item-list-create"),
+    path(
+        "<uuid:heads_up_item_id>/",
+        views.TripHeadsUpInfoItemDetailAPIView.as_view(),
+        name="trip-heads-up-item-detail",
+    ),
+]
+
+trip_required_documents = [
+    path("", views.TripRequiredDocumentItemListCreateAPIView.as_view(), name="trip-required-document-list-create"),
+    path(
+        "<uuid:document_item_id>/",
+        views.TripRequiredDocumentItemDetailAPIView.as_view(),
+        name="trip-required-document-detail",
+    ),
+]
+
+
 
 trip_urlpatterns = [
     path("create/", views.TripCreateAPIView.as_view(), name="trip-create"),
@@ -49,7 +76,11 @@ urlpatterns = [
     path("", include(trip_urlpatterns)),
     path("agent-active/", views.TripAgentInitAPIView.as_view(), name="trip-agent-active"),
     path("agent/create-message/", views.TripAgentCreateMessageAPIView.as_view(), name="trip-agent-create-message-legacy"),
+    path("<uuid:trip_id>/routes/", views.TripRoutePlanListAPIView.as_view(), name="trip-route-list"),
     path("planning/", include(planning_urlpatterns)),
     path("<uuid:trip_id>/destinations/", include(trip_destination_urlpatterns)),
     path("<uuid:trip_id>/notes/", include(trip_notes)),
+    path("<uuid:trip_id>/packing-items/", include(trip_packing_items)),
+    path("<uuid:trip_id>/heads-up/", include(trip_heads_up_items)),
+    path("<uuid:trip_id>/documents/", include(trip_required_documents)),
 ]

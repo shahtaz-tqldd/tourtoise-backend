@@ -18,6 +18,7 @@ from .trip_extensions import (
   TripItineraryItemCreateAPIView,
   TripItineraryItemDeleteAPIView,
   TripItineraryItemUpdateAPIView,
+  TripRoutePlanListAPIView,
 )
 from .planning import (
   TripAgentInitAPIView,
@@ -32,8 +33,14 @@ from .planning import (
 )
 from .notes import (
   TripNoteCreateAPIView,
-  TripNoteDeleteAPIView,
   TripNoteDetailAPIView,
   TripNoteListAPIView,
-  TripNoteUpdateAPIView,
+)
+from .preparation_items import (
+  TripHeadsUpInfoItemDetailAPIView,
+  TripHeadsUpInfoItemListCreateAPIView,
+  TripPreparationPackingItemDetailAPIView,
+  TripPreparationPackingItemListCreateAPIView,
+  TripRequiredDocumentItemDetailAPIView,
+  TripRequiredDocumentItemListCreateAPIView,
 )

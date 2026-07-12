@@ -2,6 +2,7 @@ from datetime import date, timedelta
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import IntegrityError
 from django.test import TestCase
 from django.utils import timezone
@@ -11,7 +12,16 @@ from rest_framework.test import APIClient
 from destinations.choices import BudgetTier, DestinationType
 from destinations.choices import Status as DestinationStatus
 from destinations.models import Destination
-from trips.models import Trip, TripAgentConversationSession, TripAgentMessage, TripDestination
+from trips.models import (
+    Trip,
+    TripAgentConversationSession,
+    TripAgentMessage,
+    TripDestination,
+    TripItinerary,
+    TripPreparation,
+    TripRoutePlanItem,
+    TripRequiredDocumentItem,
+)
 
 
 User = get_user_model()
@@ -801,5 +811,158 @@ class TripAgentCreateMessageApiTests(TestCase):
             },
             format="json",
         )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+
+class TripRequiredDocumentApiTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(email="traveler@example.com", password="testpass123")
+        self.client.force_authenticate(user=self.user)
+        self.trip = Trip.objects.create(
+            user=self.user,
+            title="Document Trip",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        self.url = f"/api/v1/trips/{self.trip.id}/documents/"
+
+    @patch("trips.api.v1.client.serializers.upload_file")
+    def test_creates_required_document_with_image_upload(self, upload_file_mock):
+        upload_file_mock.return_value = {
+            "url": "https://res.cloudinary.com/demo/image/upload/trip-documents/passport.jpg",
+            "public_id": "trip-documents/passport",
+        }
+        upload = SimpleUploadedFile("passport.jpg", b"image-bytes", content_type="image/jpeg")
+
+        response = self.client.post(
+            self.url,
+            {
+                "document_name": "Passport",
+                "required_level": "required",
+                "document": upload,
+            },
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["data"]["document_name"], "Passport")
+        self.assertEqual(
+            response.data["data"]["document_url"],
+            "https://res.cloudinary.com/demo/image/upload/trip-documents/passport.jpg",
+        )
+        self.assertEqual(response.data["data"]["document_url_public_id"], "trip-documents/passport")
+        upload_file_mock.assert_called_once()
+
+    @patch("trips.api.v1.client.serializers.upload_file")
+    def test_updates_required_document_with_pdf_upload(self, upload_file_mock):
+        preparation = TripPreparation.objects.create(trip=self.trip, created_by=self.user, updated_by=self.user)
+        document = TripRequiredDocumentItem.objects.create(
+            preparation=preparation,
+            document_name="Visa",
+            sort_order=1,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        upload_file_mock.return_value = {
+            "url": "https://res.cloudinary.com/demo/raw/upload/trip-documents/visa.pdf",
+            "public_id": "trip-documents/visa",
+        }
+        upload = SimpleUploadedFile("visa.pdf", b"%PDF-1.4", content_type="application/pdf")
+
+        response = self.client.patch(
+            f"{self.url}{document.id}/",
+            {
+                "document": upload,
+            },
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            response.data["data"]["document_url"],
+            "https://res.cloudinary.com/demo/raw/upload/trip-documents/visa.pdf",
+        )
+        document.refresh_from_db()
+        self.assertEqual(document.document_url_public_id, "trip-documents/visa")
+
+    def test_rejects_unsupported_document_upload_type(self):
+        upload = SimpleUploadedFile("itinerary.txt", b"text", content_type="text/plain")
+
+        response = self.client.post(
+            self.url,
+            {
+                "document_name": "Itinerary",
+                "document": upload,
+            },
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+class TripRoutePlanListApiTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(email="traveler@example.com", password="testpass123")
+        self.other_user = User.objects.create_user(email="other@example.com", password="testpass123")
+        self.client.force_authenticate(user=self.user)
+        self.trip = Trip.objects.create(
+            user=self.user,
+            title="Route Plan Trip",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        self.url = f"/api/v1/trips/{self.trip.id}/route-plans/"
+
+    def test_lists_route_plan_items_for_trip(self):
+        itinerary = TripItinerary.objects.create(
+            trip=self.trip,
+            title="Dhaka Weekend",
+            summary="Short city plan",
+        )
+        TripRoutePlanItem.objects.create(
+            itinerary=itinerary,
+            date=date(2026, 7, 20),
+            from_point="Hotel",
+            to_point="Museum",
+            start_time="09:30",
+            transport_mode="car",
+            estimated_cost="12.50",
+            estimated_duration=timedelta(minutes=35),
+            notes="Morning transfer",
+        )
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["message"], "Trip route plan fetched successfully.")
+        self.assertEqual(len(response.data["data"]), 1)
+        route_plan = response.data["data"][0]
+        self.assertEqual(route_plan["date"], "2026-07-20")
+        self.assertEqual(route_plan["from_point"], "Hotel")
+        self.assertEqual(route_plan["to_point"], "Museum")
+        self.assertEqual(route_plan["start_time"], "09:30:00")
+        self.assertEqual(route_plan["transport_mode"], "car")
+        self.assertEqual(route_plan["estimated_cost"], "12.50")
+        self.assertEqual(route_plan["estimated_duration"], "0:35:00")
+        self.assertEqual(route_plan["notes"], "Morning transfer")
+
+    def test_returns_empty_list_when_trip_has_no_itinerary(self):
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["data"], [])
+
+    def test_rejects_route_plan_for_another_users_trip(self):
+        other_trip = Trip.objects.create(
+            user=self.other_user,
+            title="Other Route Trip",
+            created_by=self.other_user,
+            updated_by=self.other_user,
+        )
+
+        response = self.client.get(f"/api/v1/trips/{other_trip.id}/route-plans/")
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)

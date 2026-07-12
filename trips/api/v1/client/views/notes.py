@@ -69,18 +69,22 @@ class TripNoteListAPIView(UserTripQuerysetMixin, GenericAPIView):
 
 class TripNoteDetailAPIView(UserTripQuerysetMixin, GenericAPIView):
     """
-    Get trip note detail API.
+    Get, update, or delete a trip note API.
 
     Frontend request:
-    - Method: GET
+    - Methods: GET, PATCH, DELETE
     - Headers: authenticated bearer token
     - URL params: `trip_id`, `note_id`
+    - PATCH body: send only note fields that should change.
+    - PATCH images: send `images` to replace the existing image list.
 
     Frontend response:
-    - 200 success with the note and images.
+    - GET/PATCH: 200 success with the note and images.
+    - DELETE: 200 success with no data payload.
     """
 
     permission_classes = [IsAuthenticated]
+    serializer_class = TripNoteSerializer
 
     def get_object(self):
         trip = self.get_trip_by_id()
@@ -95,25 +99,6 @@ class TripNoteDetailAPIView(UserTripQuerysetMixin, GenericAPIView):
             data=TripNoteSerializer(self.get_object()).data,
             message="Trip note fetched successfully.",
         )
-
-
-class TripNoteUpdateAPIView(TripNoteDetailAPIView):
-    """
-    Update trip note API.
-
-    Frontend request:
-    - Method: PATCH
-    - Headers: authenticated bearer token
-    - URL params: `trip_id`, `note_id`
-    - Content-Type: application/json
-    - Send only note fields that should change.
-    - Send `images` to replace the existing image list.
-
-    Frontend response:
-    - 200 success with the updated note and images.
-    """
-
-    serializer_class = TripNoteSerializer
 
     def patch(self, request, *args, **kwargs):
         note = self.get_object()
@@ -130,25 +115,6 @@ class TripNoteUpdateAPIView(TripNoteDetailAPIView):
             message="Trip note updated successfully.",
         )
 
-
-class TripNoteDeleteAPIView(UserTripQuerysetMixin, GenericAPIView):
-    """
-    Delete trip note API.
-
-    Frontend request:
-    - Method: DELETE
-    - Headers: authenticated bearer token
-    - URL params: `trip_id`, `note_id`
-    - No request body is required.
-
-    Frontend response:
-    - 200 success with no data payload.
-    """
-
-    permission_classes = [IsAuthenticated]
-
     def delete(self, request, *args, **kwargs):
-        trip = self.get_trip_by_id()
-        note = get_object_or_404(TripNote, trip=trip, pk=self.kwargs["note_id"])
-        note.delete()
+        self.get_object().delete()
         return APIResponse.success(message="Trip note deleted successfully.")

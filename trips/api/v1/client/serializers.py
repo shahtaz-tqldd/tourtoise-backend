@@ -2,11 +2,12 @@ from datetime import timedelta
 from uuid import uuid4
 
 from django.db import transaction
+from django.db.models import Max
 from django.conf import settings
 from django.urls import reverse
 from rest_framework import serializers
 
-from app.utils.cloudinary import cloudinary_thumbnail_url
+from app.utils.cloudinary import cloudinary_thumbnail_url, upload_file
 from destinations.choices import Status
 from destinations.models import Destination, DestinationTag
 from trips.choices import TripVisibility
@@ -17,8 +18,12 @@ from trips.models import (
     TripItineraryDay,
     TripDestination,
     TripItineraryDayItem,
+    TripRoutePlanItem,
+    TripHeadsUpInfoItem,
     TripNote,
     TripNoteImage,
+    TripPreparationPackingItem,
+    TripRequiredDocumentItem,
 )
 
 
@@ -129,6 +134,32 @@ class TripItineraryItemSerializer(serializers.ModelSerializer):
         return instance
 
 
+class TripRoutePlanItemSerializer(serializers.ModelSerializer):
+    estimated_cost = serializers.SerializerMethodField()
+    estimated_duration = serializers.SerializerMethodField()
+
+    class Meta:
+        model = TripRoutePlanItem
+        fields = (
+            "id",
+            "date",
+            "notes",
+            "to_point",
+            "from_point",
+            "start_time",
+            "transport_mode",
+            "estimated_cost",
+            "estimated_duration",
+        )
+        read_only_fields = fields
+
+    def get_estimated_cost(self, obj):
+        return str(obj.estimated_cost) if obj.estimated_cost is not None else None
+
+    def get_estimated_duration(self, obj):
+        return str(obj.estimated_duration) if obj.estimated_duration else None
+
+
 class TripNoteImageSerializer(serializers.ModelSerializer):
     class Meta:
         model = TripNoteImage
@@ -138,6 +169,11 @@ class TripNoteImageSerializer(serializers.ModelSerializer):
 
 class TripNoteSerializer(serializers.ModelSerializer):
     images = TripNoteImageSerializer(source="trip_note_images", many=True, required=False)
+    changed_orders = serializers.ListField(
+        child=serializers.DictField(),
+        write_only=True,
+        required=False,
+    )
 
     class Meta:
         model = TripNote
@@ -146,6 +182,7 @@ class TripNoteSerializer(serializers.ModelSerializer):
             "trip",
             "content",
             "images",
+            "changed_orders",
             "created_at",
             "updated_at",
         )
@@ -181,6 +218,7 @@ class TripNoteSerializer(serializers.ModelSerializer):
 
     def update(self, instance, validated_data):
         images = validated_data.pop("trip_note_images", None)
+        changed_orders = validated_data.pop("changed_orders", None)
 
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
@@ -190,6 +228,8 @@ class TripNoteSerializer(serializers.ModelSerializer):
             instance.save()
             if images is not None:
                 self._replace_images(instance, images)
+            if changed_orders is not None:
+                self._update_image_orders(instance, changed_orders)
             return instance
 
     def _replace_images(self, note, images):
@@ -209,6 +249,165 @@ class TripNoteSerializer(serializers.ModelSerializer):
         )
         if hasattr(note, "_prefetched_objects_cache"):
             note._prefetched_objects_cache.pop("trip_note_images", None)
+
+    def _update_image_orders(self, note, changed_orders):
+        order_map = self._validate_changed_orders(changed_orders)
+        images = list(note.trip_note_images.filter(pk__in=order_map.keys()))
+
+        if len(images) != len(order_map):
+            raise serializers.ValidationError({"changed_orders": "One or more image IDs are invalid for this note."})
+
+        for image in images:
+            image.sort_order = order_map[str(image.pk)]
+
+        TripNoteImage.objects.bulk_update(images, ["sort_order"])
+        if hasattr(note, "_prefetched_objects_cache"):
+            note._prefetched_objects_cache.pop("trip_note_images", None)
+
+    def _validate_changed_orders(self, changed_orders):
+        if not isinstance(changed_orders, list):
+            raise serializers.ValidationError({"changed_orders": "Expected a list of order changes."})
+
+        order_map = {}
+        seen_orders = set()
+        for item in changed_orders:
+            if not isinstance(item, dict):
+                raise serializers.ValidationError({"changed_orders": "Each order change must be an object."})
+
+            item_id = str(item.get("id", "")).strip()
+            sort_order = item.get("sort_order")
+
+            if not item_id or sort_order is None:
+                raise serializers.ValidationError({"changed_orders": "Each item must include id and sort_order."})
+
+            if item_id in order_map:
+                raise serializers.ValidationError({"changed_orders": "Duplicate IDs are not allowed."})
+
+            try:
+                sort_order = int(sort_order)
+            except (TypeError, ValueError):
+                raise serializers.ValidationError({"changed_orders": "sort_order must be an integer."})
+
+            if sort_order < 0:
+                raise serializers.ValidationError({"changed_orders": "sort_order must be zero or greater."})
+
+            if sort_order in seen_orders:
+                raise serializers.ValidationError({"changed_orders": "Duplicate sort_order values are not allowed."})
+
+            order_map[item_id] = sort_order
+            seen_orders.add(sort_order)
+
+        if not order_map:
+            raise serializers.ValidationError({"changed_orders": "At least one order change is required."})
+
+        return order_map
+
+
+class PreparationItemSortOrderMixin:
+    preparation_context_key = "preparation"
+    sort_order_conflict_message = "Sort order already exists for this trip preparation."
+
+    def validate_sort_order(self, value):
+        preparation = self.context[self.preparation_context_key]
+        queryset = self.Meta.model.objects.filter(preparation=preparation, sort_order=value)
+
+        if self.instance:
+            queryset = queryset.exclude(pk=self.instance.pk)
+
+        if queryset.exists():
+            raise serializers.ValidationError(self.sort_order_conflict_message)
+
+        return value
+
+    def _set_next_sort_order(self, validated_data):
+        if "sort_order" in self.initial_data:
+            return
+
+        preparation = self.context[self.preparation_context_key]
+        next_sort_order = (
+            self.Meta.model.objects.filter(preparation=preparation).aggregate(Max("sort_order"))["sort_order__max"]
+            or 0
+        ) + 1
+        validated_data["sort_order"] = next_sort_order
+
+    def create(self, validated_data):
+        preparation = self.context[self.preparation_context_key]
+        self._set_next_sort_order(validated_data)
+        return self.Meta.model.objects.create(preparation=preparation, **validated_data)
+
+
+class TripPreparationPackingItemSerializer(PreparationItemSortOrderMixin, serializers.ModelSerializer):
+    class Meta:
+        model = TripPreparationPackingItem
+        fields = (
+            "id",
+            "item",
+            "quantity",
+            "category",
+            "priority",
+            "is_packed",
+            "additional_notes",
+        )
+        read_only_fields = ("id",)
+
+
+class TripHeadsUpInfoItemSerializer(PreparationItemSortOrderMixin, serializers.ModelSerializer):
+    class Meta:
+        model = TripHeadsUpInfoItem
+        fields = (
+            "id",
+            "title",
+            "category",
+            "severity",
+            "sort_order",
+            "additional_note",
+        )
+        read_only_fields = ("id",)
+
+
+class TripRequiredDocumentItemSerializer(PreparationItemSortOrderMixin, serializers.ModelSerializer):
+    document = serializers.FileField(write_only=True, required=False)
+
+    class Meta:
+        model = TripRequiredDocumentItem
+        fields = (
+            "id",
+            "document_name",
+            "document",
+            "document_url",
+            "document_url_public_id",
+            "required_level",
+            "sort_order",
+            "additional_note",
+        )
+        read_only_fields = ("id", "document_url", "document_url_public_id")
+
+    def validate_document(self, value):
+        allowed_types = {"application/pdf"}
+        content_type = getattr(value, "content_type", "")
+        if content_type.startswith("image/") or content_type in allowed_types:
+            return value
+        raise serializers.ValidationError("Only image and PDF files are allowed.")
+
+    def create(self, validated_data):
+        document = validated_data.pop("document", None)
+        if document:
+            upload = upload_file(document, folder="trip-documents")
+            validated_data["document_url"] = upload["url"]
+            validated_data["document_url_public_id"] = upload["public_id"]
+        return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        document = validated_data.pop("document", None)
+        if document:
+            upload = upload_file(document, folder="trip-documents")
+            validated_data["document_url"] = upload["url"]
+            validated_data["document_url_public_id"] = upload["public_id"]
+
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+        return instance
 
 
 class TripDaySerializer(serializers.ModelSerializer):

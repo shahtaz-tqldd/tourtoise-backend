@@ -57,6 +57,23 @@ def upload_image(file_obj, folder=None, public_id=None):
     }
 
 
+def upload_file(file_obj, folder=None, public_id=None, resource_type="auto"):
+    uploader = _get_client()
+    upload_folder = folder or settings.CLOUDINARY_FOLDER
+    options = {
+        "folder": upload_folder,
+        "resource_type": resource_type,
+    }
+    if public_id:
+        options["public_id"] = public_id
+        options["overwrite"] = True
+    result = uploader.upload(file_obj, **options)
+    return {
+        "url": result.get("secure_url") or result.get("url"),
+        "public_id": result.get("public_id"),
+    }
+
+
 def _prepare_upload_file(file_obj):
     try:
         original_position = file_obj.tell()

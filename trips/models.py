@@ -353,7 +353,7 @@ class TripItineraryBudget(BaseModel):
 
 
 # trip preparation
-class TripPreparation(models.Model):
+class TripPreparation(BaseModel):
     trip = models.OneToOneField(
         Trip,
         on_delete=models.CASCADE,
@@ -377,7 +377,7 @@ class TripPreparation(models.Model):
         return self.title or f"{self.trip.title} preparation"
 
 
-class TripPreparationPackingItem(models.Model):
+class TripPreparationPackingItem(BaseModel):
     CLOTHING = "clothing"
     TOILETRIES = "toiletries"
     ELECTRONICS = "electronics"
@@ -429,7 +429,8 @@ class TripPreparationPackingItem(models.Model):
         default=RECOMMENDED,
         db_index=True,
     )
-
+    
+    is_packed = models.BooleanField(default=False, db_index=True)
     sort_order = models.PositiveSmallIntegerField(default=1)
     additional_notes = models.TextField(blank=True, null=True)
     class Meta:
@@ -450,7 +451,7 @@ class TripPreparationPackingItem(models.Model):
         return self.item
 
 
-class TripRequiredDocumentItem(models.Model):
+class TripRequiredDocumentItem(BaseModel):
     REQUIRED = "required"
     RECOMMENDED = "recommended"
     CONDITIONAL = "conditional"
@@ -496,7 +497,7 @@ class TripRequiredDocumentItem(models.Model):
         return self.document_name
 
 
-class TripHeadsUpInfoItem(models.Model):
+class TripHeadsUpInfoItem(BaseModel):
     SAFETY = "safety"
     WEATHER = "weather"
     CULTURE = "culture"

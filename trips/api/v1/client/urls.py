@@ -57,6 +57,20 @@ trip_required_documents = [
         views.TripRequiredDocumentItemDetailAPIView.as_view(),
         name="trip-required-document-detail",
     ),
+    path(
+        "<uuid:document_item_id>/file/",
+        views.TripRequiredDocumentFileDeleteAPIView.as_view(),
+        name="trip-required-document-file-delete",
+    ),
+]
+
+trip_plan = [
+    path("daywise/", views.TripDayWisePlanListAPIView.as_view(), name="trip-daywise-plan-list"),
+    path(
+        "items/<int:item_id>/",
+        views.TripItineraryItemUpdateAPIView.as_view(),
+        name="trip-plan-item-update",
+    ),
 ]
 
 
@@ -83,4 +97,5 @@ urlpatterns = [
     path("<uuid:trip_id>/packing-items/", include(trip_packing_items)),
     path("<uuid:trip_id>/heads-up/", include(trip_heads_up_items)),
     path("<uuid:trip_id>/documents/", include(trip_required_documents)),
+    path("<uuid:trip_id>/plan/", include(trip_plan)),
 ]

@@ -161,6 +161,33 @@ def delete_image(public_id=None, image_url=None):
     return {"result": result.get("result"), "public_id": resolved_public_id}
 
 
+def delete_file(public_id=None, file_url=None):
+    resolved_public_id = public_id or extract_public_id(file_url)
+    if not resolved_public_id:
+        return {"result": "skipped"}
+
+    uploader = _get_client()
+    resource_type = extract_resource_type(file_url) or "image"
+    result = uploader.destroy(resolved_public_id, resource_type=resource_type)
+    return {
+        "result": result.get("result"),
+        "public_id": resolved_public_id,
+        "resource_type": resource_type,
+    }
+
+
+def extract_resource_type(file_url):
+    if not file_url:
+        return None
+
+    parsed = urlparse(file_url)
+    path_parts = [part for part in parsed.path.split("/") if part]
+    for resource_type in ("image", "raw", "video"):
+        if resource_type in path_parts and "upload" in path_parts:
+            return resource_type
+    return None
+
+
 def extract_public_id(image_url):
     if not image_url:
         return None

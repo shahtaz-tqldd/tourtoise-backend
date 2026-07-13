@@ -7,6 +7,7 @@ from rest_framework.generics import GenericAPIView
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 
+from app.utils.cloudinary import delete_file
 from app.utils.response import APIResponse
 from trips.api.v1.client.serializers import (
     TripHeadsUpInfoItemSerializer,
@@ -229,6 +230,22 @@ class TripRequiredDocumentItemDetailAPIView(TripPreparationItemDetailAPIView):
     update_message = "Trip required document updated successfully."
     delete_message = "Trip required document deleted successfully."
     reorder_message = "Trip required document orders updated successfully."
+
+
+class TripRequiredDocumentFileDeleteAPIView(TripRequiredDocumentItemDetailAPIView):
+    delete_message = "Trip required document file deleted successfully."
+
+    def delete(self, request, *args, **kwargs):
+        item = self.get_object()
+        delete_file(public_id=item.document_url_public_id, file_url=item.document_url)
+        item.document_file_name = ""
+        item.document_url = None
+        item.document_url_public_id = ""
+        item.save(update_fields=["document_file_name", "document_url", "document_url_public_id"])
+        return APIResponse.success(
+            data=self.get_serializer(item).data,
+            message=self.delete_message,
+        )
 
 
 class TripHeadsUpInfoItemListCreateAPIView(TripPreparationItemListCreateAPIView):

@@ -770,6 +770,16 @@ class TripPlanningPrepartionAPIView(UserTripQuerysetMixin, GenericAPIView):
         return {
             "id": str(item.id),
             "document_name": item.document_name,
+            "document": (
+                {
+                    "file_name": item.document_file_name,
+                    "url": item.document_url,
+                    "public_id": item.document_url_public_id,
+                }
+                if item.document_url
+                else None
+            ),
+            "document_file_name": item.document_file_name,
             "document_url": item.document_url,
             "document_url_public_id": item.document_url_public_id,
             "required_level": item.required_level,

@@ -18,6 +18,8 @@ from trips.models import (
     TripAgentMessage,
     TripDestination,
     TripItinerary,
+    TripItineraryDay,
+    TripItineraryDayItem,
     TripPreparation,
     TripRoutePlanItem,
     TripRequiredDocumentItem,
@@ -848,6 +850,15 @@ class TripRequiredDocumentApiTests(TestCase):
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(response.data["data"]["document_name"], "Passport")
+        self.assertEqual(response.data["data"]["document_file_name"], "passport.jpg")
+        self.assertEqual(
+            response.data["data"]["document"],
+            {
+                "file_name": "passport.jpg",
+                "url": "https://res.cloudinary.com/demo/image/upload/trip-documents/passport.jpg",
+                "public_id": "trip-documents/passport",
+            },
+        )
         self.assertEqual(
             response.data["data"]["document_url"],
             "https://res.cloudinary.com/demo/image/upload/trip-documents/passport.jpg",
@@ -884,8 +895,99 @@ class TripRequiredDocumentApiTests(TestCase):
             response.data["data"]["document_url"],
             "https://res.cloudinary.com/demo/raw/upload/trip-documents/visa.pdf",
         )
+        self.assertEqual(response.data["data"]["document_file_name"], "visa.pdf")
+        self.assertEqual(
+            response.data["data"]["document"],
+            {
+                "file_name": "visa.pdf",
+                "url": "https://res.cloudinary.com/demo/raw/upload/trip-documents/visa.pdf",
+                "public_id": "trip-documents/visa",
+            },
+        )
         document.refresh_from_db()
+        self.assertEqual(document.document_file_name, "visa.pdf")
         self.assertEqual(document.document_url_public_id, "trip-documents/visa")
+
+    def test_lists_required_document_file_name(self):
+        preparation = TripPreparation.objects.create(trip=self.trip, created_by=self.user, updated_by=self.user)
+        TripRequiredDocumentItem.objects.create(
+            preparation=preparation,
+            document_name="Ticket",
+            document_file_name="ticket.pdf",
+            document_url="https://res.cloudinary.com/demo/raw/upload/trip-documents/ticket.pdf",
+            document_url_public_id="trip-documents/ticket",
+            sort_order=1,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["data"][0]["document_file_name"], "ticket.pdf")
+        self.assertEqual(
+            response.data["data"][0]["document"],
+            {
+                "file_name": "ticket.pdf",
+                "url": "https://res.cloudinary.com/demo/raw/upload/trip-documents/ticket.pdf",
+                "public_id": "trip-documents/ticket",
+            },
+        )
+
+    def test_updates_required_document_file_name(self):
+        preparation = TripPreparation.objects.create(trip=self.trip, created_by=self.user, updated_by=self.user)
+        document = TripRequiredDocumentItem.objects.create(
+            preparation=preparation,
+            document_name="Ticket",
+            document_file_name="old-ticket.pdf",
+            document_url="https://res.cloudinary.com/demo/raw/upload/trip-documents/ticket.pdf",
+            document_url_public_id="trip-documents/ticket",
+            sort_order=1,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+
+        response = self.client.patch(
+            f"{self.url}{document.id}/",
+            {"document_file_name": "updated-ticket.pdf"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["data"]["document_file_name"], "updated-ticket.pdf")
+        self.assertEqual(response.data["data"]["document"]["file_name"], "updated-ticket.pdf")
+        document.refresh_from_db()
+        self.assertEqual(document.document_file_name, "updated-ticket.pdf")
+
+    @patch("trips.api.v1.client.views.preparation_items.delete_file")
+    def test_deletes_required_document_file_from_item_and_storage(self, delete_file_mock):
+        preparation = TripPreparation.objects.create(trip=self.trip, created_by=self.user, updated_by=self.user)
+        document = TripRequiredDocumentItem.objects.create(
+            preparation=preparation,
+            document_name="Visa",
+            document_file_name="visa.pdf",
+            document_url="https://res.cloudinary.com/demo/raw/upload/trip-documents/visa.pdf",
+            document_url_public_id="trip-documents/visa",
+            sort_order=1,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+
+        response = self.client.delete(f"{self.url}{document.id}/file/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIsNone(response.data["data"]["document"])
+        self.assertEqual(response.data["data"]["document_file_name"], "")
+        self.assertIsNone(response.data["data"]["document_url"])
+        self.assertEqual(response.data["data"]["document_url_public_id"], "")
+        delete_file_mock.assert_called_once_with(
+            public_id="trip-documents/visa",
+            file_url="https://res.cloudinary.com/demo/raw/upload/trip-documents/visa.pdf",
+        )
+        document.refresh_from_db()
+        self.assertEqual(document.document_file_name, "")
+        self.assertIsNone(document.document_url)
+        self.assertEqual(document.document_url_public_id, "")
 
     def test_rejects_unsupported_document_upload_type(self):
         upload = SimpleUploadedFile("itinerary.txt", b"text", content_type="text/plain")
@@ -964,5 +1066,114 @@ class TripRoutePlanListApiTests(TestCase):
         )
 
         response = self.client.get(f"/api/v1/trips/{other_trip.id}/route-plans/")
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+
+class TripPlanApiTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(email="traveler@example.com", password="testpass123")
+        self.other_user = User.objects.create_user(email="other@example.com", password="testpass123")
+        self.client.force_authenticate(user=self.user)
+        self.trip = Trip.objects.create(
+            user=self.user,
+            title="Plan Trip",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        self.itinerary = TripItinerary.objects.create(
+            trip=self.trip,
+            title="Dhaka Weekend",
+            summary="Short city plan",
+        )
+        self.day = TripItineraryDay.objects.create(
+            itinerary=self.itinerary,
+            day=1,
+            date=date(2026, 7, 20),
+            title="Arrival",
+            summary="Start the trip",
+        )
+        self.item = TripItineraryDayItem.objects.create(
+            trip_itinerary_day=self.day,
+            time="09:00",
+            title="Breakfast",
+            item_type="food",
+            description="Local breakfast",
+            notes="Try nearby cafe",
+            estimated_cost="8.50",
+        )
+
+    def test_lists_daywise_plan_for_trip(self):
+        response = self.client.get(f"/api/v1/trips/{self.trip.id}/plan/daywise/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["message"], "Trip day-wise plan fetched successfully.")
+        self.assertEqual(len(response.data["data"]), 1)
+        day = response.data["data"][0]
+        self.assertEqual(day["day"], 1)
+        self.assertEqual(day["date"], "2026-07-20")
+        self.assertEqual(day["title"], "Arrival")
+        self.assertEqual(len(day["items"]), 1)
+        self.assertEqual(day["items"][0]["title"], "Breakfast")
+
+    def test_returns_empty_daywise_plan_when_trip_has_no_itinerary(self):
+        trip = Trip.objects.create(
+            user=self.user,
+            title="Empty Plan Trip",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+
+        response = self.client.get(f"/api/v1/trips/{trip.id}/plan/daywise/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["data"], [])
+
+    def test_updates_trip_plan_item(self):
+        response = self.client.patch(
+            f"/api/v1/trips/{self.trip.id}/plan/items/{self.item.id}/",
+            {
+                "title": "Updated breakfast",
+                "time": "10:15:00",
+                "notes": "Reserved a table",
+                "estimated_cost": "12.75",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["message"], "Itinerary item updated successfully.")
+        self.assertEqual(response.data["data"]["title"], "Updated breakfast")
+        self.assertEqual(response.data["data"]["time"], "10:15:00")
+        self.assertEqual(response.data["data"]["notes"], "Reserved a table")
+        self.assertEqual(response.data["data"]["estimated_cost"], "12.75")
+        self.item.refresh_from_db()
+        self.assertEqual(self.item.title, "Updated breakfast")
+
+    def test_rejects_plan_item_update_for_another_users_trip(self):
+        other_trip = Trip.objects.create(
+            user=self.other_user,
+            title="Other Plan Trip",
+            created_by=self.other_user,
+            updated_by=self.other_user,
+        )
+        other_itinerary = TripItinerary.objects.create(trip=other_trip)
+        other_day = TripItineraryDay.objects.create(
+            itinerary=other_itinerary,
+            day=1,
+            title="Other day",
+        )
+        other_item = TripItineraryDayItem.objects.create(
+            trip_itinerary_day=other_day,
+            title="Other item",
+            item_type="activity",
+        )
+
+        response = self.client.patch(
+            f"/api/v1/trips/{other_trip.id}/plan/items/{other_item.id}/",
+            {"title": "Should not update"},
+            format="json",
+        )
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)

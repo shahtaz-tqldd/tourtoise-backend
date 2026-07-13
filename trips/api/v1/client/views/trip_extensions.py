@@ -145,6 +145,35 @@ class TripRoutePlanListAPIView(UserTripQuerysetMixin, GenericAPIView):
         )
 
 
+class TripDayWisePlanListAPIView(UserTripQuerysetMixin, GenericAPIView):
+    """
+    List day-wise plan for a trip.
+
+    Frontend request:
+    - Method: GET
+    - Headers: authenticated bearer token
+    - URL param: `trip_id`
+
+    Frontend response:
+    - 200 success with itinerary days and their items.
+    """
+
+    permission_classes = [IsAuthenticated]
+    serializer_class = TripDaySerializer
+
+    def get(self, request, *args, **kwargs):
+        trip = self.get_trip_by_id()
+        try:
+            days = trip.trip_itinerary.itinerary_days.prefetch_related("day_items").all()
+        except TripItinerary.DoesNotExist:
+            days = []
+
+        return APIResponse.success(
+            data=self.get_serializer(days, many=True).data,
+            message="Trip day-wise plan fetched successfully.",
+        )
+
+
 class TripDayCreateAPIView(UserTripQuerysetMixin, GenericAPIView):
     """
     Create trip day API.

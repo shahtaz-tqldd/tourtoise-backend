@@ -367,12 +367,14 @@ class TripHeadsUpInfoItemSerializer(PreparationItemSortOrderMixin, serializers.M
 
 class TripRequiredDocumentItemSerializer(PreparationItemSortOrderMixin, serializers.ModelSerializer):
     document = serializers.FileField(write_only=True, required=False)
+    document_file_name = serializers.CharField(required=False, allow_blank=True)
 
     class Meta:
         model = TripRequiredDocumentItem
         fields = (
             "id",
             "document_name",
+            "document_file_name",
             "document",
             "document_url",
             "document_url_public_id",
@@ -389,10 +391,22 @@ class TripRequiredDocumentItemSerializer(PreparationItemSortOrderMixin, serializ
             return value
         raise serializers.ValidationError("Only image and PDF files are allowed.")
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data["document"] = None
+        if instance.document_url:
+            data["document"] = {
+                "file_name": instance.document_file_name,
+                "url": instance.document_url,
+                "public_id": instance.document_url_public_id,
+            }
+        return data
+
     def create(self, validated_data):
         document = validated_data.pop("document", None)
         if document:
             upload = upload_file(document, folder="trip-documents")
+            validated_data["document_file_name"] = document.name
             validated_data["document_url"] = upload["url"]
             validated_data["document_url_public_id"] = upload["public_id"]
         return super().create(validated_data)
@@ -401,6 +415,7 @@ class TripRequiredDocumentItemSerializer(PreparationItemSortOrderMixin, serializ
         document = validated_data.pop("document", None)
         if document:
             upload = upload_file(document, folder="trip-documents")
+            validated_data["document_file_name"] = document.name
             validated_data["document_url"] = upload["url"]
             validated_data["document_url_public_id"] = upload["public_id"]
 

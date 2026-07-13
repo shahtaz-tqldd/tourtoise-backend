@@ -468,7 +468,8 @@ class TripRequiredDocumentItem(BaseModel):
         related_name="required_documents",
     )
     document_name = models.CharField(max_length=180)
-    document_url = models.URLField(blank=True)
+    document_file_name = models.CharField(max_length=180, blank=True)
+    document_url = models.URLField(blank=True, null=True)
     document_url_public_id = models.CharField(max_length=255, blank=True)
     
     required_level = models.CharField(

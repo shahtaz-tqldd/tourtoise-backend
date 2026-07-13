@@ -12,6 +12,7 @@ from .trip_extensions import (
   TripDayCreateAPIView,
   TripDayDeleteAPIView,
   TripDayUpdateAPIView,
+  TripDayWisePlanListAPIView,
   TripDestinationCreateAPIView,
   TripDestinationDeleteAPIView,
   TripDestinationUpdateAPIView,
@@ -41,6 +42,7 @@ from .preparation_items import (
   TripHeadsUpInfoItemListCreateAPIView,
   TripPreparationPackingItemDetailAPIView,
   TripPreparationPackingItemListCreateAPIView,
+  TripRequiredDocumentFileDeleteAPIView,
   TripRequiredDocumentItemDetailAPIView,
   TripRequiredDocumentItemListCreateAPIView,
 )

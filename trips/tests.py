@@ -18,9 +18,11 @@ from trips.models import (
     TripAgentMessage,
     TripDestination,
     TripItinerary,
+    TripItineraryBudget,
     TripItineraryDay,
     TripItineraryDayItem,
     TripPreparation,
+    TripPreparationPackingItem,
     TripRoutePlanItem,
     TripRequiredDocumentItem,
 )
@@ -1002,6 +1004,110 @@ class TripRequiredDocumentApiTests(TestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+class TripDetailApiTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(email="traveler@example.com", password="testpass123")
+        self.client.force_authenticate(user=self.user)
+        self.trip = Trip.objects.create(
+            user=self.user,
+            title="Trip Detail",
+            origin_city="Dhaka",
+            origin_country="Bangladesh",
+            start_location_address="Gulshan Avenue",
+            start_location_latitude=23.7925,
+            start_location_longitude=90.4078,
+            budget_currency="BDT",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        self.url = f"/api/v1/trips/{self.trip.id}/detail/"
+
+    def test_includes_itinerary_budget_and_preparation_stats(self):
+        itinerary = TripItinerary.objects.create(
+            trip=self.trip,
+            title="Dhaka Weekend",
+            summary="A compact city itinerary.",
+        )
+        TripItineraryBudget.objects.create(
+            itinerary=itinerary,
+            transport="100.00",
+            food="75.50",
+            total_estimated_budget="225.50",
+            budget_note="Includes daily meals and transport.",
+            metadata={"currency": "USD"},
+        )
+        preparation = TripPreparation.objects.create(
+            trip=self.trip,
+            title="Prep",
+        )
+        TripPreparationPackingItem.objects.create(
+            preparation=preparation,
+            item="Passport",
+            is_packed=True,
+            sort_order=1,
+        )
+        TripPreparationPackingItem.objects.create(
+            preparation=preparation,
+            item="Rain jacket",
+            is_packed=False,
+            sort_order=2,
+        )
+        TripRequiredDocumentItem.objects.create(
+            preparation=preparation,
+            document_name="Passport scan",
+            document_url="https://example.com/passport.pdf",
+            sort_order=1,
+        )
+        TripRequiredDocumentItem.objects.create(
+            preparation=preparation,
+            document_name="Visa",
+            sort_order=2,
+        )
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.data["data"]
+        self.assertEqual(data["planning_title"], "Dhaka Weekend")
+        self.assertEqual(data["planning_description"], "A compact city itinerary.")
+        self.assertEqual(
+            data["start_location"],
+            {
+                "address": "Gulshan Avenue",
+                "city": "Dhaka",
+                "country": "Bangladesh",
+                "longitude": 90.4078,
+                "latitude": 23.7925,
+            },
+        )
+        self.assertNotIn("origin_city", data)
+        self.assertNotIn("origin_country", data)
+        self.assertNotIn("start_location_address", data)
+        self.assertNotIn("start_location_latitude", data)
+        self.assertNotIn("start_location_longitude", data)
+        self.assertNotIn("budget_currency", data)
+        self.assertEqual(data["budget"]["budget_currency"], "BDT")
+        self.assertEqual(data["budget"]["transport"], "100.00")
+        self.assertEqual(data["budget"]["food"], "75.50")
+        self.assertEqual(data["budget"]["total_estimated_budget"], "225.50")
+        self.assertEqual(data["budget"]["budget_note"], "Includes daily meals and transport.")
+        self.assertEqual(
+            data["preparation_stats"]["packing_items"],
+            {
+                "total_count": 2,
+                "is_packed_count": 1,
+            },
+        )
+        self.assertEqual(
+            data["preparation_stats"]["documents"],
+            {
+                "total_count": 2,
+                "uploaded_count": 1,
+            },
+        )
 
 
 class TripRoutePlanListApiTests(TestCase):

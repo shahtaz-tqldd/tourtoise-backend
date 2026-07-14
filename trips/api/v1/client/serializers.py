@@ -22,6 +22,7 @@ from trips.models import (
     TripHeadsUpInfoItem,
     TripNote,
     TripNoteImage,
+    TripPreparation,
     TripPreparationPackingItem,
     TripRequiredDocumentItem,
 )
@@ -513,7 +514,6 @@ class TripDetailSerializer(serializers.ModelSerializer):
             "share_token",
             "status",
             "visibility",
-            "planning_source",
             "current_step",
             "start_date",
             "end_date",
@@ -554,6 +554,128 @@ class TripDetailSerializer(serializers.ModelSerializer):
         except TripItinerary.DoesNotExist:
             return []
         return TripDaySerializer(days, many=True).data
+
+
+class TripDetailsSerializer(serializers.ModelSerializer):
+    trip_destinations = TripDestinationSerializer(many=True, read_only=True)
+    share_url = serializers.SerializerMethodField()
+    planning_title = serializers.SerializerMethodField()
+    planning_description = serializers.SerializerMethodField()
+    start_location = serializers.SerializerMethodField()
+    budget = serializers.SerializerMethodField()
+    preparation_stats = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Trip
+        fields = (
+            "id",
+            "title",
+            "planning_title",
+            "planning_description",
+            "status",
+            "visibility",
+            "current_step",
+            "start_date",
+            "end_date",
+            "nights",
+            "duration_days",
+            "travelers_count",
+            "traveler_type",
+            "start_location",
+            "budget",
+            "share_url",
+            "trip_destinations",
+            "preparation_stats",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = fields
+
+    def get_share_url(self, obj):
+        request = self.context.get("request")
+        if obj.visibility != TripVisibility.PUBLIC or not request:
+            return None
+        return f"{settings.USER_FRONTEND_URL}/trip/public/{obj.share_token}"
+
+    def get_planning_title(self, obj):
+        itinerary = self._get_itinerary(obj)
+        return itinerary.title if itinerary else ""
+
+    def get_planning_description(self, obj):
+        itinerary = self._get_itinerary(obj)
+        return itinerary.summary if itinerary else ""
+
+    def get_start_location(self, obj):
+        return {
+            "address": obj.start_location_address,
+            "city": obj.origin_city,
+            "country": obj.origin_country,
+            "longitude": obj.start_location_longitude,
+            "latitude": obj.start_location_latitude,
+        }
+
+    def get_budget(self, obj):
+        itinerary = self._get_itinerary(obj)
+        if not itinerary:
+            return None
+
+        budget = getattr(itinerary, "rough_budget", None)
+        if not budget:
+            return None
+
+        return {
+            "currency": obj.budget_currency,
+            "transport": str(budget.transport) if budget.transport is not None else None,
+            "food": str(budget.food) if budget.food is not None else None,
+            "activities": str(budget.activities) if budget.activities is not None else None,
+            "tickets_or_entry": str(budget.tickets_or_entry) if budget.tickets_or_entry is not None else None,
+            "miscellaneous": str(budget.miscellaneous) if budget.miscellaneous is not None else None,
+            "total_estimated": (
+                str(budget.total_estimated_budget)
+                if budget.total_estimated_budget is not None
+                else None
+            ),
+            "note": budget.budget_note
+        }
+
+    def get_preparation_stats(self, obj):
+        preparation = self._get_preparation(obj)
+        if not preparation:
+            return {
+                "packing_items": {
+                    "total_count": 0,
+                    "is_packed_count": 0,
+                },
+                "documents": {
+                    "total_count": 0,
+                    "uploaded_count": 0,
+                },
+            }
+
+        packing_items = list(preparation.packing_items.all())
+        required_documents = list(preparation.required_documents.all())
+        return {
+            "packing_items": {
+                "total_count": len(packing_items),
+                "is_packed_count": sum(1 for item in packing_items if item.is_packed),
+            },
+            "documents": {
+                "total_count": len(required_documents),
+                "uploaded_count": sum(1 for item in required_documents if item.document_url),
+            },
+        }
+
+    def _get_itinerary(self, obj):
+        try:
+            return obj.trip_itinerary
+        except TripItinerary.DoesNotExist:
+            return None
+
+    def _get_preparation(self, obj):
+        try:
+            return obj.structured_preparation
+        except TripPreparation.DoesNotExist:
+            return None
 
 
 class PublicTripDetailSerializer(serializers.ModelSerializer):

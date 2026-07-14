@@ -11,6 +11,7 @@ from app.utils.response import APIResponse
 from trips.api.v1.client.serializers import (
     PublicTripDetailSerializer,
     TripDetailSerializer,
+    TripDetailsSerializer,
     TripListSerializer,
     TripShareTokenSerializer,
     TripVisibilitySerializer,
@@ -168,7 +169,7 @@ class TripDetailAPIView(UserTripQuerysetMixin, GenericAPIView):
     def get(self, request, *args, **kwargs):
         trip = self.get_trip_by_id()
         return APIResponse.success(
-            data=TripDetailSerializer(trip, context={"request": request}).data,
+            data=TripDetailsSerializer(trip, context={"request": request}).data,
             message="Trip fetched successfully.",
         )
 

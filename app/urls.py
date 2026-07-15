@@ -9,6 +9,7 @@ v1_client_urls = [
     path("trips/", include("trips.api.v1.client.urls")),
     path("journals/", include("journals.api.v1.client.urls")),
     path("chat/", include("chat.api.v1.client.urls")),
+    path("notifications/", include("notification.api.v1.client.urls")),
 ]
 
 v1_admin_urls = [

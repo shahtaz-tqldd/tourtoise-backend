@@ -81,6 +81,25 @@ CELERY_TIMEZONE = env("CELERY_TIMEZONE", "UTC")
 CELERY_RESULT_EXTENDED = True
 CELERY_IMPORTS = ("accounts.tasks", "destinations.tasks")
 
+# CHANNELS
+CHANNEL_LAYER_BACKEND = env("CHANNEL_LAYER_BACKEND", "redis")
+CHANNEL_REDIS_URL = env("CHANNEL_REDIS_URL", CELERY_BROKER_URL)
+if CHANNEL_LAYER_BACKEND == "redis":
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels_redis.core.RedisChannelLayer",
+            "CONFIG": {
+                "hosts": [CHANNEL_REDIS_URL],
+            },
+        },
+    }
+else:
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels.layers.InMemoryChannelLayer",
+        },
+    }
+
 # ADK
 ADK_DB_URL = env("ADK_DB_URL")
 VECTOR_DB_URL = env("VECTOR_DB_URL")

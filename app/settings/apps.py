@@ -12,6 +12,7 @@ THIRD_PARTY_APPS = [
     "rest_framework",
     "corsheaders",
     "django_celery_results",
+    "channels",
     "rest_framework_simplejwt",
     "rest_framework_simplejwt.token_blacklist",
     # "django_filters",
@@ -24,6 +25,7 @@ MODULER_APPS = [
     "trips.apps.TripsConfig",
     "journals.apps.JournalsConfig",
     "chat.apps.ChatConfig",
+    "notification.apps.NotificationConfig",
     "vector_store.apps.VectorStoreConfig",
 ]
 

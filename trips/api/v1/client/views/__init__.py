@@ -46,3 +46,7 @@ from .preparation_items import (
   TripRequiredDocumentItemDetailAPIView,
   TripRequiredDocumentItemListCreateAPIView,
 )
+from .trip_chat import (
+  TripChatCreateMessageAPIView,
+  TripChatMessageListAPIView,
+)

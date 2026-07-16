@@ -1,5 +1,6 @@
 from datetime import date, timedelta
 from unittest.mock import patch
+from uuid import uuid4
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -729,6 +730,86 @@ class TripAgentActiveApiTests(TestCase):
             },
             format="json",
         )
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+
+class TripChatApiTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(email="traveler@example.com", password="testpass123")
+        self.other_user = User.objects.create_user(email="other@example.com", password="testpass123")
+        self.client.force_authenticate(user=self.user)
+        self.trip = Trip.objects.create(
+            user=self.user,
+            title="Chat Trip",
+            current_step=2,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        self.session_id = uuid4()
+
+    def test_creates_trip_chat_message_with_demo_agent_reply(self):
+        response = self.client.post(
+            f"/api/v1/trips/{self.trip.id}/chat/{self.session_id}/create-message/",
+            {"message": "Can you help tune this plan?"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(str(response.data["data"]["session"]["id"]), str(self.session_id))
+        self.assertEqual(response.data["data"]["user_message"]["sender"], "user")
+        self.assertEqual(response.data["data"]["agent_message"]["sender"], "agent")
+        self.assertTrue(response.data["data"]["agent_message"]["payload"]["demo"])
+
+        session = TripAgentConversationSession.objects.get(pk=self.session_id)
+        self.assertEqual(session.trip, self.trip)
+        self.assertEqual(session.user, self.user)
+        self.assertEqual(TripAgentMessage.objects.filter(session=session).count(), 2)
+
+    def test_lists_trip_chat_messages_for_session(self):
+        session = TripAgentConversationSession.objects.create(
+            id=self.session_id,
+            trip=self.trip,
+            user=self.user,
+            current_step=2,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        TripAgentMessage.objects.create(
+            session=session,
+            trip=self.trip,
+            sender="user",
+            step=2,
+            sequence=1,
+            content="Hello",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+
+        response = self.client.get(f"/api/v1/trips/{self.trip.id}/chat/{self.session_id}/messages/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(str(response.data["data"]["session"]["id"]), str(self.session_id))
+        self.assertEqual(len(response.data["data"]["messages"]), 1)
+        self.assertEqual(response.data["data"]["messages"][0]["content"], "Hello")
+
+    def test_rejects_other_user_trip_chat_session(self):
+        other_trip = Trip.objects.create(
+            user=self.other_user,
+            title="Other Trip",
+            created_by=self.other_user,
+            updated_by=self.other_user,
+        )
+        session = TripAgentConversationSession.objects.create(
+            trip=other_trip,
+            user=self.other_user,
+            current_step=2,
+            created_by=self.other_user,
+            updated_by=self.other_user,
+        )
+
+        response = self.client.get(f"/api/v1/trips/{other_trip.id}/chat/{session.id}/messages/")
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 

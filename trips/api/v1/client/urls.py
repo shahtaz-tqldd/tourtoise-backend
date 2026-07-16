@@ -86,6 +86,11 @@ trip_urlpatterns = [
     path("<uuid:trip_id>/delete/", views.TripDeleteAPIView.as_view(), name="trip-delete"),
 ]
 
+trip_chat_apis =[
+    path("messages/", views.TripChatMessageListAPIView.as_view(), name="trip-chat-messages"),
+    path("create-message/", views.TripChatCreateMessageAPIView.as_view(), name="trip-chat-create-message"),
+]
+
 urlpatterns = [
     path("", include(trip_urlpatterns)),
     path("agent-active/", views.TripAgentInitAPIView.as_view(), name="trip-agent-active"),
@@ -98,4 +103,5 @@ urlpatterns = [
     path("<uuid:trip_id>/heads-up/", include(trip_heads_up_items)),
     path("<uuid:trip_id>/documents/", include(trip_required_documents)),
     path("<uuid:trip_id>/plan/", include(trip_plan)),
+    path("<uuid:trip_id>/chat/<uuid:session_id>/", include(trip_chat_apis)),
 ]

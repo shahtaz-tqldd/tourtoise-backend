@@ -565,6 +565,7 @@ class TripDetailsSerializer(serializers.ModelSerializer):
     start_location = serializers.SerializerMethodField()
     budget = serializers.SerializerMethodField()
     preparation_stats = serializers.SerializerMethodField()
+    session_id = serializers.SerializerMethodField()
 
     class Meta:
         model = Trip
@@ -587,6 +588,7 @@ class TripDetailsSerializer(serializers.ModelSerializer):
             "share_url",
             "trip_destinations",
             "preparation_stats",
+            "session_id",
             "created_at",
             "updated_at",
         )
@@ -665,6 +667,9 @@ class TripDetailsSerializer(serializers.ModelSerializer):
                 "uploaded_count": sum(1 for item in required_documents if item.document_url),
             },
         }
+    def get_session_id(self, obj):
+        preparation = self._get_preparation(obj)
+        return preparation.session_id
 
     def _get_itinerary(self, obj):
         try:
@@ -1022,3 +1027,36 @@ class TripAgentMessageSerializer(serializers.ModelSerializer):
             "created_at",
         )
         read_only_fields = fields
+
+
+class TripChatCreateMessageSerializer(serializers.Serializer):
+    message = serializers.CharField(allow_blank=False, trim_whitespace=True)
+
+
+class TripChatMessageSerializer(serializers.ModelSerializer):
+    session_id = serializers.UUIDField(read_only=True)
+
+    class Meta:
+        model = TripAgentMessage
+        fields = (
+            "id",
+            "session_id",
+            "sender",
+            # "step",
+            # "sequence",
+            "content",
+            # "payload",
+            "created_at",
+        )
+        read_only_fields = fields
+
+
+class TripChatSessionSerializer(serializers.Serializer):
+    id = serializers.UUIDField(read_only=True)
+    trip_id = serializers.UUIDField(source="trip.id", read_only=True)
+    current_step = serializers.IntegerField(read_only=True)
+    external_session_id = serializers.CharField(read_only=True)
+    is_active = serializers.BooleanField(read_only=True)
+    messages_count = serializers.IntegerField(read_only=True)
+    created_at = serializers.DateTimeField(read_only=True)
+    updated_at = serializers.DateTimeField(read_only=True)

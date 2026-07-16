@@ -1,6 +1,13 @@
 from django.contrib import admin
 
-from journals.models import Journal, JournalComment, JournalImage, JournalTag, SavedJournal
+from journals.models import (
+    Journal,
+    JournalComment,
+    JournalImage,
+    JournalReaction,
+    JournalTag,
+    SavedJournal,
+)
 
 
 class JournalImageInline(admin.TabularInline):
@@ -20,3 +27,4 @@ class JournalAdmin(admin.ModelAdmin):
 admin.site.register(JournalTag)
 admin.site.register(JournalComment)
 admin.site.register(SavedJournal)
+admin.site.register(JournalReaction)

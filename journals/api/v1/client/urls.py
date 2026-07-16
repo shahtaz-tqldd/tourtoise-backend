@@ -13,6 +13,7 @@ urlpatterns = [
     path("<uuid:journal_id>/update/", views.JournalUpdateAPIView.as_view(), name="journal-update"),
     path("<uuid:journal_id>/delete/", views.JournalDeleteAPIView.as_view(), name="journal-delete"),
     path("<uuid:journal_id>/save/", views.JournalSaveAPIView.as_view(), name="journal-save"),
+    path("<uuid:journal_id>/react/", views.JournalReactionAPIView.as_view(), name="journal-react"),
     path(
         "<uuid:journal_id>/comments/",
         views.JournalCommentListCreateAPIView.as_view(),
@@ -22,6 +23,11 @@ urlpatterns = [
         "<uuid:journal_id>/comments/<uuid:comment_id>/replies/",
         views.CommentReplyListCreateAPIView.as_view(),
         name="journal-reply-list-create",
+    ),
+    path(
+        "comments/<uuid:comment_id>/update/",
+        views.CommentUpdateAPIView.as_view(),
+        name="journal-comment-update",
     ),
     path(
         "comments/<uuid:comment_id>/delete/",

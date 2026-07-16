@@ -32,6 +32,7 @@ class Trip(BaseModel):
         default=TripStatus.DRAFT,
         db_index=True,
     )
+    completed_stats_recorded = models.BooleanField(default=False, db_index=True)
     visibility = models.CharField(
         max_length=15,
         choices=TripVisibility.choices,

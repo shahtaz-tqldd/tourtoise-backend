@@ -80,6 +80,12 @@ CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = env("CELERY_TIMEZONE", "UTC")
 CELERY_RESULT_EXTENDED = True
 CELERY_IMPORTS = ("accounts.tasks", "destinations.tasks")
+CELERY_BEAT_SCHEDULE = {
+    "permanently-delete-expired-accounts-daily": {
+        "task": "accounts.tasks.permanently_delete_expired_accounts",
+        "schedule": 60 * 60 * 24,
+    },
+}
 
 # CHANNELS
 CHANNEL_LAYER_BACKEND = env("CHANNEL_LAYER_BACKEND", "redis")

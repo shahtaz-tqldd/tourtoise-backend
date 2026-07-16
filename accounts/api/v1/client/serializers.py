@@ -9,7 +9,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from uuid import uuid4
 
 from app.utils.cloudinary import delete_image, upload_image
-from accounts.choices import AccountProvider
+from accounts.choices import AccountProvider, AccountStatus
 from accounts.firebase import FirebaseVerificationError, verify_firebase_id_token
 from accounts.models import UserProfile
 from accounts.services import resolve_password_reset_user, send_user_password_reset_email
@@ -64,6 +64,18 @@ class UserSerializer(serializers.ModelSerializer):
     emergency_contact_name = serializers.CharField(source="profile.emergency_contact_name", read_only=True)
     emergency_contact_phone = serializers.CharField(source="profile.emergency_contact_phone", read_only=True)
     is_public_profile = serializers.BooleanField(source="profile.is_public_profile", read_only=True)
+    total_country_visited = serializers.IntegerField(source="profile.total_country_visited", read_only=True)
+    visited_country_list = serializers.ListField(source="profile.visited_country_list", read_only=True)
+    total_trip_count = serializers.IntegerField(source="profile.total_trip_count", read_only=True)
+    total_journal_count = serializers.IntegerField(source="profile.total_journal_count", read_only=True)
+    is_location_sharing_enabled = serializers.BooleanField(
+        source="profile.is_location_sharing_enabled",
+        read_only=True,
+    )
+    is_alert_notification_enabled = serializers.BooleanField(
+        source="profile.is_alert_notification_enabled",
+        read_only=True,
+    )
 
     class Meta:
         model = User
@@ -94,7 +106,14 @@ class UserSerializer(serializers.ModelSerializer):
             "emergency_contact_name",
             "emergency_contact_phone",
             "is_public_profile",
+            "total_country_visited",
+            "visited_country_list",
+            "total_trip_count",
+            "total_journal_count",
+            "is_location_sharing_enabled",
+            "is_alert_notification_enabled",
             "created_at",
+            "last_login",
         )
         read_only_fields = (
             "id",
@@ -113,12 +132,22 @@ class PublicUserProfileSerializer(serializers.ModelSerializer):
     username = serializers.CharField(source="profile.username", read_only=True)
     avatar_url = serializers.URLField(source="profile.avatar_url", read_only=True)
     bio = serializers.CharField(source="profile.bio", read_only=True)
-    country_of_residence = serializers.CharField(source="profile.country_of_residence", read_only=True)
+    date_of_birth = serializers.DateField(source="profile.date_of_birth", read_only=True)
+    gender = serializers.CharField(source="profile.gender", read_only=True)
     city = serializers.CharField(source="profile.city", read_only=True)
+    country = serializers.CharField(source="profile.country_of_residence", read_only=True)
     preferred_language = serializers.CharField(source="profile.preferred_language", read_only=True)
     preferred_currency = serializers.CharField(source="profile.preferred_currency", read_only=True)
     travel_interests = serializers.ListField(source="profile.travel_interests", read_only=True)
+    mobility_constraints = serializers.ListField(source="profile.mobility_constraints", read_only=True)
+    dietary_preferences = serializers.ListField(source="profile.dietary_preferences", read_only=True)
     travel_pace = serializers.CharField(source="profile.travel_pace", read_only=True)
+    visited_country_list = serializers.ListField(source="profile.visited_country_list", read_only=True)
+    visited_country_count = serializers.IntegerField(source="profile.total_country_visited", read_only=True)
+    trip_count = serializers.IntegerField(source="profile.total_trip_count", read_only=True)
+    journal_count = serializers.IntegerField(source="profile.total_journal_count", read_only=True)
+    emergency_contact_name = serializers.CharField(source="profile.emergency_contact_name", read_only=True)
+    emergency_contact_phone = serializers.CharField(source="profile.emergency_contact_phone", read_only=True)
 
     class Meta:
         model = User
@@ -127,12 +156,22 @@ class PublicUserProfileSerializer(serializers.ModelSerializer):
             "username",
             "avatar_url",
             "bio",
-            "country_of_residence",
+            "gender",
+            "date_of_birth",
             "city",
+            "country",
             "preferred_language",
             "preferred_currency",
             "travel_interests",
+            "mobility_constraints",
+            "dietary_preferences",
             "travel_pace",
+            "visited_country_list",
+            "visited_country_count",
+            "trip_count",
+            "journal_count",
+            "emergency_contact_name",
+            "emergency_contact_phone",
         )
         read_only_fields = fields
 
@@ -153,6 +192,8 @@ class UserUpdateSerializer(serializers.ModelSerializer):
     emergency_contact_name = serializers.CharField(required=False, allow_blank=True)
     emergency_contact_phone = serializers.CharField(required=False, allow_blank=True)
     is_public_profile = serializers.BooleanField(required=False)
+    is_location_sharing_enabled = serializers.BooleanField(required=False)
+    is_alert_notification_enabled = serializers.BooleanField(required=False)
     profile_picture = serializers.FileField(write_only=True, required=False, allow_null=True)
     clear_profile_picture = serializers.BooleanField(write_only=True, required=False, default=False)
     avatar_url = serializers.URLField(source="profile.avatar_url", read_only=True)
@@ -178,6 +219,8 @@ class UserUpdateSerializer(serializers.ModelSerializer):
             "emergency_contact_name",
             "emergency_contact_phone",
             "is_public_profile",
+            "is_location_sharing_enabled",
+            "is_alert_notification_enabled",
             "profile_picture",
             "clear_profile_picture",
             "avatar_url",
@@ -231,6 +274,8 @@ class UserUpdateSerializer(serializers.ModelSerializer):
             "emergency_contact_name",
             "emergency_contact_phone",
             "is_public_profile",
+            "is_location_sharing_enabled",
+            "is_alert_notification_enabled",
         }
         profile = get_or_create_profile(instance)
 
@@ -356,6 +401,9 @@ class LoginSerializer(serializers.Serializer):
         if not user.is_active:
             raise serializers.ValidationError({"error": "User is disabled."})
 
+        if user.status == AccountStatus.DEACTIVATED or user.deleted_at:
+            user.reactivate()
+
         user.last_login = timezone.now()
         user.save(update_fields=["last_login"])
 
@@ -433,6 +481,9 @@ class GoogleLoginSerializer(serializers.Serializer):
                     if not user.is_active:
                         raise serializers.ValidationError({"error": "User is disabled."})
 
+                    if user.status == AccountStatus.DEACTIVATED or user.deleted_at:
+                        user.reactivate()
+
                     user.email = email
                     user.name = self.validated_data.get("name", user.name)
                     user.provider = AccountProvider.GOOGLE
@@ -449,7 +500,7 @@ class GoogleLoginSerializer(serializers.Serializer):
                     user.phone = phone_number or ""
 
                 photo_url = self.validated_data.get("photo_url")
-                if photo_url:
+                if photo_url and not profile.avatar_url:
                     profile.avatar_url = photo_url
 
                 user.last_login = timezone.now()

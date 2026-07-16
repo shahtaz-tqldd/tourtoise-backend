@@ -18,10 +18,11 @@ profile_apis = [
 
 settings_apis = [
     path("change-password/", views.ChangePasswordView.as_view(), name="change-password"),
+    path("delete-account/", views.DeleteAccountView.as_view(), name="delete-account"),
 ]
 
 urlpatterns = [
     path("", include(auth_apis)),
     path("", include(profile_apis)),
-    path("settings/", include(profile_apis)),
+    path("settings/", include(settings_apis + profile_apis)),
 ]

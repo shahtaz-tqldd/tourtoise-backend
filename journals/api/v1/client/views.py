@@ -1,9 +1,11 @@
+from django.db import transaction
 from django.db.models import BooleanField, Count, Exists, OuterRef, Q, Value
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.generics import GenericAPIView
 from rest_framework.permissions import AllowAny, IsAuthenticated
 
+from accounts.services import decrement_user_journal_count
 from app.base.pagination import CustomPagination
 from app.utils.response import APIResponse
 from journals.api.v1.client.serializers import (
@@ -180,7 +182,11 @@ class JournalDeleteAPIView(JournalQuerysetMixin, GenericAPIView):
     permission_classes = [IsAuthenticated]
 
     def delete(self, request, *args, **kwargs):
-        self.get_owned_journal().delete()
+        journal = self.get_owned_journal()
+        author = journal.author
+        with transaction.atomic():
+            journal.delete()
+            decrement_user_journal_count(author)
         return APIResponse.success(message="Journal deleted successfully.")
 
 

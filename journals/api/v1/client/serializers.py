@@ -1,6 +1,7 @@
 from django.db import transaction
 from rest_framework import serializers
 
+from accounts.services import increment_user_journal_count
 from app.utils.cloudinary import upload_image
 from journals.models import Journal, JournalComment, JournalImage, JournalTag
 
@@ -112,6 +113,7 @@ class JournalWriteSerializer(serializers.ModelSerializer):
         )
         self._set_tags(journal, tags)
         self._add_images(journal, image_urls, image_files)
+        increment_user_journal_count(request.user)
         return journal
 
     @transaction.atomic

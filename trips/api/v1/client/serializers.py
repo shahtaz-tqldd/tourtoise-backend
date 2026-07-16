@@ -8,9 +8,10 @@ from django.urls import reverse
 from rest_framework import serializers
 
 from app.utils.cloudinary import cloudinary_thumbnail_url, upload_file
+from accounts.services import record_completed_trip_stats
 from destinations.choices import Status
 from destinations.models import Destination, DestinationTag
-from trips.choices import TripVisibility
+from trips.choices import TripStatus, TripVisibility
 from trips.models import (
     Trip,
     TripAgentMessage,
@@ -831,14 +832,19 @@ class TripWriteSerializer(serializers.ModelSerializer):
                 **validated_data,
             )
             self._create_trip_destinations(trip, destination_slugs)
+            if trip.status == TripStatus.COMPLETED:
+                record_completed_trip_stats(trip)
             return trip
 
     def update(self, instance, validated_data):
         validated_data.pop("destination_slugs", None)
+        old_status = instance.status
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
         instance.updated_by = self.context["request"].user
         instance.save()
+        if old_status != TripStatus.COMPLETED and instance.status == TripStatus.COMPLETED:
+            record_completed_trip_stats(instance)
         return instance
 
     def _create_trip_destinations(self, trip, destination_slugs):

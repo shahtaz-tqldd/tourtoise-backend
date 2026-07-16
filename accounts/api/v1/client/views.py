@@ -183,6 +183,8 @@ class PublicUserDetailsView(GenericAPIView):
         return get_object_or_404(
             User.objects.select_related("profile"),
             profile__username=self.kwargs["username"],
+            is_active=True,
+            deleted_at__isnull=True,
         )
 
     def get(self, request, *args, **kwargs):
@@ -263,6 +265,30 @@ class ChangePasswordView(GenericAPIView):
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return APIResponse.success(message="Password changed successfully.")
+
+
+class DeleteAccountView(APIView):
+    """
+    Temporarily disable the authenticated account and mark it for permanent deletion.
+
+    Frontend request:
+    - Method: DELETE
+    - Headers: authenticated bearer token
+    - No request body is required.
+
+    Frontend response:
+    - 200 success with the deletion timestamp.
+    - A scheduled cleanup task permanently deletes accounts after 14 days.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request, *args, **kwargs):
+        request.user.mark_deleted()
+        return APIResponse.success(
+            data={"deleted_at": request.user.deleted_at},
+            message="Account disabled and scheduled for deletion.",
+        )
 
 
 class RequestPasswordResetView(GenericAPIView):

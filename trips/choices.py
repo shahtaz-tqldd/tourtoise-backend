@@ -77,3 +77,4 @@ class PlanningSource(models.TextChoices):
 class AgentMessageSender(models.TextChoices):
     USER = "user", "User"
     AGENT = "agent", "Agent"
+    SYSTEM = "system", "System"

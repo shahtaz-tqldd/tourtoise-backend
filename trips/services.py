@@ -6,7 +6,6 @@ from uuid import UUID
 
 from asgiref.sync import async_to_sync
 from django.db import transaction
-from django.db.models import Max
 
 from destinations.models import Activity, Attraction, Cuisine
 from trips.models import (
@@ -51,17 +50,13 @@ def get_or_create_agent_conversation_session(trip, user, current_step=2):
     )
 
 
-def create_agent_message(session, sender, content="", payload=None, user=None):
-    next_sequence = (session.messages.aggregate(max_sequence=Max("sequence"))["max_sequence"] or 0) + 1
+def create_agent_message(session, sender, content="", metadata=None, user=None):
     actor = user or session.user
     return TripAgentMessage.objects.create(
         session=session,
-        trip=session.trip,
         sender=sender,
-        step=session.current_step,
-        sequence=next_sequence,
         content=content or "",
-        payload=payload or {},
+        metadata=metadata or {},
         created_by=actor,
         updated_by=actor,
     )

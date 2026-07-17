@@ -75,7 +75,7 @@ class TripChatMessageListAPIView(TripChatSessionMixin, GenericAPIView):
 
     def get(self, request, *args, **kwargs):
         session = self.get_session()
-        messages = TripAgentMessage.objects.filter(session=session).order_by("sequence", "created_at")
+        messages = TripAgentMessage.objects.filter(session=session).order_by("created_at")
 
         return APIResponse.success(
             data= TripChatMessageSerializer(messages, many=True).data,
@@ -104,7 +104,7 @@ class TripChatCreateMessageAPIView(TripChatSessionMixin, GenericAPIView):
             session=session,
             sender=AgentMessageSender.AGENT,
             content=DEMO_TRIP_CHAT_REPLY,
-            payload={"demo": True},
+            metadata={"demo": True},
             user=request.user,
         )
 

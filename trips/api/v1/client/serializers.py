@@ -1008,8 +1008,11 @@ class TripAgentCreateMessageSerializer(serializers.Serializer):
 
 
 class TripAgentMessageListQuerySerializer(serializers.Serializer):
+    session_id = serializers.UUIDField()
+
+
+class TripPlanningTripQuerySerializer(serializers.Serializer):
     trip_id = serializers.UUIDField()
-    step = serializers.IntegerField(min_value=1, max_value=6, required=False)
 
 
 class TripAgentMessageSerializer(serializers.ModelSerializer):
@@ -1021,9 +1024,8 @@ class TripAgentMessageSerializer(serializers.ModelSerializer):
             "id",
             "session_id",
             "sender",
-            "step",
-            "sequence",
             "content",
+            "metadata",
             "created_at",
         )
         read_only_fields = fields
@@ -1042,10 +1044,8 @@ class TripChatMessageSerializer(serializers.ModelSerializer):
             "id",
             "session_id",
             "sender",
-            # "step",
-            # "sequence",
             "content",
-            # "payload",
+            "metadata",
             "created_at",
         )
         read_only_fields = fields

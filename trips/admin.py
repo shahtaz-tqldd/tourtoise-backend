@@ -165,8 +165,8 @@ class TripAgentConversationSessionAdmin(admin.ModelAdmin):
 
 @admin.register(TripAgentMessage)
 class TripAgentMessageAdmin(admin.ModelAdmin):
-    list_display = ("session", "trip", "sender", "content", "created_at")
+    list_display = ("session", "sender", "content", "created_at")
     list_filter = ("sender",)
-    search_fields = ("content", "trip__title")
+    search_fields = ("content", "session__trip__title")
     readonly_fields = ("id", "created_at", "updated_at", "created_by", "updated_by")
-    autocomplete_fields = ("session", "trip")
+    autocomplete_fields = ("session",)

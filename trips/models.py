@@ -614,33 +614,18 @@ class TripAgentMessage(BaseModel):
         on_delete=models.CASCADE,
         related_name="messages",
     )
-    trip = models.ForeignKey(
-        Trip,
-        on_delete=models.CASCADE,
-        related_name="agent_messages",
-    )
     sender = models.CharField(max_length=10, choices=AgentMessageSender.choices)
-    step = models.PositiveSmallIntegerField(
-        default=2,
-        validators=[MinValueValidator(1), MaxValueValidator(6)],
-        db_index=True,
-    )
-    sequence = models.PositiveIntegerField()
     content = models.TextField(blank=True)
-    payload = models.JSONField(default=dict, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
 
     class Meta:
-        ordering = ["sequence", "created_at"]
-        constraints = [
-            models.UniqueConstraint(fields=["session", "sequence"], name="unique_trip_agent_message_sequence"),
-        ]
+        ordering = ["created_at"]
         indexes = [
-            models.Index(fields=["trip", "step"]),
             models.Index(fields=["session", "sender"]),
         ]
 
     def __str__(self):
-        return f"{self.sender} message {self.sequence} for {self.session_id}"
+        return f"{self.sender} message for {self.session_id}"
 
 
 # trip notes

@@ -15,6 +15,7 @@ from trips.api.v1.client.serializers import (
     TripAgentCreateMessageSerializer,
     TripAgentMessageListQuerySerializer,
     TripAgentMessageSerializer,
+    TripPlanningTripQuerySerializer,
 )
 from trips.choices import AgentMessageSender, TripStatus
 from trips.models import (
@@ -81,7 +82,7 @@ class TripAgentInitAPIView(UserTripQuerysetMixin, GenericAPIView):
             session=session,
             sender=AgentMessageSender.USER,
             content="Initial trip preferences submitted.",
-            payload={
+            metadata={
                 "preferences": normalized_payload,
                 "trip_snapshot": trip_snapshot,
             },
@@ -103,7 +104,7 @@ class TripAgentInitAPIView(UserTripQuerysetMixin, GenericAPIView):
             session=session,
             sender=AgentMessageSender.AGENT,
             content=agent_message,
-            payload={
+            metadata={
                 "qna_response": qna_response,
                 "cost": plan_agent_response.get("cost"),
                 "total_tokens": plan_agent_response.get("total_tokens"),
@@ -206,7 +207,7 @@ class TripAgentCreateMessageAPIView(UserTripQuerysetMixin, GenericAPIView):
             session=session,
             sender=AgentMessageSender.AGENT,
             content=agent_message,
-            payload={
+            metadata={
                 "qna_response": qna_response,
                 "cost": plan_agent_response.get("cost"),
                 "total_tokens": plan_agent_response.get("total_tokens"),
@@ -237,8 +238,7 @@ class TripAgentMessageListAPIView(TripPaginationMixin, UserTripQuerysetMixin, Ge
     List persisted trip-agent conversation messages.
 
     Query params:
-    - `trip_id` required
-    - `step` optional, e.g. `step=2`
+    - `session_id` required
     - `page`, `page_size` optional pagination params
     """
 
@@ -248,19 +248,15 @@ class TripAgentMessageListAPIView(TripPaginationMixin, UserTripQuerysetMixin, Ge
     def get(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.query_params)
         serializer.is_valid(raise_exception=True)
-        trip_id = serializer.validated_data["trip_id"]
-
-        trip = get_object_or_404(self.get_trip_queryset(), pk=trip_id)
-        queryset = TripAgentMessage.objects.filter(
-            trip=trip,
-            session__user=request.user,
-        ).select_related("session")
-
-        step = serializer.validated_data.get("step")
-        if step:
-            queryset = queryset.filter(step=step)
-
-        queryset = queryset.order_by("session__created_at", "sequence", "created_at")
+        session_id = serializer.validated_data["session_id"]
+        session = get_object_or_404(
+            TripAgentConversationSession.objects.filter(
+                pk=session_id,
+                user=request.user,
+                trip__user=request.user,
+            )
+        )
+        queryset = TripAgentMessage.objects.filter(session=session).order_by("created_at")
         return self.paginate_with_meta(
             queryset,
             TripAgentMessageSerializer,
@@ -276,7 +272,7 @@ class TripPlanningRecommendationsAPIView(UserTripQuerysetMixin, GenericAPIView):
     """
 
     permission_classes = [IsAuthenticated]
-    serializer_class = TripAgentMessageListQuerySerializer
+    serializer_class = TripPlanningTripQuerySerializer
 
     def get(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.query_params)
@@ -317,7 +313,7 @@ class TripPlanningRecommendationsAPIView(UserTripQuerysetMixin, GenericAPIView):
             session=session,
             sender=AgentMessageSender.USER,
             content="Generate trip recommendations.",
-            payload={
+            metadata={
                 "destination_id": destination_id,
                 "preferences": preferences,
                 "trip_snapshot": trip_snapshot,
@@ -343,7 +339,7 @@ class TripPlanningRecommendationsAPIView(UserTripQuerysetMixin, GenericAPIView):
             session=session,
             sender=AgentMessageSender.AGENT,
             content="Trip recommendations generated.",
-            payload={
+            metadata={
                 "recommendations": recommendations,
                 "cost": plan_agent_response.get("cost"),
                 "total_tokens": plan_agent_response.get("total_tokens"),
@@ -476,7 +472,7 @@ class TripPlanningItinerariesAPIView(UserTripQuerysetMixin, GenericAPIView):
     """
 
     permission_classes = [IsAuthenticated]
-    serializer_class = TripAgentMessageListQuerySerializer
+    serializer_class = TripPlanningTripQuerySerializer
 
     def get(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.query_params)
@@ -505,7 +501,7 @@ class TripPlanningItinerariesAPIView(UserTripQuerysetMixin, GenericAPIView):
             session=session,
             sender=AgentMessageSender.USER,
             content="Generate trip itinerary.",
-            payload={
+            metadata={
                 "trip_context": trip_context,
             },
             user=request.user,
@@ -529,7 +525,7 @@ class TripPlanningItinerariesAPIView(UserTripQuerysetMixin, GenericAPIView):
             session=session,
             sender=AgentMessageSender.AGENT,
             content=itinerary.get("message", ""),
-            payload={
+            metadata={
                 "itinerary": itinerary,
                 "cost": plan_agent_response.get("cost"),
                 "total_tokens": plan_agent_response.get("total_tokens"),
@@ -651,7 +647,7 @@ class TripPlanningPrepartionAPIView(UserTripQuerysetMixin, GenericAPIView):
     """
 
     permission_classes = [IsAuthenticated]
-    serializer_class = TripAgentMessageListQuerySerializer
+    serializer_class = TripPlanningTripQuerySerializer
 
     def get(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.query_params)
@@ -673,7 +669,7 @@ class TripPlanningPrepartionAPIView(UserTripQuerysetMixin, GenericAPIView):
             session=session,
             sender=AgentMessageSender.USER,
             content="Generate trip preparation.",
-            payload={
+            metadata={
                 "trip_context": trip_context,
             },
             user=request.user,
@@ -697,7 +693,7 @@ class TripPlanningPrepartionAPIView(UserTripQuerysetMixin, GenericAPIView):
             session=session,
             sender=AgentMessageSender.AGENT,
             content=preparation.get("message", ""),
-            payload={
+            metadata={
                 "trip_preparation": preparation,
                 "cost": plan_agent_response.get("cost"),
                 "total_tokens": plan_agent_response.get("total_tokens"),
@@ -807,7 +803,7 @@ class TripPlanningOverviewAPIView(UserTripQuerysetMixin, GenericAPIView):
     """
 
     permission_classes = [IsAuthenticated]
-    serializer_class = TripAgentMessageListQuerySerializer
+    serializer_class = TripPlanningTripQuerySerializer
 
     def get(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.query_params)
@@ -928,7 +924,7 @@ class ActivateTripPlanAPIView(UserTripQuerysetMixin, GenericAPIView):
     """
 
     permission_classes = [IsAuthenticated]
-    serializer_class = TripAgentMessageListQuerySerializer
+    serializer_class = TripPlanningTripQuerySerializer
 
     def post(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)

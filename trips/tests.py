@@ -760,7 +760,7 @@ class TripChatApiTests(TestCase):
         self.assertEqual(str(response.data["data"]["session"]["id"]), str(self.session_id))
         self.assertEqual(response.data["data"]["user_message"]["sender"], "user")
         self.assertEqual(response.data["data"]["agent_message"]["sender"], "agent")
-        self.assertTrue(response.data["data"]["agent_message"]["payload"]["demo"])
+        self.assertTrue(response.data["data"]["agent_message"]["metadata"]["demo"])
 
         session = TripAgentConversationSession.objects.get(pk=self.session_id)
         self.assertEqual(session.trip, self.trip)
@@ -778,10 +778,7 @@ class TripChatApiTests(TestCase):
         )
         TripAgentMessage.objects.create(
             session=session,
-            trip=self.trip,
             sender="user",
-            step=2,
-            sequence=1,
             content="Hello",
             created_by=self.user,
             updated_by=self.user,
@@ -790,9 +787,8 @@ class TripChatApiTests(TestCase):
         response = self.client.get(f"/api/v1/trips/{self.trip.id}/chat/{self.session_id}/messages/")
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(str(response.data["data"]["session"]["id"]), str(self.session_id))
-        self.assertEqual(len(response.data["data"]["messages"]), 1)
-        self.assertEqual(response.data["data"]["messages"][0]["content"], "Hello")
+        self.assertEqual(len(response.data["data"]), 1)
+        self.assertEqual(response.data["data"][0]["content"], "Hello")
 
     def test_rejects_other_user_trip_chat_session(self):
         other_trip = Trip.objects.create(

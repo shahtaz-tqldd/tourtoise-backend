@@ -5,6 +5,7 @@ from typing import Optional, Any
 from dataclasses import dataclass
 
 from google.genai import types
+from trips.choices import PlanningStep
 
 
 logger = logging.getLogger(__name__)
@@ -24,7 +25,7 @@ async def call_agent_async(
     user_id: str,
     session_id: str,
     query: str,
-    current_step: int = 2,
+    planning_step: PlanningStep = PlanningStep.PREFERENCE,
 ) -> AgentResponse:
     content = types.Content(
         role="user",
@@ -95,7 +96,7 @@ async def call_agent_async(
             total_output_tokens,
         )
 
-        parsed_response = _parse_trip_agent_response(final_response_text, current_step)
+        parsed_response = _parse_trip_agent_response(final_response_text, planning_step)
         if parsed_response is None:
             logger.error(
                 "ADK agent call produced no valid structured response. "
@@ -112,13 +113,13 @@ async def call_agent_async(
             logger.info(
                 "ADK agent call completed with structured response. "
                 "user_id=%s session_id=%s agent=%s prompt_tokens=%s output_tokens=%s "
-                "current_step=%s",
+                "planning_step=%s",
                 user_id,
                 session_id,
                 current_agent,
                 total_prompt_tokens,
                 total_output_tokens,
-                current_step,
+                planning_step,
             )
 
         return AgentResponse(
@@ -131,10 +132,10 @@ async def call_agent_async(
 
     except Exception:
         logger.exception(
-            "Error during ADK agent call. user_id=%s session_id=%s current_step=%s",
+            "Error during ADK agent call. user_id=%s session_id=%s planning_step=%s",
             user_id,
             session_id,
-            current_step,
+            planning_step,
         )
         return AgentResponse()
 
@@ -269,12 +270,12 @@ def _parse_trip_preparation_response(raw_text: Optional[str]) -> Optional[dict[s
     }
 
 
-def _parse_trip_agent_response(raw_text: Optional[str], current_step: int) -> Optional[dict[str, Any]]:
-    if current_step == 3:
+def _parse_trip_agent_response(raw_text: Optional[str], planning_step: PlanningStep) -> Optional[dict[str, Any]]:
+    if planning_step == PlanningStep.RECOMMENDATION:
         return _parse_trip_recommendations_response(raw_text)
-    if current_step == 4:
+    if planning_step == PlanningStep.ITINERARY:
         return _parse_trip_itinerary_response(raw_text)
-    if current_step == 5:
+    if planning_step == PlanningStep.PREPARATION:
         return _parse_trip_preparation_response(raw_text)
     return _parse_trip_qna_response(raw_text)
 

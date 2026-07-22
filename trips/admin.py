@@ -57,9 +57,8 @@ class TripDestinationAdmin(admin.ModelAdmin):
 
 @admin.register(TripRecommendations)
 class TripRecommendationsAdmin(admin.ModelAdmin):
-    list_display = ("trip", "is_finalized", "session_id", "updated_at")
-    list_filter = ("is_finalized",)
-    search_fields = ("trip__title", "session_id")
+    list_display = ("trip", "external_session_id", "updated_at")
+    search_fields = ("trip__title", "external_session_id")
     readonly_fields = ("created_at", "updated_at")
     autocomplete_fields = ("trip",)
 
@@ -84,9 +83,8 @@ class TripActivityRecommendationItemAdmin(admin.ModelAdmin):
 
 @admin.register(TripItinerary)
 class TripItineraryAdmin(admin.ModelAdmin):
-    list_display = ("trip", "title", "is_finalized", "session_id", "updated_at")
-    list_filter = ("is_finalized",)
-    search_fields = ("trip__title", "title", "session_id")
+    list_display = ("trip", "title", "external_session_id", "updated_at")
+    search_fields = ("trip__title", "title", "external_session_id")
     readonly_fields = ("created_at", "updated_at")
     autocomplete_fields = ("trip",)
 
@@ -124,9 +122,8 @@ class TripItineraryBudgetAdmin(admin.ModelAdmin):
 
 @admin.register(TripPreparation)
 class TripPreparationAdmin(admin.ModelAdmin):
-    list_display = ("trip", "title", "is_finalized", "session_id")
-    list_filter = ("is_finalized",)
-    search_fields = ("trip__title", "title", "session_id")
+    list_display = ("trip", "title", "external_session_id")
+    search_fields = ("trip__title", "title", "external_session_id")
     autocomplete_fields = ("trip",)
 
 
@@ -156,8 +153,8 @@ class TripHeadsUpInfoItemAdmin(admin.ModelAdmin):
 
 @admin.register(TripAgentConversationSession)
 class TripAgentConversationSessionAdmin(admin.ModelAdmin):
-    list_display = ("trip", "user", "current_step", "created_at")
-    list_filter = ("current_step",)
+    list_display = ("trip", "user", "step", "is_active", "created_at")
+    list_filter = ("step", "is_active")
     search_fields = ("trip__title", "user__email")
     readonly_fields = ("id", "created_at", "updated_at", "created_by", "updated_by")
     autocomplete_fields = ("trip", "user")

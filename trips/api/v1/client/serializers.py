@@ -4,14 +4,13 @@ from uuid import uuid4
 from django.db import transaction
 from django.db.models import Max
 from django.conf import settings
-from django.urls import reverse
 from rest_framework import serializers
 
 from app.utils.cloudinary import cloudinary_thumbnail_url, upload_file
 from accounts.services import record_completed_trip_stats
 from destinations.choices import Status
 from destinations.models import Destination, DestinationTag
-from trips.choices import TripStatus, TripVisibility
+from trips.choices import AccommodationPreference, PlanningStep, TripStatus, TripVisibility
 from trips.models import (
     Trip,
     TripAgentMessage,
@@ -527,14 +526,12 @@ class TripDetailSerializer(serializers.ModelSerializer):
             "start_location_address",
             "start_location_latitude",
             "start_location_longitude",
-            "total_budget",
+            "budget_tier",
             "budget_currency",
-            "accommodation_preference",
             "preferences",
             "planning_summary",
             "agent_active",
-            "agent_active_failed_message",
-            "agent_context",
+            "metadata",
             "share_url",
             "trip_destinations",
             "days",
@@ -565,7 +562,7 @@ class TripDetailsSerializer(serializers.ModelSerializer):
     start_location = serializers.SerializerMethodField()
     budget = serializers.SerializerMethodField()
     preparation_stats = serializers.SerializerMethodField()
-    session_id = serializers.SerializerMethodField()
+    external_session_id = serializers.SerializerMethodField()
 
     class Meta:
         model = Trip
@@ -588,7 +585,7 @@ class TripDetailsSerializer(serializers.ModelSerializer):
             "share_url",
             "trip_destinations",
             "preparation_stats",
-            "session_id",
+            "external_session_id",
             "created_at",
             "updated_at",
         )
@@ -667,9 +664,9 @@ class TripDetailsSerializer(serializers.ModelSerializer):
                 "uploaded_count": sum(1 for item in required_documents if item.document_url),
             },
         }
-    def get_session_id(self, obj):
+    def get_external_session_id(self, obj):
         preparation = self._get_preparation(obj)
-        return preparation.session_id
+        return preparation.external_session_id if preparation else None
 
     def _get_itinerary(self, obj):
         try:
@@ -682,6 +679,54 @@ class TripDetailsSerializer(serializers.ModelSerializer):
             return obj.structured_preparation
         except TripPreparation.DoesNotExist:
             return None
+
+class TripShortDetailsSerializer(serializers.ModelSerializer):
+    trip_destinations = TripDestinationSerializer(many=True, read_only=True)    
+    start_location = serializers.SerializerMethodField()
+    planning_stats = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Trip
+        fields = (
+            "id",
+            "title",
+            "status",
+            "visibility",
+            "current_step",
+            "start_date",
+            "preferences",
+            "duration_days",
+            "end_date",
+            "budget_tier",
+            "budget_currency",
+            "travelers_count",
+            "traveler_type",
+            "start_location",
+            "trip_destinations",
+            "planning_stats",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = fields
+
+    def get_start_location(self, obj):
+        return {
+            "address": obj.start_location_address,
+            "city": obj.origin_city,
+            "country": obj.origin_country,
+            "longitude": obj.start_location_longitude,
+            "latitude": obj.start_location_latitude,
+        }
+    
+    def get_planning_stats(self, obj):
+        return {
+            "agent_active": obj.agent_active,
+            "is_qna_complete": obj.is_qna_complete,
+            "is_recommendation_complete": obj.is_recommendation_complete,
+            "is_itinerary_design_complete": obj.is_itinerary_design_complete,
+            "is_trip_preparation_complete": obj.is_trip_preparation_complete,
+        }
+
 
 
 class PublicTripDetailSerializer(serializers.ModelSerializer):
@@ -710,12 +755,10 @@ class PublicTripDetailSerializer(serializers.ModelSerializer):
             "start_location_address",
             "start_location_latitude",
             "start_location_longitude",
-            "total_budget",
+            "budget_tier",
             "budget_currency",
-            "accommodation_preference",
             "planning_summary",
             "agent_active",
-            "agent_active_failed_message",
             "trip_destinations",
             "days",
             "share_url",
@@ -740,6 +783,12 @@ class TripWriteSerializer(serializers.ModelSerializer):
     DATE_RANGE_OVERLAP_MESSAGE = "Between this date range there are another trip exists."
 
     days = serializers.IntegerField(write_only=True, min_value=1, max_value=365, required=False)
+    accommodation_preference = serializers.ChoiceField(
+        choices=AccommodationPreference.choices,
+        write_only=True,
+        required=False,
+        allow_blank=True,
+    )
     destination_slugs = serializers.ListField(
         child=serializers.SlugField(),
         write_only=True,
@@ -766,13 +815,13 @@ class TripWriteSerializer(serializers.ModelSerializer):
             "start_location_address",
             "start_location_latitude",
             "start_location_longitude",
-            "total_budget",
+            "budget_tier",
             "budget_currency",
             "accommodation_preference",
             "destination_slugs",
             "preferences",
             "planning_summary",
-            "agent_context",
+            "metadata",
         )
 
     def validate(self, attrs):
@@ -828,7 +877,8 @@ class TripWriteSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         request = self.context["request"]
         destination_slugs = validated_data.pop("destination_slugs", [])
-        validated_data["current_step"] = 2
+        self._merge_accommodation_preference(validated_data)
+        validated_data["current_step"] = PlanningStep.PREFERENCE
         with transaction.atomic():
             trip = Trip.objects.create(
                 user=request.user,
@@ -843,6 +893,7 @@ class TripWriteSerializer(serializers.ModelSerializer):
 
     def update(self, instance, validated_data):
         validated_data.pop("destination_slugs", None)
+        self._merge_accommodation_preference(validated_data, instance)
         old_status = instance.status
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
@@ -851,6 +902,15 @@ class TripWriteSerializer(serializers.ModelSerializer):
         if old_status != TripStatus.COMPLETED and instance.status == TripStatus.COMPLETED:
             record_completed_trip_stats(instance)
         return instance
+
+    def _merge_accommodation_preference(self, validated_data, instance=None):
+        if "accommodation_preference" not in validated_data:
+            return
+
+        accommodation_preference = validated_data.pop("accommodation_preference")
+        preferences = dict(validated_data.get("preferences") or getattr(instance, "preferences", {}) or {})
+        preferences["accommodation_preference"] = accommodation_preference
+        validated_data["preferences"] = preferences
 
     def _create_trip_destinations(self, trip, destination_slugs):
         if not destination_slugs:
@@ -944,6 +1004,16 @@ class TripAgentActiveSerializer(serializers.Serializer):
     trip_id = serializers.UUIDField()
     let_agent_decide = serializers.BooleanField(required=False, default=True)
     travel_pace = serializers.CharField(max_length=40, allow_blank=True, required=False)
+    accommodation_preference = serializers.ChoiceField(
+        choices=AccommodationPreference.choices,
+        required=False,
+        allow_blank=True,
+    )
+    accommotation_preference = serializers.ChoiceField(
+        choices=AccommodationPreference.choices,
+        required=False,
+        allow_blank=True,
+    )
     interest_tags = serializers.ListField(
         child=serializers.CharField(max_length=80),
         required=False,
@@ -973,15 +1043,21 @@ class TripAgentActiveSerializer(serializers.Serializer):
             attrs.get("mobility_other", ""),
         )
         attrs["travel_pace"] = attrs.get("travel_pace", "").strip()
+        attrs["accommotation_preference"] = (
+            attrs.get("accommotation_preference")
+            or attrs.get("accommodation_preference")
+            or ""
+        )
         return attrs
 
     def normalized_preferences(self):
         data = self.validated_data
         return {
             "travel_pace": data["travel_pace"],
-            "interest_tags": data["interest_tags"],
             "dietary_needs": data["dietary_needs"],
+            "interest_tags": data["interest_tags"],
             "mobility_constraints": data["mobility_constraints"],
+            "accommotation_preference": data["accommotation_preference"],
         }
 
     def _append_other(self, values, other):
@@ -1003,7 +1079,6 @@ class TripAgentActiveSerializer(serializers.Serializer):
 class TripAgentCreateMessageSerializer(serializers.Serializer):
     trip_id = serializers.UUIDField()
     session_id = serializers.UUIDField(required=False)
-    current_step = serializers.IntegerField(min_value=1, max_value=6)
     message = serializers.CharField(allow_blank=False, trim_whitespace=True)
 
 
@@ -1025,7 +1100,6 @@ class TripAgentMessageSerializer(serializers.ModelSerializer):
             "session_id",
             "sender",
             "content",
-            "metadata",
             "created_at",
         )
         read_only_fields = fields
@@ -1054,7 +1128,7 @@ class TripChatMessageSerializer(serializers.ModelSerializer):
 class TripChatSessionSerializer(serializers.Serializer):
     id = serializers.UUIDField(read_only=True)
     trip_id = serializers.UUIDField(source="trip.id", read_only=True)
-    current_step = serializers.IntegerField(read_only=True)
+    current_step = serializers.CharField(source="step", read_only=True)
     external_session_id = serializers.CharField(read_only=True)
     is_active = serializers.BooleanField(read_only=True)
     messages_count = serializers.IntegerField(read_only=True)

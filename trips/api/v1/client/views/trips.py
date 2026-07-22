@@ -11,6 +11,7 @@ from app.utils.response import APIResponse
 from trips.api.v1.client.serializers import (
     PublicTripDetailSerializer,
     TripDetailSerializer,
+    TripShortDetailsSerializer,
     TripDetailsSerializer,
     TripListSerializer,
     TripShareTokenSerializer,
@@ -42,8 +43,8 @@ class TripCreateAPIView(UserTripQuerysetMixin, GenericAPIView):
       Optional:
       `status`, `visibility`, `planning_source`, `start_date`, `end_date`,
       `travelers_count`, `origin_city`, `origin_country`,
-      `total_budget`, `budget_currency`, `preferences`, 
-      `planning_summary`, `agent_context`
+      `budget_tier`, `budget_currency`, `preferences`,
+      `planning_summary`, `metadata`
 
     Frontend response:
     - 201 success with the full created trip payload.
@@ -122,7 +123,7 @@ class TripListAPIView(TripPaginationMixin, UserTripQuerysetMixin, GenericAPIView
         )
         if destination_slugs:
             queryset = queryset.annotate(
-                agent_context_text=Cast("agent_context", CharField()),
+                metadata_text=Cast("metadata", CharField()),
             ).filter(self._build_destination_slug_query(destination_slugs))
 
         start_date_from = params.get("start_date_from")
@@ -147,7 +148,7 @@ class TripListAPIView(TripPaginationMixin, UserTripQuerysetMixin, GenericAPIView
     def _build_destination_slug_query(self, destination_slugs):
         query = Q(trip_destinations__destination__slug__in=destination_slugs)
         for slug in destination_slugs:
-            query |= Q(agent_context_text__icontains=slug)
+            query |= Q(metadata_text__icontains=slug)
         return query
 
 
@@ -170,6 +171,28 @@ class TripDetailAPIView(UserTripQuerysetMixin, GenericAPIView):
         trip = self.get_trip_by_id()
         return APIResponse.success(
             data=TripDetailsSerializer(trip, context={"request": request}).data,
+            message="Trip fetched successfully.",
+        )
+
+class TripShortDetailsAPIView(UserTripQuerysetMixin, GenericAPIView):
+    """
+    User trip detail API.
+
+    Frontend request:
+    - Method: GET
+    - Headers: authenticated bearer token
+    - URL param: `trip_id`
+
+    Frontend response:
+    - 200 success with the full trip payload including destinations, days, and itinerary items.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, *args, **kwargs):
+        trip = self.get_trip_by_id()
+        return APIResponse.success(
+            data=TripShortDetailsSerializer(trip, context={"request": request}).data,
             message="Trip fetched successfully.",
         )
 

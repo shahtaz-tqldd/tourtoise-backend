@@ -1,5 +1,6 @@
 from .trips import (
   PublicTripDetailAPIView,
+  TripShortDetailsAPIView,
   TripCreateAPIView,
   TripDeleteAPIView,
   TripDetailAPIView,
@@ -22,13 +23,9 @@ from .trip_extensions import (
   TripRoutePlanListAPIView,
 )
 from .planning import (
+  TripPlanningAPIView,
   TripAgentInitAPIView,
   TripAgentCreateMessageAPIView,
-  TripAgentMessageListAPIView,
-  TripPlanningRecommendationsAPIView,
-  TripPlanningItinerariesAPIView,
-  TripPlanningPrepartionAPIView,
-  TripPlanningOverviewAPIView,
   ActivateTripPlanAPIView,
   run_plan_agent_for_session,
 )

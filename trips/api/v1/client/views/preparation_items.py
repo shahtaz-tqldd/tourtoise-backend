@@ -225,7 +225,7 @@ class TripRequiredDocumentItemDetailAPIView(TripPreparationItemDetailAPIView):
     model = TripRequiredDocumentItem
     serializer_class = TripRequiredDocumentItemSerializer
     parser_classes = [MultiPartParser, FormParser, JSONParser]
-    lookup_url_kwarg = "document_item_id"
+    lookup_url_kwarg = "document_id"
     detail_message = "Trip required document fetched successfully."
     update_message = "Trip required document updated successfully."
     delete_message = "Trip required document deleted successfully."

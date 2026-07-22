@@ -62,7 +62,7 @@ class TripDestinationUpdateAPIView(UserTripQuerysetMixin, GenericAPIView):
     Frontend request:
     - Method: PATCH
     - Headers: authenticated bearer token
-    - URL params: `trip_id`, `destination_row_id`
+    - URL params: `trip_id`, `destination_id`
     - Content-Type: application/json
     - Send only destination-row fields that should change.
 
@@ -75,7 +75,7 @@ class TripDestinationUpdateAPIView(UserTripQuerysetMixin, GenericAPIView):
 
     def get_object(self):
         trip = self.get_trip_by_id()
-        return get_object_or_404(TripDestination, trip=trip, pk=self.kwargs["destination_row_id"])
+        return get_object_or_404(TripDestination, trip=trip, pk=self.kwargs["destination_id"])
 
     def patch(self, request, *args, **kwargs):
         trip_destination = self.get_object()
@@ -100,7 +100,7 @@ class TripDestinationDeleteAPIView(UserTripQuerysetMixin, GenericAPIView):
     Frontend request:
     - Method: DELETE
     - Headers: authenticated bearer token
-    - URL params: `trip_id`, `destination_row_id`
+    - URL params: `trip_id`, `destination_id`
     - No request body is required.
 
     Frontend response:
@@ -111,7 +111,7 @@ class TripDestinationDeleteAPIView(UserTripQuerysetMixin, GenericAPIView):
 
     def delete(self, request, *args, **kwargs):
         trip = self.get_trip_by_id()
-        trip_destination = get_object_or_404(TripDestination, trip=trip, pk=self.kwargs["destination_row_id"])
+        trip_destination = get_object_or_404(TripDestination, trip=trip, pk=self.kwargs["destination_id"])
         trip_destination.delete()
         return APIResponse.success(message="Trip destination removed successfully.")
 

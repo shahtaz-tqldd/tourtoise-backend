@@ -1,4 +1,5 @@
 from django.shortcuts import get_object_or_404
+from uuid import UUID
 from rest_framework import status
 from rest_framework.generics import GenericAPIView
 from rest_framework.permissions import IsAuthenticated
@@ -13,11 +14,10 @@ from destinations.models import Activity, Attraction, Cuisine
 from trips.api.v1.client.serializers import (
     TripAgentActiveSerializer,
     TripAgentCreateMessageSerializer,
-    TripAgentMessageListQuerySerializer,
     TripAgentMessageSerializer,
     TripPlanningTripQuerySerializer,
 )
-from trips.choices import AgentMessageSender, TripStatus
+from trips.choices import AgentMessageSender, TripStatus, PlanningStep
 from trips.models import (
     TripAgentConversationSession,
     TripAgentMessage,
@@ -70,24 +70,23 @@ class TripAgentInitAPIView(UserTripQuerysetMixin, GenericAPIView):
             self.get_trip_queryset(),
             pk=serializer.validated_data["trip_id"],
         )
-        submitted_payload = serializer.normalized_preferences()
-        if serializer.validated_data["let_agent_decide"]:
-            normalized_payload = self._agent_decided_preferences(request.user, submitted_payload)
-        else:
-            normalized_payload = submitted_payload
+
+        normalized_payload = serializer.normalized_preferences()
 
         trip_snapshot = build_trip_snapshot(trip)
-        session = get_or_create_agent_conversation_session(trip, request.user, current_step=2)
+
+        session = get_or_create_agent_conversation_session(trip, request.user, step=PlanningStep.PREFERENCE)
+
         create_agent_message(
             session=session,
-            sender=AgentMessageSender.USER,
-            content="Initial trip preferences submitted.",
+            sender=AgentMessageSender.SYSTEM,
+            content="Trip planning",
             metadata={
-                "preferences": normalized_payload,
                 "trip_snapshot": trip_snapshot,
             },
             user=request.user,
         )
+
         plan_agent_response = run_plan_agent_for_session(
             session=session,
             user_query=build_initial_agent_query(normalized_payload, trip_snapshot),
@@ -96,24 +95,24 @@ class TripAgentInitAPIView(UserTripQuerysetMixin, GenericAPIView):
         )
         qna_response = plan_agent_response["response"]
         agent_message = qna_response.get("question") or qna_response.get("context") or ""
-        if qna_response.get("question"):
-            session.qna_count += 1
-            session.updated_by = request.user
-            session.save(update_fields=["qna_count", "updated_by", "updated_at"])
+
         create_agent_message(
             session=session,
             sender=AgentMessageSender.AGENT,
             content=agent_message,
             metadata={
-                "qna_response": qna_response,
                 "cost": plan_agent_response.get("cost"),
                 "total_tokens": plan_agent_response.get("total_tokens"),
             },
             user=request.user,
         )
 
-        trip.preferences = {"agent_customization": normalized_payload}
-        trip.agent_active = True        
+        preferences = {
+            "session_id": str(session.id),
+            **normalized_payload,
+        }
+        trip.preferences = preferences
+        trip.agent_active = True
         trip.updated_by = request.user
         trip.save(
             update_fields=[
@@ -123,8 +122,6 @@ class TripAgentInitAPIView(UserTripQuerysetMixin, GenericAPIView):
                 "updated_at",
             ]
         )
-        
-        update_trip_agent_context_from_qna(trip, plan_agent_response, session, request.user)
 
         update_user_profile_from_agent_preferences(request.user, normalized_payload)
 
@@ -132,26 +129,12 @@ class TripAgentInitAPIView(UserTripQuerysetMixin, GenericAPIView):
             data={
                 "session_id": str(session.id),
                 "agent_active": trip.agent_active,
+                "preferences": preferences,
                 "agent_message": agent_message,
-                "is_qna_complete": qna_response.get("is_qna_complete", False),
-                "context": qna_response.get("context"),
-                "current_step": trip.current_step,
-                "preferences": normalized_payload,
+                "is_step_complete": qna_response.get("is_qna_complete", False),
             },
             message="Trip agent preferences updated successfully.",
         )
-
-    def _agent_decided_preferences(self, user, fallback_payload):
-        profile = getattr(user, "profile", None)
-        if not profile:
-            return fallback_payload
-
-        return {
-            "travel_pace": profile.travel_pace or fallback_payload["travel_pace"],
-            "interest_tags": profile.travel_interests or fallback_payload["interest_tags"],
-            "dietary_needs": profile.dietary_preferences or fallback_payload["dietary_needs"],
-            "mobility_constraints": profile.mobility_constraints or fallback_payload["mobility_constraints"],
-        }
 
 
 class TripAgentCreateMessageAPIView(UserTripQuerysetMixin, GenericAPIView):
@@ -169,19 +152,23 @@ class TripAgentCreateMessageAPIView(UserTripQuerysetMixin, GenericAPIView):
             self.get_trip_queryset(),
             pk=serializer.validated_data["trip_id"],
         )
-        current_step = serializer.validated_data["current_step"]
         session_id = serializer.validated_data.get("session_id")
         if session_id:
             session = get_object_or_404(
                 TripAgentConversationSession.objects.filter(
                     trip=trip,
                     user=request.user,
-                    current_step=current_step,
+                    step=PlanningStep.PREFERENCE,
+                    is_active=True,
                 ),
                 pk=session_id,
             )
         else:
-            session = get_or_create_agent_conversation_session(trip, request.user, current_step=current_step)
+            session = get_or_create_agent_conversation_session(
+                trip,
+                request.user,
+                step=PlanningStep.PREFERENCE,
+            )
 
         create_agent_message(
             session=session,
@@ -196,22 +183,19 @@ class TripAgentCreateMessageAPIView(UserTripQuerysetMixin, GenericAPIView):
             user_query=serializer.validated_data["message"]
         )
         qna_response = plan_agent_response["response"]
-        agent_message = qna_response.get("question") or qna_response.get("context") or ""
-
-        if qna_response.get("question"):
-            session.qna_count += 1
-            session.updated_by = request.user
-            session.save(update_fields=["qna_count", "updated_by", "updated_at"])
-
+        agent_message = qna_response.get("question", None) 
+        system_message = qna_response.get("context", None)
+        
+        content = agent_message or system_message
+        sender = AgentMessageSender.AGENT if agent_message else AgentMessageSender.SYSTEM
+        
         create_agent_message(
             session=session,
-            sender=AgentMessageSender.AGENT,
-            content=agent_message,
+            sender=sender,
+            content=content,
             metadata={
-                "qna_response": qna_response,
                 "cost": plan_agent_response.get("cost"),
                 "total_tokens": plan_agent_response.get("total_tokens"),
-                "intention": plan_agent_response.get("intention"),
             },
             user=request.user,
         )
@@ -222,45 +206,11 @@ class TripAgentCreateMessageAPIView(UserTripQuerysetMixin, GenericAPIView):
 
         return APIResponse.success(
             data={
-                "agent_message": agent_message,
                 "session_id": str(session.id),
-                "is_qna_complete": qna_response.get("is_qna_complete", False),
+                "agent_message": content,
                 "is_step_complete": is_step_complete,
-                "context": qna_response.get("context"),
-                "current_step": trip.current_step,
             },
             message="Trip agent message created successfully.",
-        )
-
-
-class TripAgentMessageListAPIView(TripPaginationMixin, UserTripQuerysetMixin, GenericAPIView):
-    """
-    List persisted trip-agent conversation messages.
-
-    Query params:
-    - `session_id` required
-    - `page`, `page_size` optional pagination params
-    """
-
-    permission_classes = [IsAuthenticated]
-    serializer_class = TripAgentMessageListQuerySerializer
-
-    def get(self, request, *args, **kwargs):
-        serializer = self.get_serializer(data=request.query_params)
-        serializer.is_valid(raise_exception=True)
-        session_id = serializer.validated_data["session_id"]
-        session = get_object_or_404(
-            TripAgentConversationSession.objects.filter(
-                pk=session_id,
-                user=request.user,
-                trip__user=request.user,
-            )
-        )
-        queryset = TripAgentMessage.objects.filter(session=session).order_by("created_at")
-        return self.paginate_with_meta(
-            queryset,
-            TripAgentMessageSerializer,
-            message="Trip agent messages fetched successfully.",
         )
 
 
@@ -287,7 +237,7 @@ class TripPlanningRecommendationsAPIView(UserTripQuerysetMixin, GenericAPIView):
                     message="Trip recommendations fetched successfully.",
                 )
 
-            existing_recommendations = (trip.agent_context or {}).get("recommendations")
+            existing_recommendations = (trip.metadata or {}).get("recommendations")
             if existing_recommendations and existing_recommendations.get("is_discovery_complete"):
                 return APIResponse.success(
                     data=self._serialize_recommendations(existing_recommendations),
@@ -305,7 +255,7 @@ class TripPlanningRecommendationsAPIView(UserTripQuerysetMixin, GenericAPIView):
         trip_snapshot = build_trip_snapshot(trip)
         preferences = {
             "trip_preferences": trip.preferences or {},
-            "preference_context": (trip.agent_context or {}).get("preference_qna", {}).get("context"),
+            "preference_context": (trip.metadata or {}).get("preference_qna", {}).get("context"),
         }
 
         session = get_or_create_agent_conversation_session(trip, request.user, current_step=3)
@@ -371,6 +321,7 @@ class TripPlanningRecommendationsAPIView(UserTripQuerysetMixin, GenericAPIView):
 
     def _serialize_recommendations(self, recommendations):
         attraction_ids = self._recommendation_ids(recommendations, "attraction")
+        activity_ids = self._recommendation_ids(recommendations, "activity")
         cuisine_ids = self._recommendation_ids(recommendations, "cuisine")
         return {
             "is_recommendation_complete": recommendations.get("is_discovery_complete", False),
@@ -380,8 +331,8 @@ class TripPlanningRecommendationsAPIView(UserTripQuerysetMixin, GenericAPIView):
                 ClientAttractionSerializer,
             ),
             "activities": self._serialize_items(
-                Activity.objects.filter(id__in=recommendations.get("activity_ids", [])).prefetch_related("images"),
-                recommendations.get("activity_ids", []),
+                Activity.objects.filter(id__in=activity_ids).prefetch_related("images"),
+                activity_ids,
                 ClientActivitySerializer,
             ),
             "cuisines": self._serialize_items(
@@ -438,8 +389,8 @@ class TripPlanningRecommendationsAPIView(UserTripQuerysetMixin, GenericAPIView):
                 "activities": recommendations.activity_recommendation_message,
                 "cuisines": recommendations.cusine_recommendation_message,
             },
-            "session_id": recommendations.session_id,
-            "external_session_id": (recommendations.metadata or {}).get("external_session_id"),
+            "session_id": (recommendations.metadata or {}).get("session_id"),
+            "external_session_id": recommendations.external_session_id,
         }
 
     def _serialize_recommendation_messages(self, messages):
@@ -452,15 +403,32 @@ class TripPlanningRecommendationsAPIView(UserTripQuerysetMixin, GenericAPIView):
 
     def _recommendation_ids(self, recommendations, item_type):
         if item_type == "attraction":
-            return recommendations.get("attraction_ids") or recommendations.get("tour_spot_ids") or []
+            return self._valid_uuid_strings(
+                recommendations.get("attraction_ids") or recommendations.get("tour_spot_ids") or []
+            )
         if item_type == "cuisine":
-            return recommendations.get("cuisine_ids") or recommendations.get("food_item_ids") or []
-        return recommendations.get(f"{item_type}_ids") or []
+            return self._valid_uuid_strings(
+                recommendations.get("cuisine_ids") or recommendations.get("food_item_ids") or []
+            )
+        return self._valid_uuid_strings(recommendations.get(f"{item_type}_ids") or [])
 
     def _serialize_items(self, queryset, selected_ids, serializer_class):
         item_map = {str(item.id): item for item in queryset}
         ordered_items = [item_map[str(item_id)] for item_id in selected_ids if str(item_id) in item_map]
         return serializer_class(ordered_items, many=True, context={"request": self.request}).data
+
+    def _valid_uuid_strings(self, values):
+        valid_ids = []
+        seen = set()
+        for value in values or []:
+            try:
+                parsed = str(UUID(str(value)))
+            except (TypeError, ValueError, AttributeError):
+                continue
+            if parsed not in seen:
+                valid_ids.append(parsed)
+                seen.add(parsed)
+        return valid_ids
 
 
 class TripPlanningItinerariesAPIView(UserTripQuerysetMixin, GenericAPIView):
@@ -487,7 +455,7 @@ class TripPlanningItinerariesAPIView(UserTripQuerysetMixin, GenericAPIView):
                     message="Trip itinerary fetched successfully.",
                 )
 
-        recommendations = (trip.agent_context or {}).get("recommendations")
+        recommendations = (trip.metadata or {}).get("recommendations")
         if not recommendations or not recommendations.get("is_discovery_complete"):
             return APIResponse.error(
                 message="Generate trip recommendations before requesting an itinerary.",
@@ -566,8 +534,8 @@ class TripPlanningItinerariesAPIView(UserTripQuerysetMixin, GenericAPIView):
             "title": itinerary.title,
             "summary": itinerary.summary,
             "message": itinerary.message,
-            "session_id": itinerary.session_id,
-            "is_finalized": itinerary.is_finalized,
+            "session_id": (itinerary.metadata or {}).get("session_id"),
+            "external_session_id": itinerary.external_session_id,
             "route_plan_items": [
                 self._serialize_route_plan_item(item)
                 for item in itinerary.route_plan_items.all()
@@ -734,8 +702,8 @@ class TripPlanningPrepartionAPIView(UserTripQuerysetMixin, GenericAPIView):
             "title": preparation.title,
             "summary": preparation.summary,
             "message": preparation.message,
-            "is_finalized": preparation.is_finalized,
-            "session_id": preparation.session_id,
+            "session_id": (preparation.metadata or {}).get("session_id"),
+            "external_session_id": preparation.external_session_id,
             "packing_items": [
                 self._serialize_packing_item(item)
                 for item in preparation.packing_items.all()
@@ -818,7 +786,7 @@ class TripPlanningOverviewAPIView(UserTripQuerysetMixin, GenericAPIView):
         )
 
     def _build_overview(self, trip):
-        agent_context = trip.agent_context or {}
+        agent_context = trip.metadata or {}
         recommendations = agent_context.get("recommendations") or {}
         itinerary = agent_context.get("itinerary_design") or {}
         preparation = agent_context.get("trip_preparation") or {}
@@ -867,7 +835,7 @@ class TripPlanningOverviewAPIView(UserTripQuerysetMixin, GenericAPIView):
                     "start_location": trip.start_location_address,
                 },
                 "budget": {
-                    "amount": str(trip.total_budget) if trip.total_budget is not None else None,
+                    "tier": trip.budget_tier,
                     "currency": trip.budget_currency,
                 },
             },
@@ -915,6 +883,98 @@ class TripPlanningOverviewAPIView(UserTripQuerysetMixin, GenericAPIView):
         return blocking_steps
 
 
+class TripPlanningAPIView(
+    TripPaginationMixin,
+    TripPlanningRecommendationsAPIView,
+    TripPlanningItinerariesAPIView,
+    TripPlanningPrepartionAPIView,
+    TripPlanningOverviewAPIView,
+):
+    """
+    Get trip planning data by step.
+
+    Query params:
+    - `trip_id` required
+    - `step` -> "preference"|"recommendation"|"itinerary"|"preparation"|"overview" required
+    - `session_id` optional for `step=preference`
+    """
+
+    permission_classes = [IsAuthenticated]
+    serializer_class = TripPlanningTripQuerySerializer
+
+    def get(self, request, *args, **kwargs):
+        step = request.query_params.get("step")
+        if step not in {
+            PlanningStep.PREFERENCE,
+            PlanningStep.RECOMMENDATION,
+            PlanningStep.ITINERARY,
+            PlanningStep.PREPARATION,
+            PlanningStep.OVERVIEW,
+        }:
+            return APIResponse.error(
+                message="Valid step is required.",
+                errors={
+                    "step": [
+                        "Use one of: preference, recommendation, itinerary, preparation, overview."
+                    ]
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if step == PlanningStep.PREFERENCE:
+            return self._get_preference_messages(request)
+        if step == PlanningStep.RECOMMENDATION:
+            return TripPlanningRecommendationsAPIView.get(self, request, *args, **kwargs)
+        if step == PlanningStep.ITINERARY:
+            return TripPlanningItinerariesAPIView.get(self, request, *args, **kwargs)
+        if step == PlanningStep.PREPARATION:
+            return TripPlanningPrepartionAPIView.get(self, request, *args, **kwargs)
+        return TripPlanningOverviewAPIView.get(self, request, *args, **kwargs)
+
+    def _get_preference_messages(self, request):
+        serializer = self.get_serializer(data=request.query_params)
+        serializer.is_valid(raise_exception=True)
+
+        trip = get_object_or_404(self.get_trip_queryset(), pk=serializer.validated_data["trip_id"])
+        sessions = TripAgentConversationSession.objects.filter(
+            trip=trip,
+            user=request.user,
+            step=PlanningStep.PREFERENCE,
+        ).order_by("-updated_at")
+
+        session_id = request.query_params.get("session_id")
+        if session_id:
+            sessions = sessions.filter(pk=session_id)
+
+        session = sessions.first()
+        if not session:
+            return APIResponse.success(
+                data={
+                    "session": None,
+                    "messages": [],
+                    "preferences": trip.preferences or {},
+                },
+                message="Trip preference messages fetched successfully.",
+            )
+
+        messages = TripAgentMessage.objects.filter(session=session).order_by("created_at")
+        preference = trip.preferences
+        agent_active = trip.agent_active
+        is_step_complete = trip.is_qna_complete
+        is_recommendation_complete = trip.is_recommendation_complete
+        
+        return APIResponse.success(
+            data={
+                **preference,
+                "agent_active": agent_active,
+                "is_step_complete": is_step_complete,
+                "is_recommendation_complete": is_recommendation_complete,
+                "messages": TripAgentMessageSerializer(messages, many=True).data,
+            },
+            message="Trip preference messages fetched successfully.",
+        )
+
+
 class ActivateTripPlanAPIView(UserTripQuerysetMixin, GenericAPIView):
     """
     Mark a completed draft/planning trip plan as ready.
@@ -931,7 +991,7 @@ class ActivateTripPlanAPIView(UserTripQuerysetMixin, GenericAPIView):
         serializer.is_valid(raise_exception=True)
 
         trip = get_object_or_404(self.get_trip_queryset(), pk=serializer.validated_data["trip_id"])
-        agent_context = trip.agent_context or {}
+        agent_context = trip.metadata or {}
         itinerary = agent_context.get("itinerary_design") or {}
         preparation = agent_context.get("trip_preparation") or {}
 
@@ -964,7 +1024,7 @@ class ActivateTripPlanAPIView(UserTripQuerysetMixin, GenericAPIView):
             )
 
         trip.status = TripStatus.READY
-        trip.current_step = max(trip.current_step, 6)
+        trip.current_step = PlanningStep.COMPLETED
         trip.updated_by = request.user
         trip.save(update_fields=["status", "current_step", "updated_by", "updated_at"])
 

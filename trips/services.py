@@ -15,6 +15,7 @@ from trips.choices import (
     PriorityType,
     RequiredType,
     SeverityType,
+    TripStatus,
 )
 from trips.models import (
     TripAgentConversationSession,
@@ -33,6 +34,22 @@ from trips.models import (
     TripPreparationPackingItem,
     TripRequiredDocumentItem,
 )
+
+PLANNING_STEP_ORDER = (
+    PlanningStep.PREFERENCE,
+    PlanningStep.RECOMMENDATION,
+    PlanningStep.ITINERARY,
+    PlanningStep.PREPARATION,
+    PlanningStep.OVERVIEW,
+)
+
+PLANNING_STEP_LABELS = {
+    PlanningStep.PREFERENCE: "Preference Q&A",
+    PlanningStep.RECOMMENDATION: "Recommendations",
+    PlanningStep.ITINERARY: "Itinerary design",
+    PlanningStep.PREPARATION: "Trip preparation",
+    PlanningStep.OVERVIEW: "Overview",
+}
 
 
 def get_or_create_agent_conversation_session(trip, user, step=None, current_step=None):
@@ -84,6 +101,155 @@ def create_agent_message(session, sender, content="", metadata=None, user=None):
         created_by=actor,
         updated_by=actor,
     )
+
+
+def get_trip_planning_progress(trip):
+    agent_context = trip.metadata or {}
+    preference_qna = (
+        agent_context.get("preference_qna")
+        if isinstance(agent_context.get("preference_qna"), dict)
+        else {}
+    )
+    recommendations = (
+        agent_context.get("recommendations")
+        if isinstance(agent_context.get("recommendations"), dict)
+        else {}
+    )
+    itinerary_design = (
+        agent_context.get("itinerary_design")
+        if isinstance(agent_context.get("itinerary_design"), dict)
+        else {}
+    )
+    trip_preparation = (
+        agent_context.get("trip_preparation")
+        if isinstance(agent_context.get("trip_preparation"), dict)
+        else {}
+    )
+
+    has_saved_recommendations = TripRecommendations.objects.filter(trip=trip).exists()
+    has_saved_itinerary = TripItinerary.objects.filter(trip=trip).exists()
+    has_saved_preparation = TripPreparation.objects.filter(trip=trip).exists()
+
+    return {
+        "current_step": trip.current_step,
+        "agent_active": trip.agent_active,
+        "is_qna_complete": bool(trip.is_qna_complete or preference_qna.get("context")),
+        "is_recommendation_complete": bool(
+            trip.is_recommendation_complete
+            or recommendations.get("is_discovery_complete")
+            or has_saved_recommendations
+        ),
+        "is_itinerary_design_complete": bool(
+            trip.is_itinerary_design_complete
+            or itinerary_design.get("is_itinerary_complete")
+            or has_saved_itinerary
+        ),
+        "is_trip_preparation_complete": bool(
+            trip.is_trip_preparation_complete
+            or trip_preparation.get("is_preparation_complete")
+            or has_saved_preparation
+        ),
+    }
+
+
+def get_trip_planning_flow(trip):
+    progress = get_trip_planning_progress(trip)
+    return [
+        {
+            "step": PlanningStep.PREFERENCE,
+            "label": PLANNING_STEP_LABELS[PlanningStep.PREFERENCE],
+            "is_complete": progress["is_qna_complete"],
+            "is_current": trip.current_step == PlanningStep.PREFERENCE,
+            "can_open": True,
+            "can_generate": not progress["is_qna_complete"],
+        },
+        {
+            "step": PlanningStep.RECOMMENDATION,
+            "label": PLANNING_STEP_LABELS[PlanningStep.RECOMMENDATION],
+            "is_complete": progress["is_recommendation_complete"],
+            "is_current": trip.current_step == PlanningStep.RECOMMENDATION,
+            "can_open": progress["is_qna_complete"],
+            "can_generate": progress["is_qna_complete"],
+        },
+        {
+            "step": PlanningStep.ITINERARY,
+            "label": PLANNING_STEP_LABELS[PlanningStep.ITINERARY],
+            "is_complete": progress["is_itinerary_design_complete"],
+            "is_current": trip.current_step == PlanningStep.ITINERARY,
+            "can_open": progress["is_recommendation_complete"],
+            "can_generate": progress["is_recommendation_complete"],
+        },
+        {
+            "step": PlanningStep.PREPARATION,
+            "label": PLANNING_STEP_LABELS[PlanningStep.PREPARATION],
+            "is_complete": progress["is_trip_preparation_complete"],
+            "is_current": trip.current_step == PlanningStep.PREPARATION,
+            "can_open": progress["is_itinerary_design_complete"],
+            "can_generate": progress["is_itinerary_design_complete"],
+        },
+        {
+            "step": PlanningStep.OVERVIEW,
+            "label": PLANNING_STEP_LABELS[PlanningStep.OVERVIEW],
+            "is_complete": (
+                progress["is_itinerary_design_complete"]
+                and progress["is_trip_preparation_complete"]
+            ),
+            "is_current": trip.current_step == PlanningStep.OVERVIEW,
+            "can_open": True,
+            "can_generate": False,
+        },
+    ]
+
+
+def get_step_blocking_errors(trip, step):
+    progress = get_trip_planning_progress(trip)
+    blocking_errors = []
+
+    if step == PlanningStep.RECOMMENDATION:
+        if progress["is_recommendation_complete"]:
+            return []
+        if not progress["is_qna_complete"]:
+            blocking_errors.append("Complete preference Q&A before requesting recommendations.")
+        if not trip.trip_destinations.exists():
+            blocking_errors.append("Add at least one destination before requesting recommendations.")
+    elif step == PlanningStep.ITINERARY:
+        if progress["is_itinerary_design_complete"]:
+            return []
+        if not progress["is_recommendation_complete"]:
+            blocking_errors.append("Generate recommendations before requesting an itinerary.")
+    elif step == PlanningStep.PREPARATION:
+        if progress["is_trip_preparation_complete"]:
+            return []
+        if not progress["is_itinerary_design_complete"]:
+            blocking_errors.append("Generate the itinerary before requesting trip preparation.")
+
+    return blocking_errors
+
+
+def get_activation_blocking_errors(trip):
+    progress = get_trip_planning_progress(trip)
+    blocking_errors = []
+
+    if trip.status not in {TripStatus.DRAFT, TripStatus.PLANNING}:
+        blocking_errors.append("Trip status must be draft or planning.")
+    if not progress["is_itinerary_design_complete"]:
+        blocking_errors.append("Generate the trip itinerary.")
+    if not progress["is_trip_preparation_complete"]:
+        blocking_errors.append("Generate the trip preparation checklist.")
+
+    return blocking_errors
+
+
+def build_planning_response_meta(trip):
+    activation_blocking_errors = get_activation_blocking_errors(trip)
+    return {
+        "progress": get_trip_planning_progress(trip),
+        "flow": get_trip_planning_flow(trip),
+        "activation": {
+            "can_activate": not activation_blocking_errors,
+            "blocking_steps": activation_blocking_errors,
+        },
+    }
 
 
 def build_trip_snapshot(trip):
@@ -302,12 +468,13 @@ def _serialize_selected_cuisines(selected_ids):
             "name": item.name,
             "type": item.cuisine_type,
             "description": item.description,
-            "ingredients_note": item.ingredients_note,
             "spice_level": item.spice_level,
             "meal_type": item.meal_type,
             "is_vegetarian_friendly": item.is_vegetarian_friendly,
-            "is_must_try": item.is_must_try,
-            "approx_price_range": item.approx_price_range,
+            "is_featured": item.is_featured,
+            "approx_cost": item.approx_cost,
+            "picking_reasons": item.picking_reasons,
+            "notes": item.notes,
         }
         for item_id in selected_ids
         if (item := item_map.get(str(item_id)))
@@ -322,10 +489,18 @@ def update_trip_agent_context_from_qna(trip, agent_response, session, user):
     if not is_qna_complete or not context:
         return False
 
+    agent_context = trip.metadata or {}
+    agent_context["preference_qna"] = {
+        "context": str(context).strip(),
+        "session_id": str(session.id),
+        "external_session_id": session.external_session_id,
+    }
+
+    trip.metadata = agent_context
     trip.current_step = PlanningStep.RECOMMENDATION
     trip.updated_by = user
     trip.is_qna_complete = is_qna_complete
-    trip.save(update_fields=["current_step", "is_qna_complete", "updated_by", "updated_at"])
+    trip.save(update_fields=["metadata", "current_step", "is_qna_complete", "updated_by", "updated_at"])
 
     session.is_active = False
     session.updated_by = user

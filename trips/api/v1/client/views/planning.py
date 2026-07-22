@@ -26,6 +26,7 @@ from trips.models import (
     TripRecommendations,
 )
 from trips.services import (
+    build_planning_response_meta,
     build_initial_agent_query,
     build_itinerary_agent_query,
     build_itinerary_planning_context,
@@ -33,7 +34,11 @@ from trips.services import (
     build_recommendations_agent_query,
     build_trip_snapshot,
     create_agent_message,
+    get_activation_blocking_errors,
     get_or_create_agent_conversation_session,
+    get_step_blocking_errors,
+    get_trip_planning_flow,
+    get_trip_planning_progress,
     run_plan_agent_for_session as _run_plan_agent_for_session,
     update_trip_agent_context_from_qna,
     update_trip_agent_context_from_itinerary,
@@ -124,6 +129,18 @@ class TripAgentInitAPIView(UserTripQuerysetMixin, GenericAPIView):
         )
 
         update_user_profile_from_agent_preferences(request.user, normalized_payload)
+        is_step_complete = update_trip_agent_context_from_qna(
+            trip,
+            plan_agent_response,
+            session,
+            request.user,
+        )
+        trip.refresh_from_db(fields=[
+            "metadata",
+            "current_step",
+            "is_qna_complete",
+            "updated_at",
+        ])
 
         return APIResponse.success(
             data={
@@ -131,7 +148,10 @@ class TripAgentInitAPIView(UserTripQuerysetMixin, GenericAPIView):
                 "agent_active": trip.agent_active,
                 "preferences": preferences,
                 "agent_message": agent_message,
-                "is_step_complete": qna_response.get("is_qna_complete", False),
+                "is_step_complete": is_step_complete,
+                "is_qna_complete": is_step_complete,
+                "progress": get_trip_planning_progress(trip),
+                "flow": get_trip_planning_flow(trip),
             },
             message="Trip agent preferences updated successfully.",
         )
@@ -152,6 +172,13 @@ class TripAgentCreateMessageAPIView(UserTripQuerysetMixin, GenericAPIView):
             self.get_trip_queryset(),
             pk=serializer.validated_data["trip_id"],
         )
+
+        if get_trip_planning_progress(trip)["is_qna_complete"]:
+            return APIResponse.error(
+                message="Preference Q&A is already complete for this trip.",
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         session_id = serializer.validated_data.get("session_id")
         if session_id:
             session = get_object_or_404(
@@ -186,7 +213,7 @@ class TripAgentCreateMessageAPIView(UserTripQuerysetMixin, GenericAPIView):
         agent_message = qna_response.get("question", None) 
         system_message = qna_response.get("context", None)
         
-        content = agent_message or system_message
+        content = agent_message or system_message or ""
         sender = AgentMessageSender.AGENT if agent_message else AgentMessageSender.SYSTEM
         
         create_agent_message(
@@ -209,6 +236,9 @@ class TripAgentCreateMessageAPIView(UserTripQuerysetMixin, GenericAPIView):
                 "session_id": str(session.id),
                 "agent_message": content,
                 "is_step_complete": is_step_complete,
+                "is_qna_complete": is_step_complete,
+                "progress": get_trip_planning_progress(trip),
+                "flow": get_trip_planning_flow(trip),
             },
             message="Trip agent message created successfully.",
         )
@@ -229,18 +259,33 @@ class TripPlanningRecommendationsAPIView(UserTripQuerysetMixin, GenericAPIView):
         serializer.is_valid(raise_exception=True)
 
         trip = get_object_or_404(self.get_trip_queryset(), pk=serializer.validated_data["trip_id"])
-        if trip.is_recommendation_complete:
+        blocking_errors = get_step_blocking_errors(trip, PlanningStep.RECOMMENDATION)
+        if blocking_errors:
+            return APIResponse.error(
+                errors={"blocking_steps": blocking_errors},
+                message=blocking_errors[0],
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        progress = get_trip_planning_progress(trip)
+        if progress["is_recommendation_complete"]:
             saved_recommendations = self._get_saved_recommendations(trip)
             if saved_recommendations:
                 return APIResponse.success(
-                    data=self._serialize_saved_recommendations(saved_recommendations),
+                    data={
+                        **self._serialize_saved_recommendations(saved_recommendations),
+                        **build_planning_response_meta(trip),
+                    },
                     message="Trip recommendations fetched successfully.",
                 )
 
             existing_recommendations = (trip.metadata or {}).get("recommendations")
             if existing_recommendations and existing_recommendations.get("is_discovery_complete"):
                 return APIResponse.success(
-                    data=self._serialize_recommendations(existing_recommendations),
+                    data={
+                        **self._serialize_recommendations(existing_recommendations),
+                        **build_planning_response_meta(trip),
+                    },
                     message="Trip recommendations fetched successfully.",
                 )
 
@@ -306,7 +351,10 @@ class TripPlanningRecommendationsAPIView(UserTripQuerysetMixin, GenericAPIView):
             )
 
         return APIResponse.success(
-            data=self._serialize_recommendations(recommendations),
+            data={
+                **self._serialize_recommendations(recommendations),
+                **build_planning_response_meta(trip),
+            },
             message="Trip recommendations created successfully.",
         )
 
@@ -447,11 +495,23 @@ class TripPlanningItinerariesAPIView(UserTripQuerysetMixin, GenericAPIView):
         serializer.is_valid(raise_exception=True)
 
         trip = get_object_or_404(self.get_trip_queryset(), pk=serializer.validated_data["trip_id"])
-        if trip.is_itinerary_design_complete:
+        blocking_errors = get_step_blocking_errors(trip, PlanningStep.ITINERARY)
+        if blocking_errors:
+            return APIResponse.error(
+                errors={"blocking_steps": blocking_errors},
+                message=blocking_errors[0],
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        progress = get_trip_planning_progress(trip)
+        if progress["is_itinerary_design_complete"]:
             saved_itinerary = self._get_saved_itinerary(trip)
             if saved_itinerary:
                 return APIResponse.success(
-                    data=self._serialize_saved_itinerary(saved_itinerary),
+                    data={
+                        **self._serialize_saved_itinerary(saved_itinerary),
+                        **build_planning_response_meta(trip),
+                    },
                     message="Trip itinerary fetched successfully.",
                 )
 
@@ -511,7 +571,10 @@ class TripPlanningItinerariesAPIView(UserTripQuerysetMixin, GenericAPIView):
 
         saved_itinerary = self._get_saved_itinerary(trip)
         return APIResponse.success(
-            data=self._serialize_saved_itinerary(saved_itinerary) if saved_itinerary else itinerary,
+            data={
+                **(self._serialize_saved_itinerary(saved_itinerary) if saved_itinerary else itinerary),
+                **build_planning_response_meta(trip),
+            },
             message="Trip itinerary created successfully.",
         )
 
@@ -622,11 +685,23 @@ class TripPlanningPrepartionAPIView(UserTripQuerysetMixin, GenericAPIView):
         serializer.is_valid(raise_exception=True)
 
         trip = get_object_or_404(self.get_trip_queryset(), pk=serializer.validated_data["trip_id"])
-        if trip.is_trip_preparation_complete:
+        blocking_errors = get_step_blocking_errors(trip, PlanningStep.PREPARATION)
+        if blocking_errors:
+            return APIResponse.error(
+                errors={"blocking_steps": blocking_errors},
+                message=blocking_errors[0],
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        progress = get_trip_planning_progress(trip)
+        if progress["is_trip_preparation_complete"]:
             saved_preparation = self._get_saved_preparation(trip)
             if saved_preparation:
                 return APIResponse.success(
-                    data=self._serialize_saved_preparation(saved_preparation),
+                    data={
+                        **self._serialize_saved_preparation(saved_preparation),
+                        **build_planning_response_meta(trip),
+                    },
                     message="Trip preparation fetched successfully.",
                 )
 
@@ -679,7 +754,10 @@ class TripPlanningPrepartionAPIView(UserTripQuerysetMixin, GenericAPIView):
 
         saved_preparation = self._get_saved_preparation(trip)
         return APIResponse.success(
-            data=self._serialize_saved_preparation(saved_preparation) if saved_preparation else preparation,
+            data={
+                **(self._serialize_saved_preparation(saved_preparation) if saved_preparation else preparation),
+                **build_planning_response_meta(trip),
+            },
             message="Trip preparation created successfully.",
         )
 
@@ -787,9 +865,21 @@ class TripPlanningOverviewAPIView(UserTripQuerysetMixin, GenericAPIView):
 
     def _build_overview(self, trip):
         agent_context = trip.metadata or {}
-        recommendations = agent_context.get("recommendations") or {}
-        itinerary = agent_context.get("itinerary_design") or {}
-        preparation = agent_context.get("trip_preparation") or {}
+        recommendations = (
+            agent_context.get("recommendations")
+            if isinstance(agent_context.get("recommendations"), dict)
+            else {}
+        )
+        itinerary = (
+            agent_context.get("itinerary_design")
+            if isinstance(agent_context.get("itinerary_design"), dict)
+            else {}
+        )
+        preparation = (
+            agent_context.get("trip_preparation")
+            if isinstance(agent_context.get("trip_preparation"), dict)
+            else {}
+        )
 
         destinations = [
             {
@@ -804,20 +894,17 @@ class TripPlanningOverviewAPIView(UserTripQuerysetMixin, GenericAPIView):
         day_wise_plan = itinerary.get("day_wise_plan") if isinstance(itinerary.get("day_wise_plan"), list) else []
         route_plan = itinerary.get("route_plan") if isinstance(itinerary.get("route_plan"), list) else []
         rough_budget = itinerary.get("rough_budget") if isinstance(itinerary.get("rough_budget"), dict) else {}
+        progress = get_trip_planning_progress(trip)
 
         planning_progress = {
             "current_step": trip.current_step,
-            "is_qna_complete": bool((agent_context.get("preference_qna") or {}).get("context")),
-            "is_recommendation_complete": trip.is_recommendation_complete
-            or bool(recommendations.get("is_discovery_complete")),
-            "is_itinerary_complete": bool(itinerary.get("is_itinerary_complete")),
-            "is_preparation_complete": bool(preparation.get("is_preparation_complete")),
+            "is_qna_complete": progress["is_qna_complete"],
+            "is_recommendation_complete": progress["is_recommendation_complete"],
+            "is_itinerary_complete": progress["is_itinerary_design_complete"],
+            "is_preparation_complete": progress["is_trip_preparation_complete"],
         }
-        can_activate = (
-            trip.status in {TripStatus.DRAFT, TripStatus.PLANNING}
-            and planning_progress["is_itinerary_complete"]
-            and planning_progress["is_preparation_complete"]
-        )
+        activation_blocking_steps = get_activation_blocking_errors(trip)
+        can_activate = not activation_blocking_steps
 
         return {
             "trip": {
@@ -841,6 +928,7 @@ class TripPlanningOverviewAPIView(UserTripQuerysetMixin, GenericAPIView):
             },
             "destinations": destinations,
             "planning_progress": planning_progress,
+            "flow": get_trip_planning_flow(trip),
             "recommendations_overview": {
                 "attractions_count": len(
                     recommendations.get("attraction_ids") or recommendations.get("tour_spot_ids") or []
@@ -868,19 +956,12 @@ class TripPlanningOverviewAPIView(UserTripQuerysetMixin, GenericAPIView):
             "activation": {
                 "can_activate": can_activate,
                 "target_status": TripStatus.READY.value,
-                "blocking_steps": self._activation_blocking_steps(trip, planning_progress),
+                "blocking_steps": activation_blocking_steps,
             },
         }
 
     def _activation_blocking_steps(self, trip, planning_progress):
-        blocking_steps = []
-        if trip.status not in {TripStatus.DRAFT, TripStatus.PLANNING}:
-            blocking_steps.append("Trip status must be draft or planning.")
-        if not planning_progress["is_itinerary_complete"]:
-            blocking_steps.append("Generate the trip itinerary.")
-        if not planning_progress["is_preparation_complete"]:
-            blocking_steps.append("Generate the trip preparation checklist.")
-        return blocking_steps
+        return get_activation_blocking_errors(trip)
 
 
 class TripPlanningAPIView(
@@ -966,10 +1047,20 @@ class TripPlanningAPIView(
         return APIResponse.success(
             data={
                 **preference,
+                "session": {
+                    "id": str(session.id),
+                    "step": session.step,
+                    "is_active": session.is_active,
+                    "external_session_id": session.external_session_id,
+                },
+                "preferences": preference or {},
                 "agent_active": agent_active,
                 "is_step_complete": is_step_complete,
+                "is_qna_complete": is_step_complete,
                 "is_recommendation_complete": is_recommendation_complete,
                 "messages": TripAgentMessageSerializer(messages, many=True).data,
+                "progress": get_trip_planning_progress(trip),
+                "flow": get_trip_planning_flow(trip),
             },
             message="Trip preference messages fetched successfully.",
         )
@@ -991,10 +1082,6 @@ class ActivateTripPlanAPIView(UserTripQuerysetMixin, GenericAPIView):
         serializer.is_valid(raise_exception=True)
 
         trip = get_object_or_404(self.get_trip_queryset(), pk=serializer.validated_data["trip_id"])
-        agent_context = trip.metadata or {}
-        itinerary = agent_context.get("itinerary_design") or {}
-        preparation = agent_context.get("trip_preparation") or {}
-
         if trip.status == TripStatus.READY:
             return APIResponse.success(
                 data={
@@ -1005,21 +1092,11 @@ class ActivateTripPlanAPIView(UserTripQuerysetMixin, GenericAPIView):
                 message="Trip plan is already active.",
             )
 
-        if trip.status not in {TripStatus.DRAFT, TripStatus.PLANNING}:
+        blocking_errors = get_activation_blocking_errors(trip)
+        if blocking_errors:
             return APIResponse.error(
-                message="Only draft or planning trips can be activated.",
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        if not itinerary.get("is_itinerary_complete"):
-            return APIResponse.error(
-                message="Generate trip itinerary before activating the plan.",
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        if not preparation.get("is_preparation_complete"):
-            return APIResponse.error(
-                message="Generate trip preparation before activating the plan.",
+                errors={"blocking_steps": blocking_errors},
+                message=blocking_errors[0],
                 status=status.HTTP_400_BAD_REQUEST,
             )
 

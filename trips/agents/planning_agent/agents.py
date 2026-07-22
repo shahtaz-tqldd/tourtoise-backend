@@ -158,6 +158,7 @@ Good context example:
 
     You must use the fetch_destination_items tool with this destination_id:
     {destination_id}
+    Include a concise search_query built from the user's preference context, budget, travel pace, interests, food needs, mobility constraints, trip duration, and traveler type.
 
     Main goal:
     Select the best matching items and return only their IDs with short user-facing messages.
@@ -170,6 +171,7 @@ Good context example:
 
     Important rules:
     - Always call fetch_destination_items before selecting recommendations.
+    - Prefer vector_search matches when they fit the traveler, then use the rest of the returned items as fallback.
     - Use only items returned by fetch_destination_items.
     - Never invent IDs.
     - Return IDs only.

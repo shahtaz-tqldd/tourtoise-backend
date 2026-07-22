@@ -1033,6 +1033,15 @@ class TripAgentActiveSerializer(serializers.Serializer):
     mobility_other = serializers.CharField(max_length=200, allow_blank=True, required=False)
 
     def validate(self, attrs):
+        if attrs.get("let_agent_decide"):
+            request = self.context.get("request")
+            profile = getattr(request.user, "profile", None) if request else None
+            if profile:
+                attrs["interest_tags"] = profile.travel_interests or attrs.get("interest_tags", [])
+                attrs["dietary_needs"] = profile.dietary_preferences or attrs.get("dietary_needs", [])
+                attrs["travel_pace"] = profile.travel_pace or attrs.get("travel_pace", "")
+                attrs["mobility_constraints"] = profile.mobility_constraints or attrs.get("mobility_constraints", [])
+
         attrs["interest_tags"] = self._clean_list(attrs.get("interest_tags", []))
         attrs["dietary_needs"] = self._append_other(
             attrs.get("dietary_needs", []),
@@ -1057,6 +1066,7 @@ class TripAgentActiveSerializer(serializers.Serializer):
             "dietary_needs": data["dietary_needs"],
             "interest_tags": data["interest_tags"],
             "mobility_constraints": data["mobility_constraints"],
+            "accommodation_preference": data["accommotation_preference"],
             "accommotation_preference": data["accommotation_preference"],
         }
 

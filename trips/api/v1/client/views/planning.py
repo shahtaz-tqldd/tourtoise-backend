@@ -19,9 +19,9 @@ from trips.api.v1.client.serializers import (
 )
 from trips.choices import AgentMessageSender, TripStatus, PlanningStep
 from trips.models import (
-    TripAgentConversationSession,
     TripAgentMessage,
     TripItinerary,
+    TripPlanningStepSession,
     TripPreparation,
     TripRecommendations,
 )
@@ -35,7 +35,9 @@ from trips.services import (
     build_trip_snapshot,
     create_agent_message,
     get_activation_blocking_errors,
-    get_or_create_agent_conversation_session,
+    get_or_create_conversation_session,
+    get_or_create_planning_session,
+    get_or_create_planning_step_session,
     get_step_blocking_errors,
     get_trip_planning_flow,
     get_trip_planning_progress,
@@ -80,7 +82,11 @@ class TripAgentInitAPIView(UserTripQuerysetMixin, GenericAPIView):
 
         trip_snapshot = build_trip_snapshot(trip)
 
-        session = get_or_create_agent_conversation_session(trip, request.user, step=PlanningStep.PREFERENCE)
+        session = get_or_create_planning_step_session(
+            trip,
+            request.user,
+            step=PlanningStep.PREFERENCE,
+        )
 
         create_agent_message(
             session=session,
@@ -144,6 +150,7 @@ class TripAgentInitAPIView(UserTripQuerysetMixin, GenericAPIView):
 
         return APIResponse.success(
             data={
+                "planning_session_id": str(session.planning_session_id),
                 "session_id": str(session.id),
                 "agent_active": trip.agent_active,
                 "preferences": preferences,
@@ -182,7 +189,7 @@ class TripAgentCreateMessageAPIView(UserTripQuerysetMixin, GenericAPIView):
         session_id = serializer.validated_data.get("session_id")
         if session_id:
             session = get_object_or_404(
-                TripAgentConversationSession.objects.filter(
+                TripPlanningStepSession.objects.filter(
                     trip=trip,
                     user=request.user,
                     step=PlanningStep.PREFERENCE,
@@ -191,7 +198,7 @@ class TripAgentCreateMessageAPIView(UserTripQuerysetMixin, GenericAPIView):
                 pk=session_id,
             )
         else:
-            session = get_or_create_agent_conversation_session(
+            session = get_or_create_planning_step_session(
                 trip,
                 request.user,
                 step=PlanningStep.PREFERENCE,
@@ -233,6 +240,7 @@ class TripAgentCreateMessageAPIView(UserTripQuerysetMixin, GenericAPIView):
 
         return APIResponse.success(
             data={
+                "planning_session_id": str(session.planning_session_id),
                 "session_id": str(session.id),
                 "agent_message": content,
                 "is_step_complete": is_step_complete,
@@ -303,7 +311,7 @@ class TripPlanningRecommendationsAPIView(UserTripQuerysetMixin, GenericAPIView):
             "preference_context": (trip.metadata or {}).get("preference_qna", {}).get("context"),
         }
 
-        session = get_or_create_agent_conversation_session(trip, request.user, current_step=3)
+        session = get_or_create_planning_step_session(trip, request.user, current_step=3)
         create_agent_message(
             session=session,
             sender=AgentMessageSender.USER,
@@ -524,7 +532,7 @@ class TripPlanningItinerariesAPIView(UserTripQuerysetMixin, GenericAPIView):
 
         trip_context = build_itinerary_planning_context(trip)
 
-        session = get_or_create_agent_conversation_session(trip, request.user, current_step=4)
+        session = get_or_create_planning_step_session(trip, request.user, current_step=4)
         create_agent_message(
             session=session,
             sender=AgentMessageSender.USER,
@@ -707,7 +715,7 @@ class TripPlanningPrepartionAPIView(UserTripQuerysetMixin, GenericAPIView):
 
         trip_context = build_itinerary_planning_context(trip)
 
-        session = get_or_create_agent_conversation_session(trip, request.user, current_step=5)
+        session = get_or_create_planning_step_session(trip, request.user, current_step=5)
         create_agent_message(
             session=session,
             sender=AgentMessageSender.USER,
@@ -1017,7 +1025,7 @@ class TripPlanningAPIView(
         serializer.is_valid(raise_exception=True)
 
         trip = get_object_or_404(self.get_trip_queryset(), pk=serializer.validated_data["trip_id"])
-        sessions = TripAgentConversationSession.objects.filter(
+        sessions = TripPlanningStepSession.objects.filter(
             trip=trip,
             user=request.user,
             step=PlanningStep.PREFERENCE,
@@ -1049,6 +1057,7 @@ class TripPlanningAPIView(
                 **preference,
                 "session": {
                     "id": str(session.id),
+                    "planning_session_id": str(session.planning_session_id),
                     "step": session.step,
                     "is_active": session.is_active,
                     "external_session_id": session.external_session_id,
@@ -1083,11 +1092,15 @@ class ActivateTripPlanAPIView(UserTripQuerysetMixin, GenericAPIView):
 
         trip = get_object_or_404(self.get_trip_queryset(), pk=serializer.validated_data["trip_id"])
         if trip.status == TripStatus.READY:
+            conversation_session = get_or_create_conversation_session(
+                trip, request.user, plan_ready=True
+            )
             return APIResponse.success(
                 data={
                     "id": str(trip.id),
                     "status": trip.status,
                     "current_step": trip.current_step,
+                    "conversation_session_id": str(conversation_session.id),
                 },
                 message="Trip plan is already active.",
             )
@@ -1105,11 +1118,21 @@ class ActivateTripPlanAPIView(UserTripQuerysetMixin, GenericAPIView):
         trip.updated_by = request.user
         trip.save(update_fields=["status", "current_step", "updated_by", "updated_at"])
 
+        planning_session = get_or_create_planning_session(trip, request.user)
+        planning_session.is_active = False
+        planning_session.updated_by = request.user
+        planning_session.save(update_fields=["is_active", "updated_by", "updated_at"])
+
+        conversation_session = get_or_create_conversation_session(
+            trip, request.user, plan_ready=True
+        )
+
         return APIResponse.success(
             data={
                 "id": str(trip.id),
                 "status": trip.status,
                 "current_step": trip.current_step,
+                "conversation_session_id": str(conversation_session.id),
             },
             message="Trip plan activated successfully.",
         )

@@ -481,8 +481,50 @@ class TripHeadsUpInfoItem(BaseModel):
         return self.title
 
 
-# agent conversation
+# Planning sessions
+class TripPlanningSession(BaseModel):
+    """
+    The single planning workspace for a trip.
+
+    Agent sessions are kept per planning step below so that external agent context
+    cannot leak from preference Q&A into recommendation, itinerary, or preparation.
+    """
+
+    trip = models.OneToOneField(
+        Trip,
+        on_delete=models.CASCADE,
+        related_name="planning_session",
+    )
+    user = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.CASCADE,
+        related_name="trip_planning_sessions",
+        db_index=True,
+    )
+    is_active = models.BooleanField(default=True, db_index=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ["-updated_at"]
+        indexes = [models.Index(fields=["user", "is_active"])]
+
+    def __str__(self):
+        return f"{self.trip.title} planning session"
+
+    def save(self, *args, **kwargs):
+        if self.trip.user_id != self.user_id:
+            raise ValueError("Planning session must belong to the trip owner.")
+        super().save(*args, **kwargs)
+
+
 class TripAgentConversationSession(BaseModel):
+    """A step-specific agent session within a trip's planning session."""
+
+    planning_session = models.ForeignKey(
+        TripPlanningSession,
+        on_delete=models.CASCADE,
+        related_name="step_sessions",
+    )
     trip = models.ForeignKey(
         Trip,
         on_delete=models.CASCADE,
@@ -505,13 +547,40 @@ class TripAgentConversationSession(BaseModel):
 
     class Meta:
         ordering = ["-updated_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["planning_session", "step"],
+                name="unique_trip_planning_step_session",
+            ),
+        ]
         indexes = [
             models.Index(fields=["trip", "step", "is_active"]),
             models.Index(fields=["user", "is_active"]),
         ]
 
     def __str__(self):
-        return f"{self.trip.title} agent session step {self.step}"
+        return f"{self.trip.title} planning step {self.step}"
+
+    def save(self, *args, **kwargs):
+        if not self.planning_session_id:
+            self.planning_session, _ = TripPlanningSession.objects.get_or_create(
+                trip=self.trip,
+                defaults={
+                    "user": self.user,
+                    "created_by": self.created_by or self.user,
+                    "updated_by": self.updated_by or self.user,
+                },
+            )
+        if self.planning_session.trip_id != self.trip_id:
+            raise ValueError("Planning step session must belong to the same trip as its planning session.")
+        if self.planning_session.user_id != self.user_id:
+            raise ValueError("Planning step session must belong to the same user as its planning session.")
+        super().save(*args, **kwargs)
+
+
+# Clear domain name for new code while retaining the original model name and
+# database table for backwards compatibility.
+TripPlanningStepSession = TripAgentConversationSession
 
 
 class TripAgentMessage(BaseModel):
@@ -532,6 +601,56 @@ class TripAgentMessage(BaseModel):
 
     def __str__(self):
         return f"{self.sender} message for {self.session_id}"
+
+
+# Post-planning trip chat
+class TripConversationSession(BaseModel):
+    """The single post-planning conversation for a trip."""
+
+    trip = models.OneToOneField(
+        Trip,
+        on_delete=models.CASCADE,
+        related_name="conversation_session",
+    )
+    user = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.CASCADE,
+        related_name="trip_conversation_sessions",
+        db_index=True,
+    )
+    external_session_id = models.CharField(max_length=120, blank=True, db_index=True)
+    is_active = models.BooleanField(default=False, db_index=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ["-updated_at"]
+        indexes = [models.Index(fields=["user", "is_active"])]
+
+    def __str__(self):
+        return f"{self.trip.title} conversation"
+
+    def save(self, *args, **kwargs):
+        if self.trip.user_id != self.user_id:
+            raise ValueError("Conversation session must belong to the trip owner.")
+        super().save(*args, **kwargs)
+
+
+class TripConversationMessage(BaseModel):
+    session = models.ForeignKey(
+        TripConversationSession,
+        on_delete=models.CASCADE,
+        related_name="messages",
+    )
+    sender = models.CharField(max_length=10, choices=AgentMessageSender.choices)
+    content = models.TextField(blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ["created_at"]
+        indexes = [models.Index(fields=["session", "sender"])]
+
+    def __str__(self):
+        return f"{self.sender} chat message for {self.session_id}"
 
 
 # trip notes

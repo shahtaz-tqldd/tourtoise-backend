@@ -69,5 +69,8 @@ urlpatterns = [
     path("<uuid:trip_id>/heads-up/", include(trip_headsup_apis)),
     path("<uuid:trip_id>/plan/", include(trip_plan_apis)),
     path("<uuid:trip_id>/notes/", include(trip_notes_apis)),
+    path("<uuid:trip_id>/chat/", include(trip_chat_apis)),
+    # Backwards-compatible routes. The supplied id must match the trip's one
+    # conversation session; new clients should use the routes above.
     path("<uuid:trip_id>/chat/<uuid:session_id>/", include(trip_chat_apis)),
 ]

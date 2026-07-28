@@ -23,6 +23,19 @@ Planning steps are sequential:
 4. `preparation` - generate packing, documents, and heads-up checklist.
 5. `overview` - review the plan and activate it.
 
+### Session ownership
+
+Each trip owns exactly two top-level sessions:
+
+- one planning session, containing one isolated agent session for each planning
+  step (`preference`, `recommendation`, `itinerary`, and `preparation`);
+- one conversation session for post-planning trip chat.
+
+`planning_session_id` identifies the planning workspace. The `session_id` returned
+while planning identifies only the current step's agent session, so external agent
+context is never shared implicitly between steps. Trip chat never writes to these
+planning sessions.
+
 Every planning step response may include:
 
 ```json
@@ -147,6 +160,7 @@ Response:
 
 ```json
 {
+  "planning_session_id": "uuid",
   "session_id": "uuid",
   "agent_active": true,
   "preferences": {
@@ -430,7 +444,8 @@ Response:
 {
   "id": "uuid",
   "status": "ready",
-  "current_step": "completed"
+  "current_step": "completed",
+  "conversation_session_id": "uuid"
 }
 ```
 
@@ -452,3 +467,23 @@ If activation is blocked:
   }
 }
 ```
+
+## Trip Chat
+
+Trip chat becomes available only after preference Q&A, recommendations, itinerary,
+and preparation are complete. Use the trip-scoped endpoints; clients do not create
+or choose session IDs.
+
+- `GET /api/v1/trips/{trip_id}/chat/messages/`
+- `POST /api/v1/trips/{trip_id}/chat/create-message/`
+
+Create message request:
+
+```json
+{
+  "message": "Can you help tune this completed plan?"
+}
+```
+
+The response includes the trip's one conversation session plus the saved user and
+agent messages. Before planning is complete, both chat endpoints return `400`.

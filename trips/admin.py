@@ -5,6 +5,8 @@ from trips.models import (
     TripActivityRecommendationItem,
     TripAgentConversationSession,
     TripAgentMessage,
+    TripConversationMessage,
+    TripConversationSession,
     TripAttractionRecommendationItem,
     TripCuisineRecommendationItem,
     TripDestination,
@@ -14,6 +16,7 @@ from trips.models import (
     TripItineraryDay,
     TripItineraryDayItem,
     TripPreparation,
+    TripPlanningSession,
     TripPreparationPackingItem,
     TripRecommendations,
     TripRequiredDocumentItem,
@@ -153,15 +156,42 @@ class TripHeadsUpInfoItemAdmin(admin.ModelAdmin):
 
 @admin.register(TripAgentConversationSession)
 class TripAgentConversationSessionAdmin(admin.ModelAdmin):
-    list_display = ("trip", "user", "step", "is_active", "created_at")
+    list_display = ("planning_session", "trip", "user", "step", "is_active", "created_at")
     list_filter = ("step", "is_active")
+    search_fields = ("trip__title", "user__email")
+    readonly_fields = ("id", "created_at", "updated_at", "created_by", "updated_by")
+    autocomplete_fields = ("planning_session", "trip", "user")
+
+
+@admin.register(TripAgentMessage)
+class TripAgentMessageAdmin(admin.ModelAdmin):
+    list_display = ("session", "sender", "content", "created_at")
+    list_filter = ("sender",)
+    search_fields = ("content", "session__trip__title")
+    readonly_fields = ("id", "created_at", "updated_at", "created_by", "updated_by")
+    autocomplete_fields = ("session",)
+
+
+@admin.register(TripPlanningSession)
+class TripPlanningSessionAdmin(admin.ModelAdmin):
+    list_display = ("trip", "user", "is_active", "updated_at")
+    list_filter = ("is_active",)
     search_fields = ("trip__title", "user__email")
     readonly_fields = ("id", "created_at", "updated_at", "created_by", "updated_by")
     autocomplete_fields = ("trip", "user")
 
 
-@admin.register(TripAgentMessage)
-class TripAgentMessageAdmin(admin.ModelAdmin):
+@admin.register(TripConversationSession)
+class TripConversationSessionAdmin(admin.ModelAdmin):
+    list_display = ("trip", "user", "is_active", "updated_at")
+    list_filter = ("is_active",)
+    search_fields = ("trip__title", "user__email", "external_session_id")
+    readonly_fields = ("id", "created_at", "updated_at", "created_by", "updated_by")
+    autocomplete_fields = ("trip", "user")
+
+
+@admin.register(TripConversationMessage)
+class TripConversationMessageAdmin(admin.ModelAdmin):
     list_display = ("session", "sender", "content", "created_at")
     list_filter = ("sender",)
     search_fields = ("content", "session__trip__title")

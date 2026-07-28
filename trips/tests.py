@@ -4,7 +4,7 @@ from uuid import uuid4
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 from django.test import TestCase
 from django.utils import timezone
 from rest_framework import status
@@ -17,6 +17,8 @@ from trips.models import (
     Trip,
     TripAgentConversationSession,
     TripAgentMessage,
+    TripConversationMessage,
+    TripConversationSession,
     TripDestination,
     TripItinerary,
     TripItineraryBudget,
@@ -24,6 +26,7 @@ from trips.models import (
     TripItineraryDayItem,
     TripPreparation,
     TripPreparationPackingItem,
+    TripPlanningSession,
     TripRoutePlanItem,
     TripRequiredDocumentItem,
 )
@@ -743,40 +746,42 @@ class TripChatApiTests(TestCase):
         self.trip = Trip.objects.create(
             user=self.user,
             title="Chat Trip",
-            current_step=2,
+            is_qna_complete=True,
+            is_recommendation_complete=True,
+            is_itinerary_design_complete=True,
+            is_trip_preparation_complete=True,
             created_by=self.user,
             updated_by=self.user,
         )
-        self.session_id = uuid4()
+        self.url = f"/api/v1/trips/{self.trip.id}/chat/"
 
     def test_creates_trip_chat_message_with_demo_agent_reply(self):
         response = self.client.post(
-            f"/api/v1/trips/{self.trip.id}/chat/{self.session_id}/create-message/",
+            f"{self.url}create-message/",
             {"message": "Can you help tune this plan?"},
             format="json",
         )
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        self.assertEqual(str(response.data["data"]["session"]["id"]), str(self.session_id))
         self.assertEqual(response.data["data"]["user_message"]["sender"], "user")
         self.assertEqual(response.data["data"]["agent_message"]["sender"], "agent")
         self.assertTrue(response.data["data"]["agent_message"]["metadata"]["demo"])
 
-        session = TripAgentConversationSession.objects.get(pk=self.session_id)
+        session = TripConversationSession.objects.get(trip=self.trip)
+        self.assertEqual(str(response.data["data"]["session"]["id"]), str(session.id))
         self.assertEqual(session.trip, self.trip)
         self.assertEqual(session.user, self.user)
-        self.assertEqual(TripAgentMessage.objects.filter(session=session).count(), 2)
+        self.assertEqual(TripConversationMessage.objects.filter(session=session).count(), 2)
+        self.assertFalse(TripAgentConversationSession.objects.filter(trip=self.trip).exists())
 
     def test_lists_trip_chat_messages_for_session(self):
-        session = TripAgentConversationSession.objects.create(
-            id=self.session_id,
+        session = TripConversationSession.objects.create(
             trip=self.trip,
             user=self.user,
-            current_step=2,
             created_by=self.user,
             updated_by=self.user,
         )
-        TripAgentMessage.objects.create(
+        TripConversationMessage.objects.create(
             session=session,
             sender="user",
             content="Hello",
@@ -784,7 +789,7 @@ class TripChatApiTests(TestCase):
             updated_by=self.user,
         )
 
-        response = self.client.get(f"/api/v1/trips/{self.trip.id}/chat/{self.session_id}/messages/")
+        response = self.client.get(f"{self.url}messages/")
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(len(response.data["data"]), 1)
@@ -797,17 +802,67 @@ class TripChatApiTests(TestCase):
             created_by=self.other_user,
             updated_by=self.other_user,
         )
-        session = TripAgentConversationSession.objects.create(
+        session = TripConversationSession.objects.create(
             trip=other_trip,
             user=self.other_user,
-            current_step=2,
             created_by=self.other_user,
             updated_by=self.other_user,
         )
 
-        response = self.client.get(f"/api/v1/trips/{other_trip.id}/chat/{session.id}/messages/")
+        response = self.client.get(f"/api/v1/trips/{other_trip.id}/chat/messages/")
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_rejects_chat_until_all_planning_steps_are_complete(self):
+        self.trip.is_trip_preparation_complete = False
+        self.trip.save(update_fields=["is_trip_preparation_complete"])
+
+        response = self.client.post(
+            f"{self.url}create-message/",
+            {"message": "Can we chat yet?"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(TripConversationMessage.objects.filter(session__trip=self.trip).exists())
+
+    def test_trip_has_one_planning_and_one_conversation_session(self):
+        planning_session = TripPlanningSession.objects.create(trip=self.trip, user=self.user)
+        conversation_session = TripConversationSession.objects.create(trip=self.trip, user=self.user)
+
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                TripPlanningSession.objects.create(trip=self.trip, user=self.user)
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                TripConversationSession.objects.create(trip=self.trip, user=self.user)
+
+        self.assertEqual(planning_session.trip, conversation_session.trip)
+
+    def test_planning_steps_keep_separate_agent_sessions_under_one_parent(self):
+        from trips.choices import PlanningStep
+        from trips.services import get_or_create_agent_conversation_session
+
+        preference_session = get_or_create_agent_conversation_session(
+            self.trip, self.user, step=PlanningStep.PREFERENCE
+        )
+        recommendation_session = get_or_create_agent_conversation_session(
+            self.trip, self.user, step=PlanningStep.RECOMMENDATION
+        )
+        repeated_preference_session = get_or_create_agent_conversation_session(
+            self.trip, self.user, step=PlanningStep.PREFERENCE
+        )
+
+        self.assertEqual(preference_session.id, repeated_preference_session.id)
+        self.assertNotEqual(preference_session.id, recommendation_session.id)
+        self.assertEqual(
+            preference_session.planning_session_id,
+            recommendation_session.planning_session_id,
+        )
+        self.assertEqual(
+            TripPlanningSession.objects.filter(trip=self.trip).count(),
+            1,
+        )
 
 
 class TripAgentCreateMessageApiTests(TestCase):

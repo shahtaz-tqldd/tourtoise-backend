@@ -1,5 +1,4 @@
 from django.db import transaction
-from django.db.models import Count
 from django.http import Http404
 from django.shortcuts import get_object_or_404
 from rest_framework import status
@@ -13,8 +12,12 @@ from trips.api.v1.client.serializers import (
     TripChatSessionSerializer,
 )
 from trips.choices import AgentMessageSender
-from trips.models import TripAgentConversationSession, TripAgentMessage
-from trips.services import create_agent_message
+from trips.models import TripConversationMessage, TripConversationSession
+from trips.services import (
+    create_conversation_message,
+    get_or_create_conversation_session,
+    is_trip_plan_ready,
+)
 
 from .mixin import UserTripQuerysetMixin
 
@@ -30,43 +33,29 @@ class TripChatSessionMixin(UserTripQuerysetMixin):
         return get_object_or_404(self.get_trip_queryset(), pk=self.kwargs["trip_id"])
 
     def get_session_queryset(self):
-        return TripAgentConversationSession.objects.filter(
+        return TripConversationSession.objects.filter(
             trip__user=self.request.user,
             trip_id=self.kwargs["trip_id"],
-        ).annotate(messages_count=Count("messages", distinct=True))
-
-    def get_session(self):
-        return get_object_or_404(
-            self.get_session_queryset(),
-            pk=self.kwargs["session_id"],
         )
 
-    def get_or_create_session(self, trip):
-        session_id = self.kwargs["session_id"]
-        session = (
-            TripAgentConversationSession.objects.select_for_update()
-            .filter(
-                pk=session_id,
-                trip=trip,
-                user=self.request.user,
-            )
-            .first()
+    def get_session(self, trip):
+        session = get_or_create_conversation_session(
+            trip,
+            self.request.user,
+            plan_ready=True,
         )
-        if session:
-            return session
+        requested_session_id = self.kwargs.get("session_id")
+        if requested_session_id and requested_session_id != session.id:
+            # Keep the legacy session-id URL safe while the client migrates to
+            # /trips/{trip_id}/chat/*. A trip can never select another session.
+            return None
+        return session
 
-        existing_session = TripAgentConversationSession.objects.filter(pk=session_id).first()
-        if existing_session:
-            raise Http404
-
-        return TripAgentConversationSession.objects.create(
-            id=session_id,
-            trip=trip,
-            user=self.request.user,
-            current_step=trip.current_step,
-            metadata={"source": "trip_chat"},
-            created_by=self.request.user,
-            updated_by=self.request.user,
+    def plan_not_ready_response(self):
+        return APIResponse.error(
+            message="Trip chat is available after the trip plan is ready.",
+            errors={"trip_plan": ["Complete preference Q&A, recommendations, itinerary, and preparation first."]},
+            status=status.HTTP_400_BAD_REQUEST,
         )
 
 
@@ -74,8 +63,13 @@ class TripChatMessageListAPIView(TripChatSessionMixin, GenericAPIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, *args, **kwargs):
-        session = self.get_session()
-        messages = TripAgentMessage.objects.filter(session=session).order_by("created_at")
+        trip = self.get_trip()
+        if not is_trip_plan_ready(trip):
+            return self.plan_not_ready_response()
+        session = self.get_session(trip)
+        if session is None:
+            raise Http404
+        messages = TripConversationMessage.objects.filter(session=session).order_by("created_at")
 
         return APIResponse.success(
             data= TripChatMessageSerializer(messages, many=True).data,
@@ -92,15 +86,19 @@ class TripChatCreateMessageAPIView(TripChatSessionMixin, GenericAPIView):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         trip = self.get_trip()
-        session = self.get_or_create_session(trip)
+        if not is_trip_plan_ready(trip):
+            return self.plan_not_ready_response()
+        session = self.get_session(trip)
+        if session is None:
+            raise Http404
 
-        user_message = create_agent_message(
+        user_message = create_conversation_message(
             session=session,
             sender=AgentMessageSender.USER,
             content=serializer.validated_data["message"],
             user=request.user,
         )
-        agent_message = create_agent_message(
+        agent_message = create_conversation_message(
             session=session,
             sender=AgentMessageSender.AGENT,
             content=DEMO_TRIP_CHAT_REPLY,

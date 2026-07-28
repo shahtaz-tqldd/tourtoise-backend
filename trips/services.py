@@ -18,8 +18,11 @@ from trips.choices import (
     TripStatus,
 )
 from trips.models import (
-    TripAgentConversationSession,
     TripAgentMessage,
+    TripConversationMessage,
+    TripConversationSession,
+    TripPlanningSession,
+    TripPlanningStepSession,
     TripActivityRecommendationItem,
     TripAttractionRecommendationItem,
     TripCuisineRecommendationItem,
@@ -52,7 +55,38 @@ PLANNING_STEP_LABELS = {
 }
 
 
-def get_or_create_agent_conversation_session(trip, user, step=None, current_step=None):
+def get_or_create_planning_session(trip, user):
+    planning_session, _ = TripPlanningSession.objects.get_or_create(
+        trip=trip,
+        defaults={
+            "user": user,
+            "created_by": user,
+            "updated_by": user,
+        },
+    )
+    return planning_session
+
+
+def get_or_create_conversation_session(trip, user, plan_ready=None):
+    if plan_ready is None:
+        plan_ready = is_trip_plan_ready(trip)
+    conversation_session, _ = TripConversationSession.objects.get_or_create(
+        trip=trip,
+        defaults={
+            "user": user,
+            "is_active": plan_ready,
+            "created_by": user,
+            "updated_by": user,
+        },
+    )
+    if plan_ready and not conversation_session.is_active:
+        conversation_session.is_active = True
+        conversation_session.updated_by = user
+        conversation_session.save(update_fields=["is_active", "updated_by", "updated_at"])
+    return conversation_session
+
+
+def get_or_create_planning_step_session(trip, user, step=None, current_step=None):
     step = step or current_step
     legacy_steps = {
         1: PlanningStep.PREFERENCE,
@@ -69,31 +103,45 @@ def get_or_create_agent_conversation_session(trip, user, step=None, current_step
         "6": PlanningStep.COMPLETED,
     }
     step = legacy_steps.get(step, step or PlanningStep.PREFERENCE)
-    session = (
-        TripAgentConversationSession.objects.filter(
-            trip=trip,
-            user=user,
-            step=step,
-            is_active=True,
-        )
-        .order_by("-updated_at")
-        .first()
-    )
-    if session:
-        return session
-
-    return TripAgentConversationSession.objects.create(
-        trip=trip,
-        user=user,
+    planning_session = get_or_create_planning_session(trip, user)
+    session, _ = TripPlanningStepSession.objects.get_or_create(
+        planning_session=planning_session,
         step=step,
-        created_by=user,
-        updated_by=user,
+        defaults={
+            "trip": trip,
+            "user": user,
+            "created_by": user,
+            "updated_by": user,
+        },
+    )
+    return session
+
+
+def get_or_create_agent_conversation_session(trip, user, step=None, current_step=None):
+    """Compatibility wrapper for callers using the old planning-session name."""
+    return get_or_create_planning_step_session(
+        trip,
+        user,
+        step=step,
+        current_step=current_step,
     )
 
 
 def create_agent_message(session, sender, content="", metadata=None, user=None):
     actor = user or session.user
     return TripAgentMessage.objects.create(
+        session=session,
+        sender=sender,
+        content=content or "",
+        metadata=metadata or {},
+        created_by=actor,
+        updated_by=actor,
+    )
+
+
+def create_conversation_message(session, sender, content="", metadata=None, user=None):
+    actor = user or session.user
+    return TripConversationMessage.objects.create(
         session=session,
         sender=sender,
         content=content or "",
@@ -150,6 +198,18 @@ def get_trip_planning_progress(trip):
             or has_saved_preparation
         ),
     }
+
+
+def is_trip_plan_ready(trip):
+    progress = get_trip_planning_progress(trip)
+    return all(
+        (
+            progress["is_qna_complete"],
+            progress["is_recommendation_complete"],
+            progress["is_itinerary_design_complete"],
+            progress["is_trip_preparation_complete"],
+        )
+    )
 
 
 def get_trip_planning_flow(trip):
@@ -242,7 +302,9 @@ def get_activation_blocking_errors(trip):
 
 def build_planning_response_meta(trip):
     activation_blocking_errors = get_activation_blocking_errors(trip)
+    planning_session = getattr(trip, "planning_session", None)
     return {
+        "planning_session_id": str(planning_session.id) if planning_session else None,
         "progress": get_trip_planning_progress(trip),
         "flow": get_trip_planning_flow(trip),
         "activation": {

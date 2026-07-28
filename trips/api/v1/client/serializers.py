@@ -14,6 +14,8 @@ from trips.choices import AccommodationPreference, PlanningStep, TripStatus, Tri
 from trips.models import (
     Trip,
     TripAgentMessage,
+    TripConversationMessage,
+    TripConversationSession,
     TripItinerary,
     TripItineraryDay,
     TripDestination,
@@ -23,6 +25,7 @@ from trips.models import (
     TripNote,
     TripNoteImage,
     TripPreparation,
+    TripPlanningSession,
     TripPreparationPackingItem,
     TripRequiredDocumentItem,
 )
@@ -505,6 +508,9 @@ class TripDetailSerializer(serializers.ModelSerializer):
     trip_destinations = TripDestinationSerializer(many=True, read_only=True)
     days = serializers.SerializerMethodField()
     share_url = serializers.SerializerMethodField()
+    planning_session_id = serializers.SerializerMethodField()
+    conversation_session_id = serializers.SerializerMethodField()
+    is_chat_available = serializers.SerializerMethodField()
 
     class Meta:
         model = Trip
@@ -531,6 +537,9 @@ class TripDetailSerializer(serializers.ModelSerializer):
             "preferences",
             "planning_summary",
             "agent_active",
+            "planning_session_id",
+            "conversation_session_id",
+            "is_chat_available",
             "metadata",
             "share_url",
             "trip_destinations",
@@ -553,6 +562,19 @@ class TripDetailSerializer(serializers.ModelSerializer):
             return []
         return TripDaySerializer(days, many=True).data
 
+    def get_planning_session_id(self, obj):
+        session = getattr(obj, "planning_session", None)
+        return str(session.id) if session else None
+
+    def get_conversation_session_id(self, obj):
+        session = getattr(obj, "conversation_session", None)
+        return str(session.id) if session else None
+
+    def get_is_chat_available(self, obj):
+        from trips.services import is_trip_plan_ready
+
+        return is_trip_plan_ready(obj)
+
 
 class TripDetailsSerializer(serializers.ModelSerializer):
     trip_destinations = TripDestinationSerializer(many=True, read_only=True)
@@ -563,6 +585,9 @@ class TripDetailsSerializer(serializers.ModelSerializer):
     budget = serializers.SerializerMethodField()
     preparation_stats = serializers.SerializerMethodField()
     external_session_id = serializers.SerializerMethodField()
+    planning_session_id = serializers.SerializerMethodField()
+    conversation_session_id = serializers.SerializerMethodField()
+    is_chat_available = serializers.SerializerMethodField()
 
     class Meta:
         model = Trip
@@ -586,6 +611,9 @@ class TripDetailsSerializer(serializers.ModelSerializer):
             "trip_destinations",
             "preparation_stats",
             "external_session_id",
+            "planning_session_id",
+            "conversation_session_id",
+            "is_chat_available",
             "created_at",
             "updated_at",
         )
@@ -596,6 +624,19 @@ class TripDetailsSerializer(serializers.ModelSerializer):
         if obj.visibility != TripVisibility.PUBLIC or not request:
             return None
         return f"{settings.USER_FRONTEND_URL}/trip/public/{obj.share_token}"
+
+    def get_planning_session_id(self, obj):
+        session = getattr(obj, "planning_session", None)
+        return str(session.id) if session else None
+
+    def get_conversation_session_id(self, obj):
+        session = getattr(obj, "conversation_session", None)
+        return str(session.id) if session else None
+
+    def get_is_chat_available(self, obj):
+        from trips.services import is_trip_plan_ready
+
+        return is_trip_plan_ready(obj)
 
     def get_planning_title(self, obj):
         itinerary = self._get_itinerary(obj)
@@ -886,6 +927,18 @@ class TripWriteSerializer(serializers.ModelSerializer):
                 updated_by=request.user,
                 **validated_data,
             )
+            TripPlanningSession.objects.create(
+                trip=trip,
+                user=request.user,
+                created_by=request.user,
+                updated_by=request.user,
+            )
+            TripConversationSession.objects.create(
+                trip=trip,
+                user=request.user,
+                created_by=request.user,
+                updated_by=request.user,
+            )
             self._create_trip_destinations(trip, destination_slugs)
             if trip.status == TripStatus.COMPLETED:
                 record_completed_trip_stats(trip)
@@ -1123,7 +1176,7 @@ class TripChatMessageSerializer(serializers.ModelSerializer):
     session_id = serializers.UUIDField(read_only=True)
 
     class Meta:
-        model = TripAgentMessage
+        model = TripConversationMessage
         fields = (
             "id",
             "session_id",
@@ -1138,7 +1191,6 @@ class TripChatMessageSerializer(serializers.ModelSerializer):
 class TripChatSessionSerializer(serializers.Serializer):
     id = serializers.UUIDField(read_only=True)
     trip_id = serializers.UUIDField(source="trip.id", read_only=True)
-    current_step = serializers.CharField(source="step", read_only=True)
     external_session_id = serializers.CharField(read_only=True)
     is_active = serializers.BooleanField(read_only=True)
     messages_count = serializers.IntegerField(read_only=True)

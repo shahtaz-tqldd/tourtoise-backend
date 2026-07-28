@@ -180,30 +180,8 @@ class TripDestination(BaseModel):
         super().save(*args, **kwargs)
 
 
-class BigAutoAuditModel(models.Model):
-    created_by = models.ForeignKey(
-        "accounts.User",
-        null=True,
-        blank=True,
-        on_delete=models.SET_NULL,
-        related_name="%(app_label)s_%(class)s_created_records",
-    )
-    updated_by = models.ForeignKey(
-        "accounts.User",
-        null=True,
-        blank=True,
-        on_delete=models.SET_NULL,
-        related_name="%(app_label)s_%(class)s_updated_records",
-    )
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        abstract = True
-
-
 # recommendation
-class TripRecommendations(BigAutoAuditModel):
+class TripRecommendations(BaseModel):
     trip = models.OneToOneField(
         Trip,
         on_delete=models.CASCADE,
@@ -217,7 +195,7 @@ class TripRecommendations(BigAutoAuditModel):
     external_session_id = models.CharField(max_length=120, blank=True, db_index=True)
     metadata = models.JSONField(default=dict, blank=True)
 
-class TripAttractionRecommendationItem(BigAutoAuditModel):
+class TripAttractionRecommendationItem(BaseModel):
     recommendation = models.ForeignKey(
         TripRecommendations,
         on_delete=models.CASCADE,
@@ -231,7 +209,7 @@ class TripAttractionRecommendationItem(BigAutoAuditModel):
         related_name="trip_recommendation_items",
     )
 
-class TripCuisineRecommendationItem(BigAutoAuditModel):
+class TripCuisineRecommendationItem(BaseModel):
     recommendation = models.ForeignKey(
         TripRecommendations,
         on_delete=models.CASCADE,
@@ -243,7 +221,7 @@ class TripCuisineRecommendationItem(BigAutoAuditModel):
         related_name="trip_recommendation_items",
     )
 
-class TripActivityRecommendationItem(BigAutoAuditModel):
+class TripActivityRecommendationItem(BaseModel):
     recommendation = models.ForeignKey(
         TripRecommendations,
         on_delete=models.CASCADE,
@@ -257,7 +235,7 @@ class TripActivityRecommendationItem(BigAutoAuditModel):
 
 
 # itenary
-class TripItinerary(BigAutoAuditModel):
+class TripItinerary(BaseModel):
     trip = models.OneToOneField(
         Trip,
         on_delete=models.CASCADE,

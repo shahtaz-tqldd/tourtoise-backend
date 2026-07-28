@@ -50,8 +50,8 @@ def _fetch_destination_items(destination_id: str):
             "budget_tier": attraction.budget_tier,
             "avg_duration_hours": attraction.avg_duration_hours,
             "best_time_of_day": attraction.best_time_of_day,
-            "picking_reason_list": attraction.picking_reason_list,
-            "tip_list": attraction.tip_list,
+            "picking_reasons": attraction.picking_reasons,
+            "notes": attraction.notes,
             "tags": [tag.name for tag in attraction.tags.all()],
             "images": [image.image_url for image in attraction.images.all()],
             "entrance_fee_required": attraction.entrance_fee_required,
@@ -69,9 +69,11 @@ def _fetch_destination_items(destination_id: str):
             "approx_cost": str(activity.approx_cost)
             if activity.approx_cost is not None
             else None,
-            "cost_unit": activity.cost_unit,
             "duration_hours": activity.duration_hours,
             "best_season": activity.best_season,
+            "picking_reasons": activity.picking_reasons,
+            "notes": activity.notes,
+            "booking_required": activity.booking_required,
         }
 
     def serialize_cuisine(cuisine):
@@ -80,12 +82,13 @@ def _fetch_destination_items(destination_id: str):
             "name": cuisine.name,
             "cuisine_type": cuisine.cuisine_type,
             "description": cuisine.description,
-            "ingredients_note": cuisine.ingredients_note,
             "spice_level": cuisine.spice_level,
             "meal_type": cuisine.meal_type,
             "is_vegetarian_friendly": cuisine.is_vegetarian_friendly,
-            "is_must_try": cuisine.is_must_try,
-            "approx_price_range": cuisine.approx_price_range,
+            "is_featured": cuisine.is_featured,
+            "approx_cost": cuisine.approx_cost,
+            "picking_reasons": cuisine.picking_reasons,
+            "notes": cuisine.notes,
         }
 
     attractions = (
@@ -94,7 +97,7 @@ def _fetch_destination_items(destination_id: str):
         .order_by("name")
     )
     activities = Activity.objects.filter(destination_id=destination_id).order_by("name")
-    cuisines = Cuisine.objects.filter(destination_id=destination_id).order_by("-is_must_try", "name")
+    cuisines = Cuisine.objects.filter(destination_id=destination_id).order_by("-is_featured", "name")
 
     return {
         "attractions": [serialize_attraction(item) for item in attractions],

@@ -425,8 +425,8 @@ def _serialize_selected_attractions(selected_ids):
             "budget_tier": item.budget_tier,
             "avg_duration_hours": item.avg_duration_hours,
             "best_time_of_day": item.best_time_of_day,
-            "picking_reason_list": item.picking_reason_list,
-            "tip_list": item.tip_list,
+            "picking_reasons": item.picking_reasons,
+            "notes": item.notes,
             "tags": [tag.name for tag in item.tags.all()],
             "images": [image.image_url for image in item.images.all()],
             "entrance_fee_required": item.entrance_fee_required,
@@ -449,9 +449,10 @@ def _serialize_selected_activities(selected_ids):
             "difficulty_level": item.difficulty_level,
             "budget_tier": item.budget_tier,
             "approx_cost": str(item.approx_cost) if item.approx_cost is not None else None,
-            "cost_unit": item.cost_unit,
             "duration_hours": item.duration_hours,
             "best_season": item.best_season,
+            "picking_reasons": item.picking_reasons,
+            "notes": item.notes,
             "booking_required": item.booking_required,
         }
         for item_id in selected_ids

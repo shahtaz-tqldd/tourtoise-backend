@@ -67,8 +67,8 @@ def _fetch_destination_items(destination_id: str, search_query: str = "", limit_
             "budget_tier": attraction.budget_tier,
             "avg_duration_hours": attraction.avg_duration_hours,
             "best_time_of_day": attraction.best_time_of_day,
-            "picking_reason_list": attraction.picking_reason_list,
-            "tip_list": attraction.tip_list,
+            "picking_reasons": attraction.picking_reasons,
+            "notes": attraction.notes,
             "tags": [tag.name for tag in attraction.tags.all()],
             "images": [image.image_url for image in attraction.images.all()],
             "entrance_fee_required": attraction.entrance_fee_required,
@@ -86,9 +86,11 @@ def _fetch_destination_items(destination_id: str, search_query: str = "", limit_
             "approx_cost": str(activity.approx_cost)
             if activity.approx_cost is not None
             else None,
-            "cost_unit": activity.cost_unit,
             "duration_hours": activity.duration_hours,
             "best_season": activity.best_season,
+            "picking_reasons": activity.picking_reasons,
+            "notes": activity.notes,
+            "booking_required": activity.booking_required,
         }
 
     def serialize_cuisine(cuisine):

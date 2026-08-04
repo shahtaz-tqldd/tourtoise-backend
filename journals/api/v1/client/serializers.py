@@ -1,7 +1,7 @@
 from django.db import transaction
 from rest_framework import serializers
 
-from accounts.services import increment_user_journal_count
+from accounts.services.user_profile import increment_user_journal_count
 from app.utils.cloudinary import upload_image
 from journals.models import Journal, JournalComment, JournalImage, JournalTag
 

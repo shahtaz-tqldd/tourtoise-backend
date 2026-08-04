@@ -21,6 +21,7 @@ from trips.models import (
     TripRecommendations,
     TripRequiredDocumentItem,
     TripRoutePlanItem,
+    ScheduledTripNotification,
 )
 
 
@@ -197,3 +198,31 @@ class TripConversationMessageAdmin(admin.ModelAdmin):
     search_fields = ("content", "session__trip__title")
     readonly_fields = ("id", "created_at", "updated_at", "created_by", "updated_by")
     autocomplete_fields = ("session",)
+
+
+@admin.register(ScheduledTripNotification)
+class ScheduledTripNotificationAdmin(admin.ModelAdmin):
+    list_display = (
+        "trip",
+        "event_type",
+        "delivery_type",
+        "scheduled_for",
+        "timezone",
+        "status",
+        "attempt_count",
+    )
+    list_filter = ("event_type", "delivery_type", "status", "timezone")
+    search_fields = ("trip__title", "user__email", "idempotency_key")
+    readonly_fields = (
+        "id",
+        "idempotency_key",
+        "alert",
+        "message",
+        "attempt_count",
+        "processing_started_at",
+        "sent_at",
+        "failed_at",
+        "created_at",
+        "updated_at",
+    )
+    autocomplete_fields = ("trip", "user")

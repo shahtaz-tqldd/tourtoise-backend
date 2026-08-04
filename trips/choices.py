@@ -127,3 +127,25 @@ class SeverityType(models.TextChoices):
     LOW = "low", "Low"
     MEDIUM = "medium", "Medium"
     HIGH = "high", "High"
+
+
+class ScheduledNotificationStatusType(models.TextChoices):
+    PENDING = "pending", "Pending"
+    PROCESSING = "processing", "Processing"
+    SENT = "sent", "Sent"
+    FAILED = "failed", "Failed"
+    CANCELLED = "cancelled", "Cancelled"
+    SKIPPED = "skipped", "Skipped"
+
+
+class ScheduledTripDeliveryType(models.TextChoices):
+    ALERT = "alert", "Alert"
+    MESSAGE = "message", "Message"
+
+
+class ScheduledTripEventType(models.TextChoices):
+    PACKING_REMINDER = "packing_reminder", "Packing and documents reminder"
+    DAILY_SUMMARY = "daily_summary", "Daily trip summary"
+    DAILY_CHECK_IN = "daily_check_in", "Daily check-in"
+    TRIP_STARTED = "trip_started", "Trip started"
+    TRIP_COMPLETED = "trip_completed", "Trip completed"

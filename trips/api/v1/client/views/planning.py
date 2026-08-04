@@ -25,7 +25,8 @@ from trips.models import (
     TripPreparation,
     TripRecommendations,
 )
-from trips.services import (
+from trips.services.notifications import schedule_trip_notifications
+from trips.services.services import (
     build_planning_response_meta,
     build_initial_agent_query,
     build_itinerary_agent_query,
@@ -1095,6 +1096,7 @@ class ActivateTripPlanAPIView(UserTripQuerysetMixin, GenericAPIView):
             conversation_session = get_or_create_conversation_session(
                 trip, request.user, plan_ready=True
             )
+            schedule_trip_notifications(trip, request.user)
             return APIResponse.success(
                 data={
                     "id": str(trip.id),
@@ -1126,6 +1128,7 @@ class ActivateTripPlanAPIView(UserTripQuerysetMixin, GenericAPIView):
         conversation_session = get_or_create_conversation_session(
             trip, request.user, plan_ready=True
         )
+        schedule_trip_notifications(trip, request.user)
 
         return APIResponse.success(
             data={

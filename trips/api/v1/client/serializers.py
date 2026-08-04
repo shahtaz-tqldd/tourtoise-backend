@@ -7,7 +7,7 @@ from django.conf import settings
 from rest_framework import serializers
 
 from app.utils.cloudinary import cloudinary_thumbnail_url, upload_file
-from accounts.services import record_completed_trip_stats
+from accounts.services.user_profile import record_completed_trip_stats
 from destinations.choices import Status
 from destinations.models import Destination, DestinationTag
 from trips.choices import AccommodationPreference, PlanningStep, TripStatus, TripVisibility
@@ -464,6 +464,8 @@ class TripListSerializer(serializers.ModelSerializer):
     primary_destination = serializers.SerializerMethodField()
     destinations_count = serializers.SerializerMethodField()
     share_url = serializers.SerializerMethodField()
+    unread_notification = serializers.IntegerField(read_only=True)
+    unread_message = serializers.IntegerField(read_only=True)
 
     class Meta:
         model = Trip
@@ -481,6 +483,8 @@ class TripListSerializer(serializers.ModelSerializer):
             "traveler_type",
             "primary_destination",
             "share_url",
+            "unread_notification",
+            "unread_message",
         )
         read_only_fields = fields
 
@@ -571,7 +575,7 @@ class TripDetailSerializer(serializers.ModelSerializer):
         return str(session.id) if session else None
 
     def get_is_chat_available(self, obj):
-        from trips.services import is_trip_plan_ready
+        from trips.services.services import is_trip_plan_ready
 
         return is_trip_plan_ready(obj)
 
@@ -634,7 +638,7 @@ class TripDetailsSerializer(serializers.ModelSerializer):
         return str(session.id) if session else None
 
     def get_is_chat_available(self, obj):
-        from trips.services import is_trip_plan_ready
+        from trips.services.services import is_trip_plan_ready
 
         return is_trip_plan_ready(obj)
 
@@ -1174,6 +1178,10 @@ class TripChatCreateMessageSerializer(serializers.Serializer):
 
 class TripChatMessageSerializer(serializers.ModelSerializer):
     session_id = serializers.UUIDField(read_only=True)
+    is_read = serializers.SerializerMethodField()
+
+    def get_is_read(self, obj):
+        return obj.read_at is not None
 
     class Meta:
         model = TripConversationMessage
@@ -1183,6 +1191,8 @@ class TripChatMessageSerializer(serializers.ModelSerializer):
             "sender",
             "content",
             "metadata",
+            "is_read",
+            "read_at",
             "created_at",
         )
         read_only_fields = fields

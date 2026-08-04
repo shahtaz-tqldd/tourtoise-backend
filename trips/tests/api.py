@@ -13,6 +13,7 @@ from rest_framework.test import APIClient
 from destinations.choices import BudgetTier, DestinationType
 from destinations.choices import Status as DestinationStatus
 from destinations.models import Destination
+from notification.models import Notification, NotificationRead, NotificationType
 from trips.models import (
     Trip,
     TripAgentConversationSession,
@@ -214,8 +215,12 @@ class TripListApiTests(TestCase):
                 "traveler_type",
                 "primary_destination",
                 "share_url",
+                "unread_notification",
+                "unread_message",
             ],
         )
+        self.assertEqual(trip["unread_notification"], 0)
+        self.assertEqual(trip["unread_message"], 0)
         self.assertEqual(
             trip["primary_destination"],
             {
@@ -225,6 +230,54 @@ class TripListApiTests(TestCase):
                 "cover_image": "https://example.com/bangkok.jpg",
             },
         )
+
+    def test_trip_list_includes_unread_notification_and_message_counts(self):
+        unread_notification = Notification.objects.create(
+            recipient=self.user,
+            trip=self.bangkok_trip,
+            notification_type=NotificationType.TRIP,
+            title="Pack your documents",
+        )
+        read_notification = Notification.objects.create(
+            recipient=self.user,
+            trip=self.bangkok_trip,
+            notification_type=NotificationType.TRIP,
+            title="Already read",
+        )
+        NotificationRead.objects.create(
+            notification=read_notification,
+            user=self.user,
+            created_by=self.user,
+        )
+        session = TripConversationSession.objects.create(
+            trip=self.bangkok_trip,
+            user=self.user,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        TripConversationMessage.objects.create(
+            session=session,
+            sender="agent",
+            content="How was your day?",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        TripConversationMessage.objects.create(
+            session=session,
+            sender="agent",
+            content="A read message",
+            read_at=timezone.now(),
+            created_by=self.user,
+            updated_by=self.user,
+        )
+
+        response = self.client.get(self.url, {"destination_slug": self.bangkok.slug})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        trip = response.data["data"][0]
+        self.assertEqual(trip["unread_notification"], 1)
+        self.assertEqual(trip["unread_message"], 1)
+        self.assertEqual(unread_notification.trip_id, self.bangkok_trip.id)
 
     def test_trip_list_orders_nearest_upcoming_start_date_first(self):
         today = timezone.localdate()
@@ -778,6 +831,7 @@ class TripChatApiTests(TestCase):
             "Your first planned stop is the old town.",
         )
         self.assertEqual(response.data["data"]["agent_message"]["metadata"]["total_tokens"], 42)
+        self.assertTrue(response.data["data"]["agent_message"]["is_read"])
 
         session = TripConversationSession.objects.get(trip=self.trip)
         self.assertEqual(str(response.data["data"]["session"]["id"]), str(session.id))
@@ -804,12 +858,45 @@ class TripChatApiTests(TestCase):
             created_by=self.user,
             updated_by=self.user,
         )
+        TripConversationMessage.objects.create(
+            session=session,
+            sender="agent",
+            content="How was your day?",
+            created_by=self.user,
+            updated_by=self.user,
+        )
 
         response = self.client.get(f"{self.url}messages/")
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(response.data["data"]), 1)
+        self.assertEqual(len(response.data["data"]), 2)
         self.assertEqual(response.data["data"][0]["content"], "Hello")
+        self.assertEqual(response.data["meta"]["unread_count"], 1)
+        self.assertFalse(response.data["data"][1]["is_read"])
+
+    def test_marks_all_trip_chat_agent_messages_as_read(self):
+        session = TripConversationSession.objects.create(
+            trip=self.trip,
+            user=self.user,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        message = TripConversationMessage.objects.create(
+            session=session,
+            sender="agent",
+            content="How was your day?",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+
+        response = self.client.patch(f"{self.url}read-all/", {}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["data"]["conversation_id"], str(session.id))
+        self.assertEqual(response.data["data"]["marked_read_count"], 1)
+        self.assertEqual(response.data["data"]["unread_count"], 0)
+        message.refresh_from_db()
+        self.assertIsNotNone(message.read_at)
 
     def test_rejects_other_user_trip_chat_session(self):
         other_trip = Trip.objects.create(
@@ -857,7 +944,7 @@ class TripChatApiTests(TestCase):
 
     def test_planning_steps_keep_separate_agent_sessions_under_one_parent(self):
         from trips.choices import PlanningStep
-        from trips.services import get_or_create_agent_conversation_session
+        from trips.services.services import get_or_create_agent_conversation_session
 
         preference_session = get_or_create_agent_conversation_session(
             self.trip, self.user, step=PlanningStep.PREFERENCE

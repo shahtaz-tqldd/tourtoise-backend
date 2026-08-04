@@ -32,7 +32,7 @@ def fetch_trip_planning_context_tool():
 
 def _fetch_trip_planning_context(trip_id: str):
     from trips.models import Trip
-    from trips.services import build_itinerary_planning_context
+    from trips.services.services import build_itinerary_planning_context
 
     trip = Trip.objects.get(pk=trip_id)
     return build_itinerary_planning_context(trip)

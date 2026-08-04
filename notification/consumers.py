@@ -24,3 +24,6 @@ class NotificationConsumer(AsyncJsonWebsocketConsumer):
 
     async def notification_created(self, event):
         await self.send_json(event["notification"])
+
+    async def trip_message_created(self, event):
+        await self.send_json(event["payload"])

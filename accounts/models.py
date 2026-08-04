@@ -9,6 +9,7 @@ from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
 from accounts.choices import AccountProvider, AccountStatus
+from app.base.validators import validate_timezone_name
 
 
 phone_regex = RegexValidator(
@@ -125,6 +126,12 @@ class UserProfile(models.Model):
     city = models.CharField(max_length=100, blank=True)
     preferred_language = models.CharField(max_length=20, blank=True, default="en")
     preferred_currency = models.CharField(max_length=10, blank=True, default="USD")
+    timezone = models.CharField(
+        max_length=64,
+        default="UTC",
+        validators=[validate_timezone_name],
+        help_text="IANA timezone used for trip reminders, for example Asia/Dhaka.",
+    )
     travel_interests = models.JSONField(default=list, blank=True)
     dietary_preferences = models.JSONField(default=list, blank=True)
     travel_pace = models.CharField(max_length=40, blank=True)

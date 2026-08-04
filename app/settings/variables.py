@@ -79,11 +79,19 @@ CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = env("CELERY_TIMEZONE", "UTC")
 CELERY_RESULT_EXTENDED = True
-CELERY_IMPORTS = ("accounts.tasks", "destinations.tasks")
+CELERY_IMPORTS = ("accounts.tasks", "destinations.tasks", "trips.tasks")
 CELERY_BEAT_SCHEDULE = {
     "permanently-delete-expired-accounts-daily": {
         "task": "accounts.tasks.permanently_delete_expired_accounts",
         "schedule": 60 * 60 * 24,
+    },
+    "dispatch-due-trip-notifications-every-five-minutes": {
+        "task": "trips.tasks.dispatch_due_trip_notifications",
+        "schedule": 5 * 60,
+    },
+    "update-trip-lifecycle-statuses-every-five-minutes": {
+        "task": "trips.tasks.update_trip_lifecycle_statuses",
+        "schedule": 5 * 60,
     },
 }
 

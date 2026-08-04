@@ -1,5 +1,16 @@
-from django.db.models import Case, CharField, IntegerField, Prefetch, Q, Value, When
-from django.db.models.functions import Cast
+from django.db.models import (
+    Case,
+    CharField,
+    Count,
+    IntegerField,
+    OuterRef,
+    Prefetch,
+    Q,
+    Subquery,
+    Value,
+    When,
+)
+from django.db.models.functions import Cast, Coalesce
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status
@@ -7,6 +18,7 @@ from rest_framework.generics import GenericAPIView
 from rest_framework.permissions import IsAuthenticated
 
 from app.utils.response import APIResponse
+from notification.models import Notification, NotificationType
 
 from trips.api.v1.client.serializers import (
     PublicTripDetailSerializer,
@@ -18,14 +30,16 @@ from trips.api.v1.client.serializers import (
     TripVisibilitySerializer,
     TripWriteSerializer,
 )
-from trips.choices import TripVisibility
+from trips.choices import AgentMessageSender, TripStatus, TripVisibility
 
 from trips.models import (
     Trip,
     TripItineraryDay,
     TripDestination,
     TripItineraryDayItem,
+    TripConversationMessage,
 )
+from trips.services.notifications import schedule_trip_notifications
 
 from .mixin import UserTripQuerysetMixin, TripPaginationMixin
 
@@ -58,6 +72,8 @@ class TripCreateAPIView(UserTripQuerysetMixin, GenericAPIView):
         serializer = self.get_serializer(data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
         trip = serializer.save()
+        if trip.status in {TripStatus.READY, TripStatus.IN_PROGRESS}:
+            schedule_trip_notifications(trip, request.user)
         trip = self.get_trip_queryset().get(pk=trip.pk)
         return APIResponse.success(
             data=TripDetailSerializer(trip, context={"request": request}).data,
@@ -93,13 +109,43 @@ class TripListAPIView(TripPaginationMixin, UserTripQuerysetMixin, GenericAPIView
 
     def get_queryset(self):
         today = timezone.localdate()
+        unread_notifications = (
+            Notification.objects.filter(
+                trip_id=OuterRef("pk"),
+                recipient=self.request.user,
+                notification_type=NotificationType.TRIP,
+            )
+            .exclude(read_receipts__user=self.request.user)
+            .values("trip_id")
+            .annotate(total=Count("pk"))
+            .values("total")[:1]
+        )
+        unread_messages = (
+            TripConversationMessage.objects.filter(
+                session__trip_id=OuterRef("pk"),
+                session__user=self.request.user,
+                sender=AgentMessageSender.AGENT,
+                read_at__isnull=True,
+            )
+            .values("session__trip_id")
+            .annotate(total=Count("pk"))
+            .values("total")[:1]
+        )
         queryset = self.get_trip_queryset().annotate(
             start_date_sort_group=Case(
                 When(start_date__gte=today, then=Value(0)),
                 When(start_date__isnull=True, then=Value(2)),
                 default=Value(1),
                 output_field=IntegerField(),
-            )
+            ),
+            unread_notification=Coalesce(
+                Subquery(unread_notifications, output_field=IntegerField()),
+                Value(0),
+            ),
+            unread_message=Coalesce(
+                Subquery(unread_messages, output_field=IntegerField()),
+                Value(0),
+            ),
         ).order_by("start_date_sort_group", "start_date", "-updated_at")
         params = self.request.query_params
 
@@ -220,6 +266,8 @@ class TripUpdateAPIView(UserTripQuerysetMixin, GenericAPIView):
         serializer = self.get_serializer(trip, data=request.data, partial=True, context={"request": request})
         serializer.is_valid(raise_exception=True)
         trip = serializer.save()
+        if trip.status in {TripStatus.READY, TripStatus.IN_PROGRESS}:
+            schedule_trip_notifications(trip, request.user)
         trip = self.get_trip_queryset().get(pk=trip.pk)
         return APIResponse.success(
             data=TripDetailSerializer(trip, context={"request": request}).data,

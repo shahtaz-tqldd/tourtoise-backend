@@ -1,5 +1,6 @@
 from django.http import Http404
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.generics import GenericAPIView
 from rest_framework.permissions import IsAuthenticated
@@ -12,7 +13,7 @@ from trips.api.v1.client.serializers import (
 )
 from trips.choices import AgentMessageSender
 from trips.models import TripConversationMessage, TripConversationSession
-from trips.services import (
+from trips.services.services import (
     create_conversation_message,
     get_or_create_conversation_session,
     is_trip_plan_ready,
@@ -64,10 +65,43 @@ class TripChatMessageListAPIView(TripChatSessionMixin, GenericAPIView):
         if session is None:
             raise Http404
         messages = TripConversationMessage.objects.filter(session=session).order_by("created_at")
+        unread_count = messages.filter(
+            sender=AgentMessageSender.AGENT,
+            read_at__isnull=True,
+        ).count()
 
         return APIResponse.success(
-            data= TripChatMessageSerializer(messages, many=True).data,
+            data=TripChatMessageSerializer(messages, many=True).data,
+            meta={"unread_count": unread_count},
             message="Trip chat messages fetched successfully.",
+        )
+
+
+class TripChatReadAllAPIView(TripChatSessionMixin, GenericAPIView):
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, *args, **kwargs):
+        trip = self.get_trip()
+        if not is_trip_plan_ready(trip):
+            return self.plan_not_ready_response()
+        session = self.get_session(trip)
+        if session is None:
+            raise Http404
+
+        read_at = timezone.now()
+        marked_read_count = TripConversationMessage.objects.filter(
+            session=session,
+            sender=AgentMessageSender.AGENT,
+            read_at__isnull=True,
+        ).update(read_at=read_at, updated_by=request.user, updated_at=read_at)
+        return APIResponse.success(
+            data={
+                "conversation_id": str(session.id),
+                "marked_read_count": marked_read_count,
+                "unread_count": 0,
+                "read_at": read_at,
+            },
+            message="Trip chat messages marked as read.",
         )
 
 
@@ -90,6 +124,7 @@ class TripChatCreateMessageAPIView(TripChatSessionMixin, GenericAPIView):
             sender=AgentMessageSender.USER,
             content=serializer.validated_data["message"],
             user=request.user,
+            read_at=timezone.now(),
         )
 
         agent_result = run_guide_agent_for_session(
@@ -105,6 +140,7 @@ class TripChatCreateMessageAPIView(TripChatSessionMixin, GenericAPIView):
                 "total_tokens": agent_result.get("total_tokens"),
             },
             user=request.user,
+            read_at=timezone.now(),
         )
 
         session.updated_by = request.user

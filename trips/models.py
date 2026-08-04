@@ -19,6 +19,9 @@ from trips.choices import (
     HeadsUpType,
     SeverityType,
     PlanningStep,
+    ScheduledNotificationStatusType,
+    ScheduledTripDeliveryType,
+    ScheduledTripEventType,
 )
 
 
@@ -644,10 +647,14 @@ class TripConversationMessage(BaseModel):
     sender = models.CharField(max_length=10, choices=AgentMessageSender.choices)
     content = models.TextField(blank=True)
     metadata = models.JSONField(default=dict, blank=True)
+    read_at = models.DateTimeField(null=True, blank=True, db_index=True)
 
     class Meta:
         ordering = ["created_at"]
-        indexes = [models.Index(fields=["session", "sender"])]
+        indexes = [
+            models.Index(fields=["session", "sender"]),
+            models.Index(fields=["session", "sender", "read_at"]),
+        ]
 
     def __str__(self):
         return f"{self.sender} chat message for {self.session_id}"
@@ -674,3 +681,96 @@ class TripNote(BaseModel):
 
 class TripNoteImage(BaseImage):
     note = models.ForeignKey(TripNote, on_delete=models.CASCADE, related_name="trip_note_images")
+
+
+# trip notifications
+class ScheduledTripNotification(BaseModel):
+    trip = models.ForeignKey(
+        Trip,
+        on_delete=models.CASCADE,
+        related_name="scheduled_notifications",
+    )
+
+    user = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.CASCADE,
+    )
+
+    event_type = models.CharField(max_length=32, choices=ScheduledTripEventType.choices)
+    delivery_type = models.CharField(max_length=10, choices=ScheduledTripDeliveryType.choices)
+
+    scheduled_for = models.DateTimeField()  # Always UTC
+    local_date = models.DateField()
+    local_time = models.TimeField()
+    timezone = models.CharField(max_length=64)
+
+    status = models.CharField(
+        max_length=20,
+        choices=ScheduledNotificationStatusType.choices,
+        default=ScheduledNotificationStatusType.PENDING,
+    )
+
+    payload = models.JSONField(default=dict, blank=True)
+
+    alert = models.ForeignKey(
+        "notification.Notification",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="scheduled_trip_events",
+    )
+    message = models.ForeignKey(
+        TripConversationMessage,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="scheduled_trip_events",
+    )
+
+    processing_started_at = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
+    sent_at = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
+    failed_at = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
+
+    attempt_count = models.PositiveSmallIntegerField(default=0)
+    last_error = models.TextField(blank=True)
+
+    idempotency_key = models.CharField(
+        max_length=255,
+        unique=True,
+    )
+
+    class Meta:
+        indexes = [
+            models.Index(
+                fields=["status", "scheduled_for"],
+                name="scheduled_due_idx",
+            ),
+            models.Index(
+                fields=["trip", "delivery_type", "status"],
+                name="scheduled_trip_delivery_idx",
+            ),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    Q(
+                        delivery_type=ScheduledTripDeliveryType.ALERT,
+                        message__isnull=True,
+                    )
+                    | Q(
+                        delivery_type=ScheduledTripDeliveryType.MESSAGE,
+                        alert__isnull=True,
+                    )
+                ),
+                name="scheduled_event_matches_delivery",
+            ),
+        ]

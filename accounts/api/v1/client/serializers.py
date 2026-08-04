@@ -10,9 +10,10 @@ from uuid import uuid4
 
 from app.utils.cloudinary import delete_image, upload_image
 from accounts.choices import AccountProvider, AccountStatus
-from accounts.firebase import FirebaseVerificationError, verify_firebase_id_token
+from accounts.services.firebase import FirebaseVerificationError, verify_firebase_id_token
 from accounts.models import UserProfile
-from accounts.services import resolve_password_reset_user, send_user_password_reset_email
+from accounts.services.password import resolve_password_reset_user, send_user_password_reset_email
+from app.base.validators import validate_timezone_name
 
 
 User = get_user_model()
@@ -57,6 +58,7 @@ class UserSerializer(serializers.ModelSerializer):
     city = serializers.CharField(source="profile.city", read_only=True)
     preferred_language = serializers.CharField(source="profile.preferred_language", read_only=True)
     preferred_currency = serializers.CharField(source="profile.preferred_currency", read_only=True)
+    timezone = serializers.CharField(source="profile.timezone", read_only=True)
     travel_interests = serializers.ListField(source="profile.travel_interests", read_only=True)
     dietary_preferences = serializers.ListField(source="profile.dietary_preferences", read_only=True)
     travel_pace = serializers.CharField(source="profile.travel_pace", read_only=True)
@@ -99,6 +101,7 @@ class UserSerializer(serializers.ModelSerializer):
             "city",
             "preferred_language",
             "preferred_currency",
+            "timezone",
             "travel_interests",
             "dietary_preferences",
             "travel_pace",
@@ -185,6 +188,7 @@ class UserUpdateSerializer(serializers.ModelSerializer):
     city = serializers.CharField(required=False, allow_blank=True)
     preferred_language = serializers.CharField(required=False, allow_blank=True)
     preferred_currency = serializers.CharField(required=False, allow_blank=True)
+    timezone = serializers.CharField(required=False)
     travel_interests = serializers.JSONField(required=False)
     dietary_preferences = serializers.JSONField(required=False)
     travel_pace = serializers.CharField(required=False, allow_blank=True)
@@ -212,6 +216,7 @@ class UserUpdateSerializer(serializers.ModelSerializer):
             "city",
             "preferred_language",
             "preferred_currency",
+            "timezone",
             "travel_interests",
             "dietary_preferences",
             "travel_pace",
@@ -235,6 +240,10 @@ class UserUpdateSerializer(serializers.ModelSerializer):
         queryset = queryset.exclude(pk=profile.pk)
         if queryset.exists():
             raise serializers.ValidationError("This username is already taken.")
+        return value
+
+    def validate_timezone(self, value):
+        validate_timezone_name(value)
         return value
 
     def validate_travel_interests(self, value):
@@ -267,6 +276,7 @@ class UserUpdateSerializer(serializers.ModelSerializer):
             "city",
             "preferred_language",
             "preferred_currency",
+            "timezone",
             "travel_interests",
             "dietary_preferences",
             "travel_pace",
@@ -278,6 +288,7 @@ class UserUpdateSerializer(serializers.ModelSerializer):
             "is_alert_notification_enabled",
         }
         profile = get_or_create_profile(instance)
+        previous_timezone = profile.timezone
 
         for attr, value in validated_data.items():
             if attr in profile_fields:
@@ -306,6 +317,12 @@ class UserUpdateSerializer(serializers.ModelSerializer):
 
         instance.save()
         profile.save()
+        if profile.timezone != previous_timezone:
+            from trips.tasks import reschedule_user_trip_notifications
+
+            transaction.on_commit(
+                lambda: reschedule_user_trip_notifications.delay(str(instance.id))
+            )
         return instance
 
     def _build_profile_picture_public_id(self, user):

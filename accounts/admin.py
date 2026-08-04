@@ -36,6 +36,7 @@ class UserProfileAdmin(admin.ModelAdmin):
     list_display = (
         "user",
         "username",
+        "timezone",
         "total_country_visited",
         "total_trip_count",
         "total_journal_count",
@@ -47,6 +48,7 @@ class UserProfileAdmin(admin.ModelAdmin):
         "travel_pace",
         "preferred_currency",
         "preferred_language",
+        "timezone",
         "is_public_profile",
         "is_location_sharing_enabled",
         "is_alert_notification_enabled",

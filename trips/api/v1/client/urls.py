@@ -58,6 +58,7 @@ trip_notes_apis = [
 trip_chat_apis =[
     path("messages/", views.TripChatMessageListAPIView.as_view(), name="trip-chat-messages"),
     path("create-message/", views.TripChatCreateMessageAPIView.as_view(), name="trip-chat-create-message"),
+    path("read-all/", views.TripChatReadAllAPIView.as_view(), name="trip-chat-read-all"),
 ]
 
 urlpatterns = [

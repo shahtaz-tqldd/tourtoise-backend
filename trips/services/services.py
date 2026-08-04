@@ -139,13 +139,21 @@ def create_agent_message(session, sender, content="", metadata=None, user=None):
     )
 
 
-def create_conversation_message(session, sender, content="", metadata=None, user=None):
+def create_conversation_message(
+    session,
+    sender,
+    content="",
+    metadata=None,
+    user=None,
+    read_at=None,
+):
     actor = user or session.user
     return TripConversationMessage.objects.create(
         session=session,
         sender=sender,
         content=content or "",
         metadata=metadata or {},
+        read_at=read_at,
         created_by=actor,
         updated_by=actor,
     )

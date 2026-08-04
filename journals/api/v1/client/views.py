@@ -5,7 +5,7 @@ from rest_framework import status
 from rest_framework.generics import GenericAPIView
 from rest_framework.permissions import AllowAny, IsAuthenticated
 
-from accounts.services import decrement_user_journal_count
+from accounts.services.user_profile import decrement_user_journal_count
 from app.base.pagination import CustomPagination
 from app.utils.response import APIResponse
 from journals.api.v1.client.serializers import (

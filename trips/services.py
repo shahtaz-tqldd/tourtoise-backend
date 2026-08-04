@@ -382,6 +382,154 @@ def run_plan_agent_for_session(
     return result
 
 
+def build_trip_guide_context(trip):
+    """Build the authoritative saved-plan context used by post-planning chat."""
+    context = build_itinerary_planning_context(trip)
+
+    recommendations = getattr(trip, "trip_recommendations", None)
+    if recommendations:
+        attraction_ids = list(
+            recommendations.attraction_items.exclude(attraction=None).values_list(
+                "attraction_id", flat=True
+            )
+        )
+        activity_ids = list(
+            recommendations.activity_items.values_list("activity_id", flat=True)
+        )
+        cuisine_ids = list(
+            recommendations.cuisine_items.values_list("cuisine_id", flat=True)
+        )
+        context["selected_recommendations"] = {
+            "attractions": _serialize_selected_attractions(attraction_ids),
+            "activities": _serialize_selected_activities(activity_ids),
+            "cuisines": _serialize_selected_cuisines(cuisine_ids),
+        }
+        context["recommendation_messages"] = {
+            "attractions": recommendations.attraction_recommendation_message,
+            "activities": recommendations.activity_recommendation_message,
+            "cuisines": recommendations.cusine_recommendation_message,
+        }
+
+    itinerary = getattr(trip, "trip_itinerary", None)
+    if itinerary:
+        # The relational itinerary reflects any edits made after AI planning.
+        context.pop("itinerary_design", None)
+        days = []
+        for day in itinerary.itinerary_days.prefetch_related("day_items").all():
+            days.append(
+                {
+                    "day": day.day,
+                    "date": day.date.isoformat() if day.date else None,
+                    "title": day.title,
+                    "summary": day.summary,
+                    "items": [
+                        {
+                            "time": item.time.isoformat() if item.time else None,
+                            "title": item.title,
+                            "description": item.description,
+                            "notes": item.notes,
+                            "item_type": item.item_type,
+                            "estimated_cost": item.estimated_cost,
+                        }
+                        for item in day.day_items.all()
+                    ],
+                }
+            )
+
+        routes = [
+            {
+                "date": route.date.isoformat() if route.date else None,
+                "start_time": route.start_time.isoformat() if route.start_time else None,
+                "from": route.from_point,
+                "to": route.to_point,
+                "transport_mode": route.transport_mode,
+                "estimated_duration": route.estimated_duration,
+                "estimated_cost": route.estimated_cost,
+                "notes": route.notes,
+            }
+            for route in itinerary.route_plan_items.all()
+        ]
+        budget = getattr(itinerary, "rough_budget", None)
+        context["itinerary"] = {
+            "title": itinerary.title,
+            "summary": itinerary.summary,
+            "message": itinerary.message,
+            "days": days,
+            "routes": routes,
+            "budget": {
+                "currency": trip.budget_currency,
+                "transport": budget.transport,
+                "food": budget.food,
+                "activities": budget.activities,
+                "tickets_or_entry": budget.tickets_or_entry,
+                "miscellaneous": budget.miscellaneous,
+                "total": budget.total_estimated_budget,
+                "note": budget.budget_note,
+            }
+            if budget
+            else None,
+        }
+
+    preparation = getattr(trip, "structured_preparation", None)
+    if preparation:
+        context["preparation"] = {
+            "title": preparation.title,
+            "summary": preparation.summary,
+            "message": preparation.message,
+            "packing_items": [
+                {
+                    "item": item.item,
+                    "quantity": item.quantity,
+                    "category": item.category,
+                    "priority": item.priority,
+                    "is_packed": item.is_packed,
+                    "notes": item.additional_notes,
+                }
+                for item in preparation.packing_items.all()
+            ],
+            "required_documents": [
+                {
+                    "name": document.document_name,
+                    "required_level": document.required_level,
+                    "notes": document.additional_note,
+                }
+                for document in preparation.required_documents.all()
+            ],
+            "heads_up": [
+                {
+                    "title": item.title,
+                    "category": item.category,
+                    "severity": item.severity,
+                    "notes": item.additional_note,
+                }
+                for item in preparation.heads_up.all()
+            ],
+        }
+
+    return context
+
+
+def run_guide_agent_for_session(session, user_query):
+    from trips.agents.guide_agent import GuideAgentClient
+
+    client = GuideAgentClient(
+        session.trip,
+        trip_context=build_trip_guide_context(session.trip),
+    )
+    result = async_to_sync(client.run_agent)(
+        user_query=user_query,
+        user_id=str(session.user_id),
+        session_id=session.external_session_id or None,
+    )
+
+    external_session_id = result.get("session_id") or ""
+    if external_session_id and session.external_session_id != external_session_id:
+        session.external_session_id = external_session_id
+        session.save(update_fields=["external_session_id", "updated_at"])
+
+    return result
+
+
 def build_initial_agent_query(preferences, trip_snapshot):
     return (
         "The traveler just submitted these initial trip preferences and trip snapshot. "

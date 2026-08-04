@@ -755,17 +755,29 @@ class TripChatApiTests(TestCase):
         )
         self.url = f"/api/v1/trips/{self.trip.id}/chat/"
 
-    def test_creates_trip_chat_message_with_demo_agent_reply(self):
+    @patch("trips.api.v1.client.views.trip_chat.run_guide_agent_for_session")
+    def test_creates_trip_chat_message_with_guide_agent_reply(self, run_guide_agent):
+        run_guide_agent.return_value = {
+            "session_id": "guide-session-1",
+            "response": "Your first planned stop is the old town.",
+            "cost": 0.0001,
+            "total_tokens": 42,
+        }
+
         response = self.client.post(
             f"{self.url}create-message/",
-            {"message": "Can you help tune this plan?"},
+            {"message": "What is my first stop?"},
             format="json",
         )
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(response.data["data"]["user_message"]["sender"], "user")
         self.assertEqual(response.data["data"]["agent_message"]["sender"], "agent")
-        self.assertTrue(response.data["data"]["agent_message"]["metadata"]["demo"])
+        self.assertEqual(
+            response.data["data"]["agent_message"]["content"],
+            "Your first planned stop is the old town.",
+        )
+        self.assertEqual(response.data["data"]["agent_message"]["metadata"]["total_tokens"], 42)
 
         session = TripConversationSession.objects.get(trip=self.trip)
         self.assertEqual(str(response.data["data"]["session"]["id"]), str(session.id))
@@ -773,6 +785,10 @@ class TripChatApiTests(TestCase):
         self.assertEqual(session.user, self.user)
         self.assertEqual(TripConversationMessage.objects.filter(session=session).count(), 2)
         self.assertFalse(TripAgentConversationSession.objects.filter(trip=self.trip).exists())
+        run_guide_agent.assert_called_once_with(
+            session=session,
+            user_query="What is my first stop?",
+        )
 
     def test_lists_trip_chat_messages_for_session(self):
         session = TripConversationSession.objects.create(

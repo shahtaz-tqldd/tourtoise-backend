@@ -1,4 +1,3 @@
-from django.db import transaction
 from django.http import Http404
 from django.shortcuts import get_object_or_404
 from rest_framework import status
@@ -17,15 +16,10 @@ from trips.services import (
     create_conversation_message,
     get_or_create_conversation_session,
     is_trip_plan_ready,
+    run_guide_agent_for_session,
 )
 
 from .mixin import UserTripQuerysetMixin
-
-
-DEMO_TRIP_CHAT_REPLY = (
-    "Thanks for the message. The trip planning agent is not connected to this chat yet, "
-    "so this is a demo reply for now."
-)
 
 
 class TripChatSessionMixin(UserTripQuerysetMixin):
@@ -81,7 +75,6 @@ class TripChatCreateMessageAPIView(TripChatSessionMixin, GenericAPIView):
     permission_classes = [IsAuthenticated]
     serializer_class = TripChatCreateMessageSerializer
 
-    @transaction.atomic
     def post(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -98,11 +91,19 @@ class TripChatCreateMessageAPIView(TripChatSessionMixin, GenericAPIView):
             content=serializer.validated_data["message"],
             user=request.user,
         )
+
+        agent_result = run_guide_agent_for_session(
+            session=session,
+            user_query=serializer.validated_data["message"],
+        )
         agent_message = create_conversation_message(
             session=session,
             sender=AgentMessageSender.AGENT,
-            content=DEMO_TRIP_CHAT_REPLY,
-            metadata={"demo": True},
+            content=agent_result["response"],
+            metadata={
+                "cost": agent_result.get("cost"),
+                "total_tokens": agent_result.get("total_tokens"),
+            },
             user=request.user,
         )
 

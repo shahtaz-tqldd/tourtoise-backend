@@ -23,14 +23,13 @@ class ChatSessionSerializer(serializers.ModelSerializer):
     def get_last_message(self, obj):
         message = getattr(obj, "last_message", None)
         if message is None and getattr(obj, "pk", None):
-            message = obj.messages.order_by("-sequence", "-created_at").first()
+            message = obj.messages.order_by("-created_at").first()
         if not message:
             return None
         return {
             "id": str(message.id),
             "sender": message.sender,
             "content": message.content,
-            "sequence": message.sequence,
             "created_at": message.created_at,
         }
 
@@ -53,9 +52,8 @@ class ChatMessageSerializer(serializers.ModelSerializer):
             "id",
             "session_id",
             "sender",
-            "sequence",
             "content",
-            "payload",
+            "metadata",
             "created_at",
         )
         read_only_fields = fields

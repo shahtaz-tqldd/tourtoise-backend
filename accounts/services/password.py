@@ -5,17 +5,11 @@ from django.template.loader import render_to_string
 from django.utils.encoding import force_bytes, force_str
 from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
 
-from accounts.models import UserProfile
 from accounts.tasks import send_password_reset_email
 
 
 User = get_user_model()
 password_reset_token_generator = PasswordResetTokenGenerator()
-
-
-def ensure_user_profile(user):
-    profile, _ = UserProfile.objects.get_or_create(user=user)
-    return profile
 
 
 def build_password_reset_link(user):

@@ -1,11 +1,14 @@
 from django.contrib.auth import get_user_model
 from django.test import override_settings
 from django.test import TestCase
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient
+from datetime import timedelta
 
-from accounts.choices import AccountProvider
+from accounts.choices import AccountProvider, AccountStatus
 from accounts.models import UserProfile
+from accounts.tasks import permanently_delete_expired_accounts
 
 
 User = get_user_model()
@@ -64,6 +67,75 @@ class RegisterApiTests(TestCase):
         self.assertIn("already taken", str(response.data["errors"]["username"]))
 
 
+class DeleteAccountApiTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            email="delete-me@example.com",
+            password="testpass123",
+        )
+
+    def test_delete_account_marks_deactivated_without_disabling_user(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.delete("/api/v1/accounts/settings/delete-account/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.is_active)
+        self.assertEqual(self.user.status, AccountStatus.DEACTIVATED)
+        self.assertIsNotNone(self.user.deleted_at)
+
+    def test_password_login_reactivates_pending_deleted_account(self):
+        self.user.mark_deleted()
+
+        response = self.client.post(
+            "/auth/accounts/login/",
+            {"email": "delete-me@example.com", "password": "testpass123"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.is_active)
+        self.assertEqual(self.user.status, AccountStatus.ACTIVE)
+        self.assertIsNone(self.user.deleted_at)
+        self.assertIn("access_token", response.data["data"])
+
+    def test_cleanup_deletes_only_expired_accounts_still_deactivated(self):
+        expired_user = User.objects.create_user(
+            email="expired@example.com",
+            password="testpass123",
+        )
+        expired_user.mark_deleted()
+        expired_user.deleted_at = timezone.now() - timedelta(days=15)
+        expired_user.save(update_fields=["deleted_at"])
+
+        restored_user = User.objects.create_user(
+            email="restored@example.com",
+            password="testpass123",
+        )
+        restored_user.mark_deleted()
+        restored_user.deleted_at = timezone.now() - timedelta(days=15)
+        restored_user.save(update_fields=["deleted_at"])
+        restored_user.reactivate()
+
+        pending_user = User.objects.create_user(
+            email="pending@example.com",
+            password="testpass123",
+        )
+        pending_user.mark_deleted()
+        pending_user.deleted_at = timezone.now() - timedelta(days=13)
+        pending_user.save(update_fields=["deleted_at"])
+
+        deleted_count = permanently_delete_expired_accounts()
+
+        self.assertEqual(deleted_count, 1)
+        self.assertFalse(User.objects.filter(id=expired_user.id).exists())
+        self.assertTrue(User.objects.filter(id=restored_user.id).exists())
+        self.assertTrue(User.objects.filter(id=pending_user.id).exists())
+
+
 @override_settings(FIREBASE_VERIFY_ID_TOKEN=False)
 class GoogleLoginApiTests(TestCase):
     def setUp(self):
@@ -108,3 +180,26 @@ class GoogleLoginApiTests(TestCase):
         self.assertEqual(user.provider, AccountProvider.GOOGLE)
         self.assertEqual(user.firebase_uid, "firebase-uid-123")
         self.assertEqual(user.profile.username, "user")
+
+    def test_google_login_does_not_replace_existing_avatar(self):
+        user = User.objects.create_user(email="user@example.com", password="testpass123")
+        user.profile.avatar_url = "https://example.com/custom-avatar.png"
+        user.profile.save(update_fields=["avatar_url"])
+
+        response = self.client.post(self.url, self.payload, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        user.profile.refresh_from_db()
+        self.assertEqual(user.profile.avatar_url, "https://example.com/custom-avatar.png")
+
+    def test_google_login_reactivates_pending_deleted_account(self):
+        user = User.objects.create_user(email="user@example.com", password="testpass123")
+        user.mark_deleted()
+
+        response = self.client.post(self.url, self.payload, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        user.refresh_from_db()
+        self.assertTrue(user.is_active)
+        self.assertEqual(user.status, AccountStatus.ACTIVE)
+        self.assertIsNone(user.deleted_at)

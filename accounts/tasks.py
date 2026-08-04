@@ -1,6 +1,15 @@
 from celery import shared_task
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.core.mail import EmailMultiAlternatives
+from django.utils import timezone
+
+from datetime import timedelta
+
+from accounts.choices import AccountStatus
+
+
+User = get_user_model()
 
 
 @shared_task
@@ -19,3 +28,12 @@ def send_password_reset_email(recipient_email, subject, message, html_message=No
     if html_message:
         email.attach_alternative(html_message, "text/html")
     return email.send(fail_silently=False)
+
+
+@shared_task
+def permanently_delete_expired_accounts():
+    cutoff = timezone.now() - timedelta(days=14)
+    queryset = User.objects.filter(status=AccountStatus.DEACTIVATED, deleted_at__lte=cutoff)
+    user_count = queryset.count()
+    queryset.delete()
+    return user_count

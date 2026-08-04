@@ -8,6 +8,8 @@ from .schema import (
     TripDestinationRecommendationsResponse,
 )
 
+from trips.choices import PlanningStep
+
 
 class ADKAgent:
     def __init__(self):
@@ -15,13 +17,13 @@ class ADKAgent:
 
     def root_agent(
             self, 
-            current_step: int, 
+            planning_step: PlanningStep, 
             destination_id: str = None,
             trip: dict = {}
         ) -> Agent:
 
-        match current_step:
-            case 2:
+        match planning_step:
+            case PlanningStep.PREFERENCE:
                 (
                     agent_name,
                     agent_description,
@@ -30,7 +32,7 @@ class ADKAgent:
                 ) = self.profile_customization_agent()
                 output_schema = TripPreferenceQNAResponse
             
-            case 3:
+            case PlanningStep.RECOMMENDATION:
                 (
                     agent_name,
                     agent_description,
@@ -39,7 +41,7 @@ class ADKAgent:
                 ) = self.destination_discovery_agent(destination_id)
                 output_schema = TripDestinationRecommendationsResponse
             
-            case 4:
+            case PlanningStep.ITINERARY:
                 (
                     agent_name,
                     agent_description,
@@ -48,7 +50,7 @@ class ADKAgent:
                 ) = self.itenary_design_agent(trip)
                 output_schema = None
             
-            case 5:
+            case PlanningStep.PREPARATION:
                 (
                     agent_name,
                     agent_description,
@@ -59,7 +61,7 @@ class ADKAgent:
 
 
             case _:
-                raise ValueError(f"Unsupported step: {current_step}")
+                raise ValueError(f"Unsupported step: {planning_step}")
         
         return Agent(
             name=agent_name,
@@ -156,6 +158,7 @@ Good context example:
 
     You must use the fetch_destination_items tool with this destination_id:
     {destination_id}
+    Include a concise search_query built from the user's preference context, budget, travel pace, interests, food needs, mobility constraints, trip duration, and traveler type.
 
     Main goal:
     Select the best matching items and return only their IDs with short user-facing messages.
@@ -168,6 +171,7 @@ Good context example:
 
     Important rules:
     - Always call fetch_destination_items before selecting recommendations.
+    - Prefer vector_search matches when they fit the traveler, then use the rest of the returned items as fallback.
     - Use only items returned by fetch_destination_items.
     - Never invent IDs.
     - Return IDs only.

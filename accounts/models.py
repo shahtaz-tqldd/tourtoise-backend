@@ -5,9 +5,11 @@ from django.contrib.auth.base_user import BaseUserManager
 from django.contrib.auth.models import AbstractBaseUser, PermissionsMixin
 from django.core.validators import RegexValidator
 from django.db import models
+from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
 from accounts.choices import AccountProvider, AccountStatus
+from app.base.validators import validate_timezone_name
 
 
 phone_regex = RegexValidator(
@@ -84,6 +86,7 @@ class User(AbstractBaseUser, PermissionsMixin):
     google_access_token = models.TextField(blank=True, verbose_name=_("Google access token"))
     is_active = models.BooleanField(default=True, verbose_name=_("Active"))
     is_staff = models.BooleanField(default=False, verbose_name=_("Staff status"))
+    deleted_at = models.DateTimeField(null=True, blank=True, db_index=True, verbose_name=_("Deleted at"))
     created_at = models.DateTimeField(auto_now_add=True, verbose_name=_("Created at"))
     updated_at = models.DateTimeField(auto_now=True, verbose_name=_("Updated at"))
 
@@ -100,6 +103,17 @@ class User(AbstractBaseUser, PermissionsMixin):
     def __str__(self):
         return self.name or self.email
 
+    def mark_deleted(self):
+        self.status = AccountStatus.DEACTIVATED
+        self.deleted_at = timezone.now()
+        self.save(update_fields=["status", "deleted_at", "updated_at"])
+
+    def reactivate(self):
+        self.is_active = True
+        self.status = AccountStatus.ACTIVE
+        self.deleted_at = None
+        self.save(update_fields=["is_active", "status", "deleted_at", "updated_at"])
+
 
 class UserProfile(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="profile")
@@ -112,6 +126,12 @@ class UserProfile(models.Model):
     city = models.CharField(max_length=100, blank=True)
     preferred_language = models.CharField(max_length=20, blank=True, default="en")
     preferred_currency = models.CharField(max_length=10, blank=True, default="USD")
+    timezone = models.CharField(
+        max_length=64,
+        default="UTC",
+        validators=[validate_timezone_name],
+        help_text="IANA timezone used for trip reminders, for example Asia/Dhaka.",
+    )
     travel_interests = models.JSONField(default=list, blank=True)
     dietary_preferences = models.JSONField(default=list, blank=True)
     travel_pace = models.CharField(max_length=40, blank=True)
@@ -123,6 +143,12 @@ class UserProfile(models.Model):
         validators=[phone_regex],
     )
     is_public_profile = models.BooleanField(default=False)
+    total_country_visited = models.PositiveIntegerField(default=0)
+    visited_country_list = models.JSONField(default=list, blank=True)
+    total_trip_count = models.PositiveIntegerField(default=0)
+    total_journal_count = models.PositiveIntegerField(default=0)
+    is_location_sharing_enabled = models.BooleanField(default=False)
+    is_alert_notification_enabled = models.BooleanField(default=True)
 
     class Meta:
         verbose_name = _("User profile")

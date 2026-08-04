@@ -33,12 +33,17 @@ class TripPaginationMixin:
 
 class UserTripQuerysetMixin:
     def get_trip_queryset(self):
-        return Trip.objects.filter(user=self.request.user).prefetch_related(
+        return Trip.objects.filter(user=self.request.user).select_related(
+            "trip_itinerary__rough_budget",
+            "structured_preparation",
+        ).prefetch_related(
             Prefetch(
                 "trip_destinations",
                 queryset=TripDestination.objects.select_related("destination").order_by("sort_order"),
                 to_attr="prefetched_trip_destinations",
             ),
+            "structured_preparation__packing_items",
+            "structured_preparation__required_documents",
             Prefetch(
                 "trip_itinerary__itinerary_days",
                 queryset=TripItineraryDay.objects.prefetch_related(

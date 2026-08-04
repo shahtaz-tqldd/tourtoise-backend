@@ -3,7 +3,7 @@ from django.test import TestCase
 from rest_framework import status
 from rest_framework.test import APIClient
 
-from journals.models import Journal, JournalComment, JournalImage, SavedJournal
+from journals.models import Journal, JournalComment, JournalImage, JournalReaction, SavedJournal
 
 
 User = get_user_model()
@@ -112,6 +112,26 @@ class JournalApiTests(TestCase):
         self.assertEqual(second_delete.status_code, status.HTTP_200_OK)
         self.assertEqual(SavedJournal.objects.count(), 0)
 
+    def test_react_and_unreact_are_idempotent(self):
+        self.client.force_authenticate(self.reader)
+        url = f"/api/v1/journals/{self.public_journal.id}/react/"
+
+        self.client.post(url)
+        second_react = self.client.post(url)
+        self.assertEqual(second_react.status_code, status.HTTP_200_OK)
+        self.assertEqual(second_react.data["data"]["reactions_count"], 1)
+        self.assertEqual(JournalReaction.objects.count(), 1)
+
+        detail_response = self.client.get(f"/api/v1/journals/{self.public_journal.id}/detail/")
+        self.assertTrue(detail_response.data["data"]["is_reacted"])
+        self.assertEqual(detail_response.data["data"]["reactions_count"], 1)
+
+        self.client.delete(url)
+        second_delete = self.client.delete(url)
+        self.assertEqual(second_delete.status_code, status.HTTP_200_OK)
+        self.assertEqual(second_delete.data["data"]["reactions_count"], 0)
+        self.assertEqual(JournalReaction.objects.count(), 0)
+
 
 class JournalCommentApiTests(TestCase):
     def setUp(self):
@@ -174,3 +194,23 @@ class JournalCommentApiTests(TestCase):
         self.assertEqual(denied_response.status_code, status.HTTP_404_NOT_FOUND)
         self.assertEqual(deleted_response.status_code, status.HTTP_200_OK)
         self.assertFalse(JournalComment.objects.filter(pk=comment.pk).exists())
+
+    def test_only_comment_author_can_update_comment_or_reply(self):
+        comment = JournalComment.objects.create(
+            journal=self.journal,
+            author=self.commenter,
+            text="My comment",
+            created_by=self.commenter,
+            updated_by=self.commenter,
+        )
+        url = f"/api/v1/journals/comments/{comment.id}/update/"
+        self.client.force_authenticate(self.other)
+        denied_response = self.client.patch(url, {"text": "Denied"}, format="json")
+        self.client.force_authenticate(self.commenter)
+        updated_response = self.client.patch(url, {"text": "Updated"}, format="json")
+
+        self.assertEqual(denied_response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(updated_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(updated_response.data["data"]["text"], "Updated")
+        comment.refresh_from_db()
+        self.assertEqual(comment.text, "Updated")

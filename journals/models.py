@@ -98,3 +98,21 @@ class SavedJournal(BaseModel):
                 name="unique_saved_journal_user_journal",
             )
         ]
+
+
+class JournalReaction(BaseModel):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="journal_reactions",
+    )
+    journal = models.ForeignKey(Journal, on_delete=models.CASCADE, related_name="reactions")
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "journal"],
+                name="unique_journal_reaction_user_journal",
+            )
+        ]

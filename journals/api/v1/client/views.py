@@ -1,9 +1,11 @@
+from django.db import transaction
 from django.db.models import BooleanField, Count, Exists, OuterRef, Q, Value
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.generics import GenericAPIView
 from rest_framework.permissions import AllowAny, IsAuthenticated
 
+from accounts.services.user_profile import decrement_user_journal_count
 from app.base.pagination import CustomPagination
 from app.utils.response import APIResponse
 from journals.api.v1.client.serializers import (
@@ -12,7 +14,13 @@ from journals.api.v1.client.serializers import (
     JournalListSerializer,
     JournalWriteSerializer,
 )
-from journals.models import Journal, JournalComment, JournalVisibility, SavedJournal
+from journals.models import (
+    Journal,
+    JournalComment,
+    JournalReaction,
+    JournalVisibility,
+    SavedJournal,
+)
 
 
 class JournalQuerysetMixin:
@@ -22,15 +30,22 @@ class JournalQuerysetMixin:
         ).annotate(
             comments_count=Count("comments", distinct=True),
             saves_count=Count("saved_by_users", distinct=True),
+            reactions_count=Count("reactions", distinct=True),
         )
         user = self.request.user
         if user.is_authenticated:
             return queryset.annotate(
                 is_saved=Exists(
                     SavedJournal.objects.filter(user=user, journal=OuterRef("pk"))
-                )
+                ),
+                is_reacted=Exists(
+                    JournalReaction.objects.filter(user=user, journal=OuterRef("pk"))
+                ),
             )
-        return queryset.annotate(is_saved=Value(False, output_field=BooleanField()))
+        return queryset.annotate(
+            is_saved=Value(False, output_field=BooleanField()),
+            is_reacted=Value(False, output_field=BooleanField()),
+        )
 
     def get_accessible_queryset(self):
         queryset = self.get_base_queryset()
@@ -180,7 +195,11 @@ class JournalDeleteAPIView(JournalQuerysetMixin, GenericAPIView):
     permission_classes = [IsAuthenticated]
 
     def delete(self, request, *args, **kwargs):
-        self.get_owned_journal().delete()
+        journal = self.get_owned_journal()
+        author = journal.author
+        with transaction.atomic():
+            journal.delete()
+            decrement_user_journal_count(author)
         return APIResponse.success(message="Journal deleted successfully.")
 
 
@@ -205,6 +224,40 @@ class JournalSaveAPIView(JournalQuerysetMixin, GenericAPIView):
         return APIResponse.success(
             data={"journal_id": str(journal.id), "saved": False},
             message="Journal removed from saved list successfully.",
+        )
+
+
+class JournalReactionAPIView(JournalQuerysetMixin, GenericAPIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, *args, **kwargs):
+        journal = self.get_accessible_journal()
+        JournalReaction.objects.get_or_create(
+            user=request.user,
+            journal=journal,
+            defaults={"created_by": request.user, "updated_by": request.user},
+        )
+        reactions_count = JournalReaction.objects.filter(journal=journal).count()
+        return APIResponse.success(
+            data={
+                "journal_id": str(journal.id),
+                "reacted": True,
+                "reactions_count": reactions_count,
+            },
+            message="Journal reacted successfully.",
+        )
+
+    def delete(self, request, *args, **kwargs):
+        journal = self.get_accessible_journal()
+        JournalReaction.objects.filter(user=request.user, journal=journal).delete()
+        reactions_count = JournalReaction.objects.filter(journal=journal).count()
+        return APIResponse.success(
+            data={
+                "journal_id": str(journal.id),
+                "reacted": False,
+                "reactions_count": reactions_count,
+            },
+            message="Journal reaction removed successfully.",
         )
 
 
@@ -306,3 +359,35 @@ class CommentDeleteAPIView(GenericAPIView):
         )
         comment.delete()
         return APIResponse.success(message="Comment deleted successfully.")
+
+
+class CommentUpdateAPIView(GenericAPIView):
+    permission_classes = [IsAuthenticated]
+    serializer_class = JournalCommentWriteSerializer
+
+    def patch(self, request, *args, **kwargs):
+        return self._update(request, partial=True)
+
+    def put(self, request, *args, **kwargs):
+        return self._update(request, partial=False)
+
+    def _update(self, request, partial):
+        comment = get_object_or_404(
+            JournalComment.objects.select_related("author", "author__profile").annotate(
+                replies_count=Count("replies")
+            ),
+            pk=self.kwargs["comment_id"],
+            author=request.user,
+        )
+        serializer = self.get_serializer(
+            comment,
+            data=request.data,
+            partial=partial,
+            context={"request": request},
+        )
+        serializer.is_valid(raise_exception=True)
+        comment = serializer.save()
+        return APIResponse.success(
+            data=JournalCommentSerializer(comment).data,
+            message="Comment updated successfully.",
+        )

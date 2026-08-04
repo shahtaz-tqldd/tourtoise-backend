@@ -1,6 +1,4 @@
 from django.db import models
-from django.db.models import Max
-
 from app.base.models import BaseModel
 from chat.choices import ChatMessageSender
 
@@ -34,26 +32,15 @@ class ChatMessage(BaseModel):
         related_name="messages",
     )
     sender = models.CharField(max_length=10, choices=ChatMessageSender.choices)
-    sequence = models.PositiveIntegerField()
     content = models.TextField()
-    payload = models.JSONField(default=dict, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
 
     class Meta:
-        ordering = ["sequence", "created_at"]
-        constraints = [
-            models.UniqueConstraint(fields=["session", "sequence"], name="unique_chat_message_sequence"),
-        ]
+        ordering = ["created_at"]
         indexes = [
             models.Index(fields=["session", "sender"]),
             models.Index(fields=["session", "created_at"]),
         ]
 
     def __str__(self):
-        return f"{self.sender} message {self.sequence} for {self.session_id}"
-
-    @classmethod
-    def next_sequence_for_session(cls, session):
-        current_max = cls.objects.filter(session=session).aggregate(
-            max_sequence=Max("sequence")
-        )["max_sequence"]
-        return (current_max or 0) + 1
+        return f"{self.sender} message for {self.session_id}"

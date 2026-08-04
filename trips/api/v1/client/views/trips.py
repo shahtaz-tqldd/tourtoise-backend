@@ -1,5 +1,16 @@
-from django.db.models import Case, CharField, IntegerField, Q, Value, When
-from django.db.models.functions import Cast
+from django.db.models import (
+    Case,
+    CharField,
+    Count,
+    IntegerField,
+    OuterRef,
+    Prefetch,
+    Q,
+    Subquery,
+    Value,
+    When,
+)
+from django.db.models.functions import Cast, Coalesce
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status
@@ -7,20 +18,28 @@ from rest_framework.generics import GenericAPIView
 from rest_framework.permissions import IsAuthenticated
 
 from app.utils.response import APIResponse
+from notification.models import Notification, NotificationType
 
 from trips.api.v1.client.serializers import (
     PublicTripDetailSerializer,
     TripDetailSerializer,
+    TripShortDetailsSerializer,
+    TripDetailsSerializer,
     TripListSerializer,
+    TripShareTokenSerializer,
+    TripVisibilitySerializer,
     TripWriteSerializer,
 )
+from trips.choices import AgentMessageSender, TripStatus, TripVisibility
 
 from trips.models import (
     Trip,
     TripItineraryDay,
     TripDestination,
     TripItineraryDayItem,
+    TripConversationMessage,
 )
+from trips.services.notifications import schedule_trip_notifications
 
 from .mixin import UserTripQuerysetMixin, TripPaginationMixin
 
@@ -38,8 +57,8 @@ class TripCreateAPIView(UserTripQuerysetMixin, GenericAPIView):
       Optional:
       `status`, `visibility`, `planning_source`, `start_date`, `end_date`,
       `travelers_count`, `origin_city`, `origin_country`,
-      `total_budget`, `budget_currency`, `preferences`, 
-      `planning_summary`, `agent_context`
+      `budget_tier`, `budget_currency`, `preferences`,
+      `planning_summary`, `metadata`
 
     Frontend response:
     - 201 success with the full created trip payload.
@@ -53,6 +72,8 @@ class TripCreateAPIView(UserTripQuerysetMixin, GenericAPIView):
         serializer = self.get_serializer(data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
         trip = serializer.save()
+        if trip.status in {TripStatus.READY, TripStatus.IN_PROGRESS}:
+            schedule_trip_notifications(trip, request.user)
         trip = self.get_trip_queryset().get(pk=trip.pk)
         return APIResponse.success(
             data=TripDetailSerializer(trip, context={"request": request}).data,
@@ -88,13 +109,43 @@ class TripListAPIView(TripPaginationMixin, UserTripQuerysetMixin, GenericAPIView
 
     def get_queryset(self):
         today = timezone.localdate()
+        unread_notifications = (
+            Notification.objects.filter(
+                trip_id=OuterRef("pk"),
+                recipient=self.request.user,
+                notification_type=NotificationType.TRIP,
+            )
+            .exclude(read_receipts__user=self.request.user)
+            .values("trip_id")
+            .annotate(total=Count("pk"))
+            .values("total")[:1]
+        )
+        unread_messages = (
+            TripConversationMessage.objects.filter(
+                session__trip_id=OuterRef("pk"),
+                session__user=self.request.user,
+                sender=AgentMessageSender.AGENT,
+                read_at__isnull=True,
+            )
+            .values("session__trip_id")
+            .annotate(total=Count("pk"))
+            .values("total")[:1]
+        )
         queryset = self.get_trip_queryset().annotate(
             start_date_sort_group=Case(
                 When(start_date__gte=today, then=Value(0)),
                 When(start_date__isnull=True, then=Value(2)),
                 default=Value(1),
                 output_field=IntegerField(),
-            )
+            ),
+            unread_notification=Coalesce(
+                Subquery(unread_notifications, output_field=IntegerField()),
+                Value(0),
+            ),
+            unread_message=Coalesce(
+                Subquery(unread_messages, output_field=IntegerField()),
+                Value(0),
+            ),
         ).order_by("start_date_sort_group", "start_date", "-updated_at")
         params = self.request.query_params
 
@@ -118,7 +169,7 @@ class TripListAPIView(TripPaginationMixin, UserTripQuerysetMixin, GenericAPIView
         )
         if destination_slugs:
             queryset = queryset.annotate(
-                agent_context_text=Cast("agent_context", CharField()),
+                metadata_text=Cast("metadata", CharField()),
             ).filter(self._build_destination_slug_query(destination_slugs))
 
         start_date_from = params.get("start_date_from")
@@ -143,7 +194,7 @@ class TripListAPIView(TripPaginationMixin, UserTripQuerysetMixin, GenericAPIView
     def _build_destination_slug_query(self, destination_slugs):
         query = Q(trip_destinations__destination__slug__in=destination_slugs)
         for slug in destination_slugs:
-            query |= Q(agent_context_text__icontains=slug)
+            query |= Q(metadata_text__icontains=slug)
         return query
 
 
@@ -165,7 +216,29 @@ class TripDetailAPIView(UserTripQuerysetMixin, GenericAPIView):
     def get(self, request, *args, **kwargs):
         trip = self.get_trip_by_id()
         return APIResponse.success(
-            data=TripDetailSerializer(trip, context={"request": request}).data,
+            data=TripDetailsSerializer(trip, context={"request": request}).data,
+            message="Trip fetched successfully.",
+        )
+
+class TripShortDetailsAPIView(UserTripQuerysetMixin, GenericAPIView):
+    """
+    User trip detail API.
+
+    Frontend request:
+    - Method: GET
+    - Headers: authenticated bearer token
+    - URL param: `trip_id`
+
+    Frontend response:
+    - 200 success with the full trip payload including destinations, days, and itinerary items.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, *args, **kwargs):
+        trip = self.get_trip_by_id()
+        return APIResponse.success(
+            data=TripShortDetailsSerializer(trip, context={"request": request}).data,
             message="Trip fetched successfully.",
         )
 
@@ -193,6 +266,8 @@ class TripUpdateAPIView(UserTripQuerysetMixin, GenericAPIView):
         serializer = self.get_serializer(trip, data=request.data, partial=True, context={"request": request})
         serializer.is_valid(raise_exception=True)
         trip = serializer.save()
+        if trip.status in {TripStatus.READY, TripStatus.IN_PROGRESS}:
+            schedule_trip_notifications(trip, request.user)
         trip = self.get_trip_queryset().get(pk=trip.pk)
         return APIResponse.success(
             data=TripDetailSerializer(trip, context={"request": request}).data,
@@ -222,6 +297,68 @@ class TripDeleteAPIView(UserTripQuerysetMixin, GenericAPIView):
         return APIResponse.success(message="Trip deleted successfully.")
 
 
+class TripShareTokenAPIView(UserTripQuerysetMixin, GenericAPIView):
+    """
+    Create or fetch a shareable trip token and link.
+
+    Frontend request:
+    - Method: POST
+    - Headers: authenticated bearer token
+    - URL param: `trip_id`
+    - Optional body: `{ "regenerate": true }` to rotate the token.
+
+    Frontend response:
+    - 200 success with `share_token`, `share_url`, and `visibility=public`.
+    """
+
+    permission_classes = [IsAuthenticated]
+    serializer_class = TripShareTokenSerializer
+
+    def post(self, request, *args, **kwargs):
+        trip = self.get_trip_by_id()
+        serializer = self.get_serializer(
+            data=request.data,
+            context={"request": request, "trip": trip},
+        )
+        serializer.is_valid(raise_exception=True)
+        trip = serializer.save()
+        return APIResponse.success(
+            data=TripShareTokenSerializer(trip, context={"request": request}).data,
+            message="Trip share link created successfully.",
+        )
+
+
+class TripVisibilityUpdateAPIView(UserTripQuerysetMixin, GenericAPIView):
+    """
+    Change trip visibility.
+
+    Frontend request:
+    - Method: PATCH
+    - Headers: authenticated bearer token
+    - URL param: `trip_id`
+    - Body: `{ "visibility": "public" }` or `{ "visibility": "private" }`
+
+    Frontend response:
+    - 200 success with current visibility and share link when public.
+    """
+
+    permission_classes = [IsAuthenticated]
+    serializer_class = TripVisibilitySerializer
+
+    def patch(self, request, *args, **kwargs):
+        trip = self.get_trip_by_id()
+        serializer = self.get_serializer(
+            data=request.data,
+            context={"request": request, "trip": trip},
+        )
+        serializer.is_valid(raise_exception=True)
+        trip = serializer.save()
+        return APIResponse.success(
+            data=TripVisibilitySerializer(trip, context={"request": request}).data,
+            message="Trip visibility updated successfully.",
+        )
+
+
 class PublicTripDetailAPIView(GenericAPIView):
     """
     Public shared trip detail API.
@@ -230,7 +367,7 @@ class PublicTripDetailAPIView(GenericAPIView):
     - Method: GET
     - No authentication required.
     - URL param: `share_token`
-    - Only trips with `visibility=link_only` are accessible through this endpoint.
+    - Only trips with `visibility=public` are accessible through this endpoint.
 
     Frontend response:
     - 200 success with share-safe trip details for public viewing.
@@ -239,7 +376,7 @@ class PublicTripDetailAPIView(GenericAPIView):
 
     def get_object(self):
         return get_object_or_404(
-            Trip.objects.filter(visibility="link_only").prefetch_related(
+            Trip.objects.filter(visibility=TripVisibility.PUBLIC).prefetch_related(
                 Prefetch(
                     "trip_destinations",
                     queryset=TripDestination.objects.select_related("destination").order_by("sort_order"),

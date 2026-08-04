@@ -11,8 +11,8 @@ if [[ -f "${ENV_FILE}" ]]; then
 fi
 
 if [[ "${APP_ENV}" == "prod" ]]; then
-  docker compose -p tourtoise-core-prod --env-file "${ENV_FILE}" -f "${SCRIPT_DIR}/docker/compose.prod.yml" up --build -d "$@"
+  docker compose -p tourtoise --env-file "${ENV_FILE}" -f "${SCRIPT_DIR}/docker/compose.prod.yml" up --build -d "$@"
 else
-  docker compose -p tourtoise-core-dev --env-file "${ENV_FILE}" -f "${SCRIPT_DIR}/docker/compose.dev.yml" down --remove-orphans
-  docker compose -p tourtoise-core-dev --env-file "${ENV_FILE}" -f "${SCRIPT_DIR}/docker/compose.dev.yml" up --build "$@"
+  docker compose -p tourtoise --env-file "${ENV_FILE}" -f "${SCRIPT_DIR}/docker/compose.dev.yml" down --remove-orphans
+  docker compose -p tourtoise --env-file "${ENV_FILE}" -f "${SCRIPT_DIR}/docker/compose.dev.yml" up --build "$@"
 fi

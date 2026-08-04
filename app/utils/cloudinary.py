@@ -57,6 +57,23 @@ def upload_image(file_obj, folder=None, public_id=None):
     }
 
 
+def upload_file(file_obj, folder=None, public_id=None, resource_type="auto"):
+    uploader = _get_client()
+    upload_folder = folder or settings.CLOUDINARY_FOLDER
+    options = {
+        "folder": upload_folder,
+        "resource_type": resource_type,
+    }
+    if public_id:
+        options["public_id"] = public_id
+        options["overwrite"] = True
+    result = uploader.upload(file_obj, **options)
+    return {
+        "url": result.get("secure_url") or result.get("url"),
+        "public_id": result.get("public_id"),
+    }
+
+
 def _prepare_upload_file(file_obj):
     try:
         original_position = file_obj.tell()
@@ -142,6 +159,33 @@ def delete_image(public_id=None, image_url=None):
     uploader = _get_client()
     result = uploader.destroy(resolved_public_id, resource_type="image")
     return {"result": result.get("result"), "public_id": resolved_public_id}
+
+
+def delete_file(public_id=None, file_url=None):
+    resolved_public_id = public_id or extract_public_id(file_url)
+    if not resolved_public_id:
+        return {"result": "skipped"}
+
+    uploader = _get_client()
+    resource_type = extract_resource_type(file_url) or "image"
+    result = uploader.destroy(resolved_public_id, resource_type=resource_type)
+    return {
+        "result": result.get("result"),
+        "public_id": resolved_public_id,
+        "resource_type": resource_type,
+    }
+
+
+def extract_resource_type(file_url):
+    if not file_url:
+        return None
+
+    parsed = urlparse(file_url)
+    path_parts = [part for part in parsed.path.split("/") if part]
+    for resource_type in ("image", "raw", "video"):
+        if resource_type in path_parts and "upload" in path_parts:
+            return resource_type
+    return None
 
 
 def extract_public_id(image_url):

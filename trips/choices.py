@@ -13,7 +13,7 @@ class TripStatus(models.TextChoices):
 
 class TripVisibility(models.TextChoices):
     PRIVATE = "private", "Private"
-    LINK_ONLY = "link_only", "Link Only"
+    PUBLIC = "public", "Public"
 
 
 class TripPace(models.TextChoices):
@@ -77,3 +77,75 @@ class PlanningSource(models.TextChoices):
 class AgentMessageSender(models.TextChoices):
     USER = "user", "User"
     AGENT = "agent", "Agent"
+    SYSTEM = "system", "System"
+
+
+class PlanningStep(models.TextChoices):
+    PREFERENCE = "preference", "Preference"
+    RECOMMENDATION = "recommendation", "Recommendation"
+    ITINERARY = "itinerary", "Itinerary"
+    PREPARATION = "preparation", "Preparation"
+    OVERVIEW = "overview", "Overview"
+    COMPLETED = "completed", "Completed"
+
+
+class PackingItemsType(models.TextChoices):
+    CLOTHING = "clothing", "Clothing"
+    TOILETRIES = "toiletries", "Toiletries"
+    ELECTRONICS = "electronics", "Electronics"
+    MEDICINE = "medicine", "Medicine"
+    TRAVEL_GEAR = "travel_gear", "Travel Gear"
+    SAFETY = "safety", "Safety"
+    WEATHER = "weather", "Weather"
+    OTHER = "other", "Other"
+
+
+class PriorityType(models.TextChoices):
+    ESSENTIAL = "essential", "Essential"
+    RECOMMENDED = "recommended", "Recommended"
+    OPTIONAL = "optional", "Optional"
+
+class RequiredType(models.TextChoices):
+    REQUIRED = "required", "Required"
+    RECOMMENDED = "recommended", "Recommended"
+    CONDITIONAL = "conditional", "Conditional"
+
+
+class HeadsUpType(models.TextChoices):
+    SAFETY = "safety", "Safety"
+    WEATHER = "weather", "Weather"
+    CULTURE = "culture", "Culture"
+    TRANSPORT = "transport", "Transport"
+    MONEY = "money", "Money"
+    HEALTH = "health", "Health"
+    CONNECTIVITY = "connectivity", "Connectivity"
+    TIMING = "timing", "Timing"
+    RULES = "rules", "Rules"
+    OTHER = "other", "Other"
+
+class SeverityType(models.TextChoices):
+    LOW = "low", "Low"
+    MEDIUM = "medium", "Medium"
+    HIGH = "high", "High"
+
+
+class ScheduledNotificationStatusType(models.TextChoices):
+    PENDING = "pending", "Pending"
+    PROCESSING = "processing", "Processing"
+    SENT = "sent", "Sent"
+    FAILED = "failed", "Failed"
+    CANCELLED = "cancelled", "Cancelled"
+    SKIPPED = "skipped", "Skipped"
+
+
+class ScheduledTripDeliveryType(models.TextChoices):
+    ALERT = "alert", "Alert"
+    MESSAGE = "message", "Message"
+
+
+class ScheduledTripEventType(models.TextChoices):
+    PACKING_REMINDER = "packing_reminder", "Packing and documents reminder"
+    DAILY_SUMMARY = "daily_summary", "Daily trip summary"
+    DAILY_CHECK_IN = "daily_check_in", "Daily check-in"
+    TRIP_STARTED = "trip_started", "Trip started"
+    TRIP_COMPLETED = "trip_completed", "Trip completed"

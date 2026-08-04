@@ -1,19 +1,47 @@
 from datetime import timedelta
+from uuid import uuid4
 
 from django.db import transaction
-from django.urls import reverse
+from django.db.models import Max
+from django.conf import settings
 from rest_framework import serializers
 
-from app.utils.cloudinary import cloudinary_thumbnail_url
+from app.utils.cloudinary import cloudinary_thumbnail_url, upload_file
+from accounts.services.user_profile import record_completed_trip_stats
 from destinations.choices import Status
-from destinations.models import Destination
-from trips.models import Trip, TripAgentMessage, TripItinerary, TripItineraryDay, TripDestination, TripItineraryDayItem
+from destinations.models import Destination, DestinationTag
+from trips.choices import AccommodationPreference, PlanningStep, TripStatus, TripVisibility
+from trips.models import (
+    Trip,
+    TripAgentMessage,
+    TripConversationMessage,
+    TripConversationSession,
+    TripItinerary,
+    TripItineraryDay,
+    TripDestination,
+    TripItineraryDayItem,
+    TripRoutePlanItem,
+    TripHeadsUpInfoItem,
+    TripNote,
+    TripNoteImage,
+    TripPreparation,
+    TripPlanningSession,
+    TripPreparationPackingItem,
+    TripRequiredDocumentItem,
+)
 
+
+class DestinationTagSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DestinationTag
+        fields = ("name", "category")
+        read_only_fields = fields
 
 class TripDestinationSummarySerializer(serializers.ModelSerializer):
+    tags = DestinationTagSerializer(many=True, read_only=True)
     class Meta:
         model = Destination
-        fields = ("name", "slug", "country", "country_code", "destination_type", "cover_image")
+        fields = ("name", "tagline", "slug", "country", "region", "destination_type", "cover_image", "tags")
         read_only_fields = fields
 
 
@@ -110,6 +138,297 @@ class TripItineraryItemSerializer(serializers.ModelSerializer):
         return instance
 
 
+class TripRoutePlanItemSerializer(serializers.ModelSerializer):
+    estimated_cost = serializers.SerializerMethodField()
+    estimated_duration = serializers.SerializerMethodField()
+
+    class Meta:
+        model = TripRoutePlanItem
+        fields = (
+            "id",
+            "date",
+            "notes",
+            "to_point",
+            "from_point",
+            "start_time",
+            "transport_mode",
+            "estimated_cost",
+            "estimated_duration",
+        )
+        read_only_fields = fields
+
+    def get_estimated_cost(self, obj):
+        return str(obj.estimated_cost) if obj.estimated_cost is not None else None
+
+    def get_estimated_duration(self, obj):
+        return str(obj.estimated_duration) if obj.estimated_duration else None
+
+
+class TripNoteImageSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TripNoteImage
+        fields = ("id", "image_url", "caption", "sort_order", "created_at")
+        read_only_fields = ("id", "created_at")
+
+
+class TripNoteSerializer(serializers.ModelSerializer):
+    images = TripNoteImageSerializer(source="trip_note_images", many=True, required=False)
+    changed_orders = serializers.ListField(
+        child=serializers.DictField(),
+        write_only=True,
+        required=False,
+    )
+
+    class Meta:
+        model = TripNote
+        fields = (
+            "id",
+            "trip",
+            "content",
+            "images",
+            "changed_orders",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = ("id", "trip", "created_at", "updated_at")
+
+    def validate(self, attrs):
+        content = attrs.get("content", getattr(self.instance, "content", "")).strip()
+        images = attrs.get("trip_note_images")
+        has_existing_images = bool(self.instance and self.instance.trip_note_images.exists())
+
+        if not content and images == []:
+            raise serializers.ValidationError("A note must include content or at least one image.")
+
+        if not content and images is None and not has_existing_images:
+            raise serializers.ValidationError("A note must include content or at least one image.")
+
+        return attrs
+
+    def create(self, validated_data):
+        request = self.context["request"]
+        trip = self.context["trip"]
+        images = validated_data.pop("trip_note_images", [])
+
+        with transaction.atomic():
+            note = TripNote.objects.create(
+                trip=trip,
+                created_by=request.user,
+                updated_by=request.user,
+                **validated_data,
+            )
+            self._replace_images(note, images)
+            return note
+
+    def update(self, instance, validated_data):
+        images = validated_data.pop("trip_note_images", None)
+        changed_orders = validated_data.pop("changed_orders", None)
+
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.updated_by = self.context["request"].user
+
+        with transaction.atomic():
+            instance.save()
+            if images is not None:
+                self._replace_images(instance, images)
+            if changed_orders is not None:
+                self._update_image_orders(instance, changed_orders)
+            return instance
+
+    def _replace_images(self, note, images):
+        request = self.context["request"]
+        note.trip_note_images.all().delete()
+        TripNoteImage.objects.bulk_create(
+            [
+                TripNoteImage(
+                    note=note,
+                    image_url=image["image_url"],
+                    caption=image.get("caption", ""),
+                    sort_order=image.get("sort_order", index),
+                    created_by=request.user,
+                )
+                for index, image in enumerate(images, start=1)
+            ]
+        )
+        if hasattr(note, "_prefetched_objects_cache"):
+            note._prefetched_objects_cache.pop("trip_note_images", None)
+
+    def _update_image_orders(self, note, changed_orders):
+        order_map = self._validate_changed_orders(changed_orders)
+        images = list(note.trip_note_images.filter(pk__in=order_map.keys()))
+
+        if len(images) != len(order_map):
+            raise serializers.ValidationError({"changed_orders": "One or more image IDs are invalid for this note."})
+
+        for image in images:
+            image.sort_order = order_map[str(image.pk)]
+
+        TripNoteImage.objects.bulk_update(images, ["sort_order"])
+        if hasattr(note, "_prefetched_objects_cache"):
+            note._prefetched_objects_cache.pop("trip_note_images", None)
+
+    def _validate_changed_orders(self, changed_orders):
+        if not isinstance(changed_orders, list):
+            raise serializers.ValidationError({"changed_orders": "Expected a list of order changes."})
+
+        order_map = {}
+        seen_orders = set()
+        for item in changed_orders:
+            if not isinstance(item, dict):
+                raise serializers.ValidationError({"changed_orders": "Each order change must be an object."})
+
+            item_id = str(item.get("id", "")).strip()
+            sort_order = item.get("sort_order")
+
+            if not item_id or sort_order is None:
+                raise serializers.ValidationError({"changed_orders": "Each item must include id and sort_order."})
+
+            if item_id in order_map:
+                raise serializers.ValidationError({"changed_orders": "Duplicate IDs are not allowed."})
+
+            try:
+                sort_order = int(sort_order)
+            except (TypeError, ValueError):
+                raise serializers.ValidationError({"changed_orders": "sort_order must be an integer."})
+
+            if sort_order < 0:
+                raise serializers.ValidationError({"changed_orders": "sort_order must be zero or greater."})
+
+            if sort_order in seen_orders:
+                raise serializers.ValidationError({"changed_orders": "Duplicate sort_order values are not allowed."})
+
+            order_map[item_id] = sort_order
+            seen_orders.add(sort_order)
+
+        if not order_map:
+            raise serializers.ValidationError({"changed_orders": "At least one order change is required."})
+
+        return order_map
+
+
+class PreparationItemSortOrderMixin:
+    preparation_context_key = "preparation"
+    sort_order_conflict_message = "Sort order already exists for this trip preparation."
+
+    def validate_sort_order(self, value):
+        preparation = self.context[self.preparation_context_key]
+        queryset = self.Meta.model.objects.filter(preparation=preparation, sort_order=value)
+
+        if self.instance:
+            queryset = queryset.exclude(pk=self.instance.pk)
+
+        if queryset.exists():
+            raise serializers.ValidationError(self.sort_order_conflict_message)
+
+        return value
+
+    def _set_next_sort_order(self, validated_data):
+        if "sort_order" in self.initial_data:
+            return
+
+        preparation = self.context[self.preparation_context_key]
+        next_sort_order = (
+            self.Meta.model.objects.filter(preparation=preparation).aggregate(Max("sort_order"))["sort_order__max"]
+            or 0
+        ) + 1
+        validated_data["sort_order"] = next_sort_order
+
+    def create(self, validated_data):
+        preparation = self.context[self.preparation_context_key]
+        self._set_next_sort_order(validated_data)
+        return self.Meta.model.objects.create(preparation=preparation, **validated_data)
+
+
+class TripPreparationPackingItemSerializer(PreparationItemSortOrderMixin, serializers.ModelSerializer):
+    class Meta:
+        model = TripPreparationPackingItem
+        fields = (
+            "id",
+            "item",
+            "quantity",
+            "category",
+            "priority",
+            "is_packed",
+            "additional_notes",
+        )
+        read_only_fields = ("id",)
+
+
+class TripHeadsUpInfoItemSerializer(PreparationItemSortOrderMixin, serializers.ModelSerializer):
+    class Meta:
+        model = TripHeadsUpInfoItem
+        fields = (
+            "id",
+            "title",
+            "category",
+            "severity",
+            "sort_order",
+            "additional_note",
+        )
+        read_only_fields = ("id",)
+
+
+class TripRequiredDocumentItemSerializer(PreparationItemSortOrderMixin, serializers.ModelSerializer):
+    document = serializers.FileField(write_only=True, required=False)
+    document_file_name = serializers.CharField(required=False, allow_blank=True)
+
+    class Meta:
+        model = TripRequiredDocumentItem
+        fields = (
+            "id",
+            "document_name",
+            "document_file_name",
+            "document",
+            "document_url",
+            "document_url_public_id",
+            "required_level",
+            "sort_order",
+            "additional_note",
+        )
+        read_only_fields = ("id", "document_url", "document_url_public_id")
+
+    def validate_document(self, value):
+        allowed_types = {"application/pdf"}
+        content_type = getattr(value, "content_type", "")
+        if content_type.startswith("image/") or content_type in allowed_types:
+            return value
+        raise serializers.ValidationError("Only image and PDF files are allowed.")
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data["document"] = None
+        if instance.document_url:
+            data["document"] = {
+                "file_name": instance.document_file_name,
+                "url": instance.document_url,
+                "public_id": instance.document_url_public_id,
+            }
+        return data
+
+    def create(self, validated_data):
+        document = validated_data.pop("document", None)
+        if document:
+            upload = upload_file(document, folder="trip-documents")
+            validated_data["document_file_name"] = document.name
+            validated_data["document_url"] = upload["url"]
+            validated_data["document_url_public_id"] = upload["public_id"]
+        return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        document = validated_data.pop("document", None)
+        if document:
+            upload = upload_file(document, folder="trip-documents")
+            validated_data["document_file_name"] = document.name
+            validated_data["document_url"] = upload["url"]
+            validated_data["document_url_public_id"] = upload["public_id"]
+
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+        return instance
+
+
 class TripDaySerializer(serializers.ModelSerializer):
     items = TripItineraryItemSerializer(source="day_items", many=True, read_only=True)
 
@@ -145,6 +464,8 @@ class TripListSerializer(serializers.ModelSerializer):
     primary_destination = serializers.SerializerMethodField()
     destinations_count = serializers.SerializerMethodField()
     share_url = serializers.SerializerMethodField()
+    unread_notification = serializers.IntegerField(read_only=True)
+    unread_message = serializers.IntegerField(read_only=True)
 
     class Meta:
         model = Trip
@@ -162,6 +483,8 @@ class TripListSerializer(serializers.ModelSerializer):
             "traveler_type",
             "primary_destination",
             "share_url",
+            "unread_notification",
+            "unread_message",
         )
         read_only_fields = fields
 
@@ -180,17 +503,18 @@ class TripListSerializer(serializers.ModelSerializer):
 
     def get_share_url(self, obj):
         request = self.context.get("request")
-        if obj.visibility != "link_only" or not request:
+        if obj.visibility != TripVisibility.PUBLIC or not request:
             return None
-        return request.build_absolute_uri(
-            reverse("public-trip-detail", kwargs={"share_token": obj.share_token})
-        )
+        return f"{settings.USER_FRONTEND_URL}/trip/public/{obj.share_token}"
 
 
 class TripDetailSerializer(serializers.ModelSerializer):
     trip_destinations = TripDestinationSerializer(many=True, read_only=True)
     days = serializers.SerializerMethodField()
     share_url = serializers.SerializerMethodField()
+    planning_session_id = serializers.SerializerMethodField()
+    conversation_session_id = serializers.SerializerMethodField()
+    is_chat_available = serializers.SerializerMethodField()
 
     class Meta:
         model = Trip
@@ -200,7 +524,6 @@ class TripDetailSerializer(serializers.ModelSerializer):
             "share_token",
             "status",
             "visibility",
-            "planning_source",
             "current_step",
             "start_date",
             "end_date",
@@ -213,14 +536,15 @@ class TripDetailSerializer(serializers.ModelSerializer):
             "start_location_address",
             "start_location_latitude",
             "start_location_longitude",
-            "total_budget",
+            "budget_tier",
             "budget_currency",
-            "accommodation_preference",
             "preferences",
             "planning_summary",
             "agent_active",
-            "agent_active_failed_message",
-            "agent_context",
+            "planning_session_id",
+            "conversation_session_id",
+            "is_chat_available",
+            "metadata",
             "share_url",
             "trip_destinations",
             "days",
@@ -231,11 +555,9 @@ class TripDetailSerializer(serializers.ModelSerializer):
 
     def get_share_url(self, obj):
         request = self.context.get("request")
-        if obj.visibility != "link_only" or not request:
+        if obj.visibility != TripVisibility.PUBLIC or not request:
             return None
-        return request.build_absolute_uri(
-            reverse("public-trip-detail", kwargs={"share_token": obj.share_token})
-        )
+        return f"{settings.USER_FRONTEND_URL}/trip/public/{obj.share_token}"
 
     def get_days(self, obj):
         try:
@@ -243,6 +565,213 @@ class TripDetailSerializer(serializers.ModelSerializer):
         except TripItinerary.DoesNotExist:
             return []
         return TripDaySerializer(days, many=True).data
+
+    def get_planning_session_id(self, obj):
+        session = getattr(obj, "planning_session", None)
+        return str(session.id) if session else None
+
+    def get_conversation_session_id(self, obj):
+        session = getattr(obj, "conversation_session", None)
+        return str(session.id) if session else None
+
+    def get_is_chat_available(self, obj):
+        from trips.services.services import is_trip_plan_ready
+
+        return is_trip_plan_ready(obj)
+
+
+class TripDetailsSerializer(serializers.ModelSerializer):
+    trip_destinations = TripDestinationSerializer(many=True, read_only=True)
+    share_url = serializers.SerializerMethodField()
+    planning_title = serializers.SerializerMethodField()
+    planning_description = serializers.SerializerMethodField()
+    start_location = serializers.SerializerMethodField()
+    budget = serializers.SerializerMethodField()
+    preparation_stats = serializers.SerializerMethodField()
+    external_session_id = serializers.SerializerMethodField()
+    planning_session_id = serializers.SerializerMethodField()
+    conversation_session_id = serializers.SerializerMethodField()
+    is_chat_available = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Trip
+        fields = (
+            "id",
+            "title",
+            "planning_title",
+            "planning_description",
+            "status",
+            "visibility",
+            "current_step",
+            "start_date",
+            "end_date",
+            "nights",
+            "duration_days",
+            "travelers_count",
+            "traveler_type",
+            "start_location",
+            "budget",
+            "share_url",
+            "trip_destinations",
+            "preparation_stats",
+            "external_session_id",
+            "planning_session_id",
+            "conversation_session_id",
+            "is_chat_available",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = fields
+
+    def get_share_url(self, obj):
+        request = self.context.get("request")
+        if obj.visibility != TripVisibility.PUBLIC or not request:
+            return None
+        return f"{settings.USER_FRONTEND_URL}/trip/public/{obj.share_token}"
+
+    def get_planning_session_id(self, obj):
+        session = getattr(obj, "planning_session", None)
+        return str(session.id) if session else None
+
+    def get_conversation_session_id(self, obj):
+        session = getattr(obj, "conversation_session", None)
+        return str(session.id) if session else None
+
+    def get_is_chat_available(self, obj):
+        from trips.services.services import is_trip_plan_ready
+
+        return is_trip_plan_ready(obj)
+
+    def get_planning_title(self, obj):
+        itinerary = self._get_itinerary(obj)
+        return itinerary.title if itinerary else ""
+
+    def get_planning_description(self, obj):
+        itinerary = self._get_itinerary(obj)
+        return itinerary.summary if itinerary else ""
+
+    def get_start_location(self, obj):
+        return {
+            "address": obj.start_location_address,
+            "city": obj.origin_city,
+            "country": obj.origin_country,
+            "longitude": obj.start_location_longitude,
+            "latitude": obj.start_location_latitude,
+        }
+
+    def get_budget(self, obj):
+        itinerary = self._get_itinerary(obj)
+        if not itinerary:
+            return None
+
+        budget = getattr(itinerary, "rough_budget", None)
+        if not budget:
+            return None
+
+        return {
+            "currency": obj.budget_currency,
+            "transport": str(budget.transport) if budget.transport is not None else None,
+            "food": str(budget.food) if budget.food is not None else None,
+            "activities": str(budget.activities) if budget.activities is not None else None,
+            "tickets_or_entry": str(budget.tickets_or_entry) if budget.tickets_or_entry is not None else None,
+            "miscellaneous": str(budget.miscellaneous) if budget.miscellaneous is not None else None,
+            "total_estimated": (
+                str(budget.total_estimated_budget)
+                if budget.total_estimated_budget is not None
+                else None
+            ),
+            "note": budget.budget_note
+        }
+
+    def get_preparation_stats(self, obj):
+        preparation = self._get_preparation(obj)
+        if not preparation:
+            return {
+                "packing_items": {
+                    "total_count": 0,
+                    "is_packed_count": 0,
+                },
+                "documents": {
+                    "total_count": 0,
+                    "uploaded_count": 0,
+                },
+            }
+
+        packing_items = list(preparation.packing_items.all())
+        required_documents = list(preparation.required_documents.all())
+        return {
+            "packing_items": {
+                "total_count": len(packing_items),
+                "is_packed_count": sum(1 for item in packing_items if item.is_packed),
+            },
+            "documents": {
+                "total_count": len(required_documents),
+                "uploaded_count": sum(1 for item in required_documents if item.document_url),
+            },
+        }
+    def get_external_session_id(self, obj):
+        preparation = self._get_preparation(obj)
+        return preparation.external_session_id if preparation else None
+
+    def _get_itinerary(self, obj):
+        try:
+            return obj.trip_itinerary
+        except TripItinerary.DoesNotExist:
+            return None
+
+    def _get_preparation(self, obj):
+        try:
+            return obj.structured_preparation
+        except TripPreparation.DoesNotExist:
+            return None
+
+class TripShortDetailsSerializer(serializers.ModelSerializer):
+    trip_destinations = TripDestinationSerializer(many=True, read_only=True)    
+    start_location = serializers.SerializerMethodField()
+    planning_stats = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Trip
+        fields = (
+            "id",
+            "title",
+            "status",
+            "visibility",
+            "current_step",
+            "start_date",
+            "preferences",
+            "duration_days",
+            "end_date",
+            "budget_tier",
+            "budget_currency",
+            "travelers_count",
+            "traveler_type",
+            "start_location",
+            "trip_destinations",
+            "planning_stats",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = fields
+
+    def get_start_location(self, obj):
+        return {
+            "address": obj.start_location_address,
+            "city": obj.origin_city,
+            "country": obj.origin_country,
+            "longitude": obj.start_location_longitude,
+            "latitude": obj.start_location_latitude,
+        }
+    
+    def get_planning_stats(self, obj):
+        return {
+            "agent_active": obj.agent_active,
+            "is_qna_complete": obj.is_qna_complete,
+            "is_recommendation_complete": obj.is_recommendation_complete,
+            "is_itinerary_design_complete": obj.is_itinerary_design_complete,
+            "is_trip_preparation_complete": obj.is_trip_preparation_complete,
+        }
+
 
 
 class PublicTripDetailSerializer(serializers.ModelSerializer):
@@ -271,12 +800,10 @@ class PublicTripDetailSerializer(serializers.ModelSerializer):
             "start_location_address",
             "start_location_latitude",
             "start_location_longitude",
-            "total_budget",
+            "budget_tier",
             "budget_currency",
-            "accommodation_preference",
             "planning_summary",
             "agent_active",
-            "agent_active_failed_message",
             "trip_destinations",
             "days",
             "share_url",
@@ -287,9 +814,7 @@ class PublicTripDetailSerializer(serializers.ModelSerializer):
         request = self.context.get("request")
         if not request:
             return None
-        return request.build_absolute_uri(
-            reverse("public-trip-detail", kwargs={"share_token": obj.share_token})
-        )
+        return f"{settings.USER_FRONTEND_URL}/trip/public/{obj.share_token}"
 
     def get_days(self, obj):
         try:
@@ -300,7 +825,15 @@ class PublicTripDetailSerializer(serializers.ModelSerializer):
 
 
 class TripWriteSerializer(serializers.ModelSerializer):
+    DATE_RANGE_OVERLAP_MESSAGE = "Between this date range there are another trip exists."
+
     days = serializers.IntegerField(write_only=True, min_value=1, max_value=365, required=False)
+    accommodation_preference = serializers.ChoiceField(
+        choices=AccommodationPreference.choices,
+        write_only=True,
+        required=False,
+        allow_blank=True,
+    )
     destination_slugs = serializers.ListField(
         child=serializers.SlugField(),
         write_only=True,
@@ -327,13 +860,13 @@ class TripWriteSerializer(serializers.ModelSerializer):
             "start_location_address",
             "start_location_latitude",
             "start_location_longitude",
-            "total_budget",
+            "budget_tier",
             "budget_currency",
             "accommodation_preference",
             "destination_slugs",
             "preferences",
             "planning_summary",
-            "agent_context",
+            "metadata",
         )
 
     def validate(self, attrs):
@@ -350,6 +883,9 @@ class TripWriteSerializer(serializers.ModelSerializer):
 
         if start_date and end_date and end_date < start_date:
             raise serializers.ValidationError({"end_date": "end_date must be after or equal to start_date."})
+
+        if start_date and end_date:
+            self._validate_date_range_has_no_trip_overlap(start_date, end_date)
 
         if destination_slugs:
             duplicates = sorted({slug for slug in destination_slugs if destination_slugs.count(slug) > 1})
@@ -370,10 +906,24 @@ class TripWriteSerializer(serializers.ModelSerializer):
 
         return attrs
 
+    def _validate_date_range_has_no_trip_overlap(self, start_date, end_date):
+        request = self.context["request"]
+        overlapping_trips = Trip.objects.filter(
+            user=request.user,
+            start_date__lte=end_date,
+            end_date__gte=start_date,
+        )
+        if self.instance:
+            overlapping_trips = overlapping_trips.exclude(pk=self.instance.pk)
+
+        if overlapping_trips.exists():
+            raise serializers.ValidationError({"non_field_errors": [self.DATE_RANGE_OVERLAP_MESSAGE]})
+
     def create(self, validated_data):
         request = self.context["request"]
         destination_slugs = validated_data.pop("destination_slugs", [])
-        validated_data["current_step"] = 2
+        self._merge_accommodation_preference(validated_data)
+        validated_data["current_step"] = PlanningStep.PREFERENCE
         with transaction.atomic():
             trip = Trip.objects.create(
                 user=request.user,
@@ -381,16 +931,43 @@ class TripWriteSerializer(serializers.ModelSerializer):
                 updated_by=request.user,
                 **validated_data,
             )
+            TripPlanningSession.objects.create(
+                trip=trip,
+                user=request.user,
+                created_by=request.user,
+                updated_by=request.user,
+            )
+            TripConversationSession.objects.create(
+                trip=trip,
+                user=request.user,
+                created_by=request.user,
+                updated_by=request.user,
+            )
             self._create_trip_destinations(trip, destination_slugs)
+            if trip.status == TripStatus.COMPLETED:
+                record_completed_trip_stats(trip)
             return trip
 
     def update(self, instance, validated_data):
         validated_data.pop("destination_slugs", None)
+        self._merge_accommodation_preference(validated_data, instance)
+        old_status = instance.status
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
         instance.updated_by = self.context["request"].user
         instance.save()
+        if old_status != TripStatus.COMPLETED and instance.status == TripStatus.COMPLETED:
+            record_completed_trip_stats(instance)
         return instance
+
+    def _merge_accommodation_preference(self, validated_data, instance=None):
+        if "accommodation_preference" not in validated_data:
+            return
+
+        accommodation_preference = validated_data.pop("accommodation_preference")
+        preferences = dict(validated_data.get("preferences") or getattr(instance, "preferences", {}) or {})
+        preferences["accommodation_preference"] = accommodation_preference
+        validated_data["preferences"] = preferences
 
     def _create_trip_destinations(self, trip, destination_slugs):
         if not destination_slugs:
@@ -412,11 +989,88 @@ class TripWriteSerializer(serializers.ModelSerializer):
         TripDestination.objects.bulk_create(trip_destinations)
 
 
+class TripShareTokenSerializer(serializers.Serializer):
+    regenerate = serializers.BooleanField(required=False, default=False)
+    id = serializers.UUIDField(source="trip.id", read_only=True)
+    visibility = serializers.CharField(source="trip.visibility", read_only=True)
+    share_token = serializers.UUIDField(source="trip.share_token", read_only=True)
+    share_url = serializers.SerializerMethodField()
+
+    def save(self, **kwargs):
+        trip = self.context["trip"]
+        request = self.context["request"]
+
+        if self.validated_data.get("regenerate"):
+            trip.share_token = uuid4()
+        trip.visibility = TripVisibility.PUBLIC
+        trip.updated_by = request.user
+        trip.save(update_fields=["share_token", "visibility", "updated_by", "updated_at"])
+        self.instance = trip
+        return trip
+
+    def get_share_url(self, obj):
+        trip = obj if isinstance(obj, Trip) else obj.get("trip")
+        request = self.context.get("request")
+        if not request or not trip:
+            return None
+        return f"{settings.USER_FRONTEND_URL}/trip/public/{obj.share_token}"
+
+    def to_representation(self, instance):
+        trip = instance if isinstance(instance, Trip) else self.instance
+        return {
+            "id": str(trip.id),
+            "visibility": trip.visibility,
+            "share_token": str(trip.share_token),
+            "share_url": self.get_share_url(trip),
+        }
+
+
+class TripVisibilitySerializer(serializers.Serializer):
+    visibility = serializers.ChoiceField(choices=TripVisibility.choices)
+    id = serializers.UUIDField(source="trip.id", read_only=True)
+    share_url = serializers.SerializerMethodField()
+
+    def save(self, **kwargs):
+        trip = self.context["trip"]
+        request = self.context["request"]
+        trip.visibility = self.validated_data["visibility"]
+        trip.updated_by = request.user
+        trip.save(update_fields=["visibility", "updated_by", "updated_at"])
+        self.instance = trip
+        return trip
+
+    def get_share_url(self, obj):
+        trip = obj if isinstance(obj, Trip) else obj.get("trip")
+        request = self.context.get("request")
+        if not request or not trip or trip.visibility != TripVisibility.PUBLIC:
+            return None
+        return f"{settings.USER_FRONTEND_URL}/trip/public/{obj.share_token}"
+
+    def to_representation(self, instance):
+        trip = instance if isinstance(instance, Trip) else self.instance
+        return {
+            "id": str(trip.id),
+            "visibility": trip.visibility,
+            "share_token": str(trip.share_token),
+            "share_url": self.get_share_url(trip),
+        }
+
+
 
 class TripAgentActiveSerializer(serializers.Serializer):
     trip_id = serializers.UUIDField()
     let_agent_decide = serializers.BooleanField(required=False, default=True)
     travel_pace = serializers.CharField(max_length=40, allow_blank=True, required=False)
+    accommodation_preference = serializers.ChoiceField(
+        choices=AccommodationPreference.choices,
+        required=False,
+        allow_blank=True,
+    )
+    accommotation_preference = serializers.ChoiceField(
+        choices=AccommodationPreference.choices,
+        required=False,
+        allow_blank=True,
+    )
     interest_tags = serializers.ListField(
         child=serializers.CharField(max_length=80),
         required=False,
@@ -436,6 +1090,15 @@ class TripAgentActiveSerializer(serializers.Serializer):
     mobility_other = serializers.CharField(max_length=200, allow_blank=True, required=False)
 
     def validate(self, attrs):
+        if attrs.get("let_agent_decide"):
+            request = self.context.get("request")
+            profile = getattr(request.user, "profile", None) if request else None
+            if profile:
+                attrs["interest_tags"] = profile.travel_interests or attrs.get("interest_tags", [])
+                attrs["dietary_needs"] = profile.dietary_preferences or attrs.get("dietary_needs", [])
+                attrs["travel_pace"] = profile.travel_pace or attrs.get("travel_pace", "")
+                attrs["mobility_constraints"] = profile.mobility_constraints or attrs.get("mobility_constraints", [])
+
         attrs["interest_tags"] = self._clean_list(attrs.get("interest_tags", []))
         attrs["dietary_needs"] = self._append_other(
             attrs.get("dietary_needs", []),
@@ -446,15 +1109,22 @@ class TripAgentActiveSerializer(serializers.Serializer):
             attrs.get("mobility_other", ""),
         )
         attrs["travel_pace"] = attrs.get("travel_pace", "").strip()
+        attrs["accommotation_preference"] = (
+            attrs.get("accommotation_preference")
+            or attrs.get("accommodation_preference")
+            or ""
+        )
         return attrs
 
     def normalized_preferences(self):
         data = self.validated_data
         return {
             "travel_pace": data["travel_pace"],
-            "interest_tags": data["interest_tags"],
             "dietary_needs": data["dietary_needs"],
+            "interest_tags": data["interest_tags"],
             "mobility_constraints": data["mobility_constraints"],
+            "accommodation_preference": data["accommotation_preference"],
+            "accommotation_preference": data["accommotation_preference"],
         }
 
     def _append_other(self, values, other):
@@ -476,13 +1146,15 @@ class TripAgentActiveSerializer(serializers.Serializer):
 class TripAgentCreateMessageSerializer(serializers.Serializer):
     trip_id = serializers.UUIDField()
     session_id = serializers.UUIDField(required=False)
-    current_step = serializers.IntegerField(min_value=1, max_value=6)
     message = serializers.CharField(allow_blank=False, trim_whitespace=True)
 
 
 class TripAgentMessageListQuerySerializer(serializers.Serializer):
+    session_id = serializers.UUIDField()
+
+
+class TripPlanningTripQuerySerializer(serializers.Serializer):
     trip_id = serializers.UUIDField()
-    step = serializers.IntegerField(min_value=1, max_value=6, required=False)
 
 
 class TripAgentMessageSerializer(serializers.ModelSerializer):
@@ -494,9 +1166,43 @@ class TripAgentMessageSerializer(serializers.ModelSerializer):
             "id",
             "session_id",
             "sender",
-            "step",
-            "sequence",
             "content",
             "created_at",
         )
         read_only_fields = fields
+
+
+class TripChatCreateMessageSerializer(serializers.Serializer):
+    message = serializers.CharField(allow_blank=False, trim_whitespace=True)
+
+
+class TripChatMessageSerializer(serializers.ModelSerializer):
+    session_id = serializers.UUIDField(read_only=True)
+    is_read = serializers.SerializerMethodField()
+
+    def get_is_read(self, obj):
+        return obj.read_at is not None
+
+    class Meta:
+        model = TripConversationMessage
+        fields = (
+            "id",
+            "session_id",
+            "sender",
+            "content",
+            "metadata",
+            "is_read",
+            "read_at",
+            "created_at",
+        )
+        read_only_fields = fields
+
+
+class TripChatSessionSerializer(serializers.Serializer):
+    id = serializers.UUIDField(read_only=True)
+    trip_id = serializers.UUIDField(source="trip.id", read_only=True)
+    external_session_id = serializers.CharField(read_only=True)
+    is_active = serializers.BooleanField(read_only=True)
+    messages_count = serializers.IntegerField(read_only=True)
+    created_at = serializers.DateTimeField(read_only=True)
+    updated_at = serializers.DateTimeField(read_only=True)

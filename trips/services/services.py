@@ -6,12 +6,23 @@ from uuid import UUID
 
 from asgiref.sync import async_to_sync
 from django.db import transaction
-from django.db.models import Max
 
 from destinations.models import Activity, Attraction, Cuisine
+from trips.choices import (
+    HeadsUpType,
+    PackingItemsType,
+    PlanningStep,
+    PriorityType,
+    RequiredType,
+    SeverityType,
+    TripStatus,
+)
 from trips.models import (
-    TripAgentConversationSession,
     TripAgentMessage,
+    TripConversationMessage,
+    TripConversationSession,
+    TripPlanningSession,
+    TripPlanningStepSession,
     TripActivityRecommendationItem,
     TripAttractionRecommendationItem,
     TripCuisineRecommendationItem,
@@ -27,44 +38,288 @@ from trips.models import (
     TripRequiredDocumentItem,
 )
 
+PLANNING_STEP_ORDER = (
+    PlanningStep.PREFERENCE,
+    PlanningStep.RECOMMENDATION,
+    PlanningStep.ITINERARY,
+    PlanningStep.PREPARATION,
+    PlanningStep.OVERVIEW,
+)
 
-def get_or_create_agent_conversation_session(trip, user, current_step=2):
-    session = (
-        TripAgentConversationSession.objects.filter(
-            trip=trip,
-            user=user,
-            current_step=current_step,
-            is_active=True,
-        )
-        .order_by("-updated_at")
-        .first()
-    )
-    if session:
-        return session
+PLANNING_STEP_LABELS = {
+    PlanningStep.PREFERENCE: "Preference Q&A",
+    PlanningStep.RECOMMENDATION: "Recommendations",
+    PlanningStep.ITINERARY: "Itinerary design",
+    PlanningStep.PREPARATION: "Trip preparation",
+    PlanningStep.OVERVIEW: "Overview",
+}
 
-    return TripAgentConversationSession.objects.create(
+
+def get_or_create_planning_session(trip, user):
+    planning_session, _ = TripPlanningSession.objects.get_or_create(
         trip=trip,
-        user=user,
+        defaults={
+            "user": user,
+            "created_by": user,
+            "updated_by": user,
+        },
+    )
+    return planning_session
+
+
+def get_or_create_conversation_session(trip, user, plan_ready=None):
+    if plan_ready is None:
+        plan_ready = is_trip_plan_ready(trip)
+    conversation_session, _ = TripConversationSession.objects.get_or_create(
+        trip=trip,
+        defaults={
+            "user": user,
+            "is_active": plan_ready,
+            "created_by": user,
+            "updated_by": user,
+        },
+    )
+    if plan_ready and not conversation_session.is_active:
+        conversation_session.is_active = True
+        conversation_session.updated_by = user
+        conversation_session.save(update_fields=["is_active", "updated_by", "updated_at"])
+    return conversation_session
+
+
+def get_or_create_planning_step_session(trip, user, step=None, current_step=None):
+    step = step or current_step
+    legacy_steps = {
+        1: PlanningStep.PREFERENCE,
+        2: PlanningStep.PREFERENCE,
+        3: PlanningStep.RECOMMENDATION,
+        4: PlanningStep.ITINERARY,
+        5: PlanningStep.PREPARATION,
+        6: PlanningStep.COMPLETED,
+        "1": PlanningStep.PREFERENCE,
+        "2": PlanningStep.PREFERENCE,
+        "3": PlanningStep.RECOMMENDATION,
+        "4": PlanningStep.ITINERARY,
+        "5": PlanningStep.PREPARATION,
+        "6": PlanningStep.COMPLETED,
+    }
+    step = legacy_steps.get(step, step or PlanningStep.PREFERENCE)
+    planning_session = get_or_create_planning_session(trip, user)
+    session, _ = TripPlanningStepSession.objects.get_or_create(
+        planning_session=planning_session,
+        step=step,
+        defaults={
+            "trip": trip,
+            "user": user,
+            "created_by": user,
+            "updated_by": user,
+        },
+    )
+    return session
+
+
+def get_or_create_agent_conversation_session(trip, user, step=None, current_step=None):
+    """Compatibility wrapper for callers using the old planning-session name."""
+    return get_or_create_planning_step_session(
+        trip,
+        user,
+        step=step,
         current_step=current_step,
-        created_by=user,
-        updated_by=user,
     )
 
 
-def create_agent_message(session, sender, content="", payload=None, user=None):
-    next_sequence = (session.messages.aggregate(max_sequence=Max("sequence"))["max_sequence"] or 0) + 1
+def create_agent_message(session, sender, content="", metadata=None, user=None):
     actor = user or session.user
     return TripAgentMessage.objects.create(
         session=session,
-        trip=session.trip,
         sender=sender,
-        step=session.current_step,
-        sequence=next_sequence,
         content=content or "",
-        payload=payload or {},
+        metadata=metadata or {},
         created_by=actor,
         updated_by=actor,
     )
+
+
+def create_conversation_message(
+    session,
+    sender,
+    content="",
+    metadata=None,
+    user=None,
+    read_at=None,
+):
+    actor = user or session.user
+    return TripConversationMessage.objects.create(
+        session=session,
+        sender=sender,
+        content=content or "",
+        metadata=metadata or {},
+        read_at=read_at,
+        created_by=actor,
+        updated_by=actor,
+    )
+
+
+def get_trip_planning_progress(trip):
+    agent_context = trip.metadata or {}
+    preference_qna = (
+        agent_context.get("preference_qna")
+        if isinstance(agent_context.get("preference_qna"), dict)
+        else {}
+    )
+    recommendations = (
+        agent_context.get("recommendations")
+        if isinstance(agent_context.get("recommendations"), dict)
+        else {}
+    )
+    itinerary_design = (
+        agent_context.get("itinerary_design")
+        if isinstance(agent_context.get("itinerary_design"), dict)
+        else {}
+    )
+    trip_preparation = (
+        agent_context.get("trip_preparation")
+        if isinstance(agent_context.get("trip_preparation"), dict)
+        else {}
+    )
+
+    has_saved_recommendations = TripRecommendations.objects.filter(trip=trip).exists()
+    has_saved_itinerary = TripItinerary.objects.filter(trip=trip).exists()
+    has_saved_preparation = TripPreparation.objects.filter(trip=trip).exists()
+
+    return {
+        "current_step": trip.current_step,
+        "agent_active": trip.agent_active,
+        "is_qna_complete": bool(trip.is_qna_complete or preference_qna.get("context")),
+        "is_recommendation_complete": bool(
+            trip.is_recommendation_complete
+            or recommendations.get("is_discovery_complete")
+            or has_saved_recommendations
+        ),
+        "is_itinerary_design_complete": bool(
+            trip.is_itinerary_design_complete
+            or itinerary_design.get("is_itinerary_complete")
+            or has_saved_itinerary
+        ),
+        "is_trip_preparation_complete": bool(
+            trip.is_trip_preparation_complete
+            or trip_preparation.get("is_preparation_complete")
+            or has_saved_preparation
+        ),
+    }
+
+
+def is_trip_plan_ready(trip):
+    progress = get_trip_planning_progress(trip)
+    return all(
+        (
+            progress["is_qna_complete"],
+            progress["is_recommendation_complete"],
+            progress["is_itinerary_design_complete"],
+            progress["is_trip_preparation_complete"],
+        )
+    )
+
+
+def get_trip_planning_flow(trip):
+    progress = get_trip_planning_progress(trip)
+    return [
+        {
+            "step": PlanningStep.PREFERENCE,
+            "label": PLANNING_STEP_LABELS[PlanningStep.PREFERENCE],
+            "is_complete": progress["is_qna_complete"],
+            "is_current": trip.current_step == PlanningStep.PREFERENCE,
+            "can_open": True,
+            "can_generate": not progress["is_qna_complete"],
+        },
+        {
+            "step": PlanningStep.RECOMMENDATION,
+            "label": PLANNING_STEP_LABELS[PlanningStep.RECOMMENDATION],
+            "is_complete": progress["is_recommendation_complete"],
+            "is_current": trip.current_step == PlanningStep.RECOMMENDATION,
+            "can_open": progress["is_qna_complete"],
+            "can_generate": progress["is_qna_complete"],
+        },
+        {
+            "step": PlanningStep.ITINERARY,
+            "label": PLANNING_STEP_LABELS[PlanningStep.ITINERARY],
+            "is_complete": progress["is_itinerary_design_complete"],
+            "is_current": trip.current_step == PlanningStep.ITINERARY,
+            "can_open": progress["is_recommendation_complete"],
+            "can_generate": progress["is_recommendation_complete"],
+        },
+        {
+            "step": PlanningStep.PREPARATION,
+            "label": PLANNING_STEP_LABELS[PlanningStep.PREPARATION],
+            "is_complete": progress["is_trip_preparation_complete"],
+            "is_current": trip.current_step == PlanningStep.PREPARATION,
+            "can_open": progress["is_itinerary_design_complete"],
+            "can_generate": progress["is_itinerary_design_complete"],
+        },
+        {
+            "step": PlanningStep.OVERVIEW,
+            "label": PLANNING_STEP_LABELS[PlanningStep.OVERVIEW],
+            "is_complete": (
+                progress["is_itinerary_design_complete"]
+                and progress["is_trip_preparation_complete"]
+            ),
+            "is_current": trip.current_step == PlanningStep.OVERVIEW,
+            "can_open": True,
+            "can_generate": False,
+        },
+    ]
+
+
+def get_step_blocking_errors(trip, step):
+    progress = get_trip_planning_progress(trip)
+    blocking_errors = []
+
+    if step == PlanningStep.RECOMMENDATION:
+        if progress["is_recommendation_complete"]:
+            return []
+        if not progress["is_qna_complete"]:
+            blocking_errors.append("Complete preference Q&A before requesting recommendations.")
+        if not trip.trip_destinations.exists():
+            blocking_errors.append("Add at least one destination before requesting recommendations.")
+    elif step == PlanningStep.ITINERARY:
+        if progress["is_itinerary_design_complete"]:
+            return []
+        if not progress["is_recommendation_complete"]:
+            blocking_errors.append("Generate recommendations before requesting an itinerary.")
+    elif step == PlanningStep.PREPARATION:
+        if progress["is_trip_preparation_complete"]:
+            return []
+        if not progress["is_itinerary_design_complete"]:
+            blocking_errors.append("Generate the itinerary before requesting trip preparation.")
+
+    return blocking_errors
+
+
+def get_activation_blocking_errors(trip):
+    progress = get_trip_planning_progress(trip)
+    blocking_errors = []
+
+    if trip.status not in {TripStatus.DRAFT, TripStatus.PLANNING}:
+        blocking_errors.append("Trip status must be draft or planning.")
+    if not progress["is_itinerary_design_complete"]:
+        blocking_errors.append("Generate the trip itinerary.")
+    if not progress["is_trip_preparation_complete"]:
+        blocking_errors.append("Generate the trip preparation checklist.")
+
+    return blocking_errors
+
+
+def build_planning_response_meta(trip):
+    activation_blocking_errors = get_activation_blocking_errors(trip)
+    planning_session = getattr(trip, "planning_session", None)
+    return {
+        "planning_session_id": str(planning_session.id) if planning_session else None,
+        "progress": get_trip_planning_progress(trip),
+        "flow": get_trip_planning_flow(trip),
+        "activation": {
+            "can_activate": not activation_blocking_errors,
+            "blocking_steps": activation_blocking_errors,
+        },
+    }
 
 
 def build_trip_snapshot(trip):
@@ -77,20 +332,18 @@ def build_trip_snapshot(trip):
         destination = trip_destination.destination
         destinations.append(
             {
-                "id": str(destination.id),
                 "name": destination.name,
+                "description": destination.description,
                 "country": destination.country,
                 "region": destination.region,
                 "type": destination.destination_type,
-                "overview": destination.overview,
                 "budget_tier": destination.budget_tier,
-                "difficulty": destination.difficulty,
                 "min_stay_days": destination.min_stay_days,
                 "max_stay_days": destination.max_stay_days,
                 "best_travel_months": destination.best_travel_months,
                 "getting_around": destination.getting_around,
                 "visa_notes": destination.visa_notes,
-                "cultural_tips": destination.cultural_tips,
+                "notes": destination.notes,
             }
         )
 
@@ -101,9 +354,8 @@ def build_trip_snapshot(trip):
         "traveler_type": trip.traveler_type,
         "origin_city": trip.origin_city,
         "origin_country": trip.origin_country,
-        "budget": str(trip.total_budget) if trip.total_budget is not None else None,
         "destinations": destinations,
-    }
+    } 
 
 
 def run_plan_agent_for_session(
@@ -118,7 +370,7 @@ def run_plan_agent_for_session(
 
     client = PlanAgentClient(
         session.trip,
-        current_step=session.current_step,
+        planning_step=session.step,
         destination_id=str(destination_id) if destination_id else None,
         trip_context=trip_context,
     )
@@ -128,6 +380,154 @@ def run_plan_agent_for_session(
         session_id=session.external_session_id or None,
         preferences=preferences,
         trip_snapshot=trip_snapshot,
+    )
+
+    external_session_id = result.get("session_id") or ""
+    if external_session_id and session.external_session_id != external_session_id:
+        session.external_session_id = external_session_id
+        session.save(update_fields=["external_session_id", "updated_at"])
+
+    return result
+
+
+def build_trip_guide_context(trip):
+    """Build the authoritative saved-plan context used by post-planning chat."""
+    context = build_itinerary_planning_context(trip)
+
+    recommendations = getattr(trip, "trip_recommendations", None)
+    if recommendations:
+        attraction_ids = list(
+            recommendations.attraction_items.exclude(attraction=None).values_list(
+                "attraction_id", flat=True
+            )
+        )
+        activity_ids = list(
+            recommendations.activity_items.values_list("activity_id", flat=True)
+        )
+        cuisine_ids = list(
+            recommendations.cuisine_items.values_list("cuisine_id", flat=True)
+        )
+        context["selected_recommendations"] = {
+            "attractions": _serialize_selected_attractions(attraction_ids),
+            "activities": _serialize_selected_activities(activity_ids),
+            "cuisines": _serialize_selected_cuisines(cuisine_ids),
+        }
+        context["recommendation_messages"] = {
+            "attractions": recommendations.attraction_recommendation_message,
+            "activities": recommendations.activity_recommendation_message,
+            "cuisines": recommendations.cusine_recommendation_message,
+        }
+
+    itinerary = getattr(trip, "trip_itinerary", None)
+    if itinerary:
+        # The relational itinerary reflects any edits made after AI planning.
+        context.pop("itinerary_design", None)
+        days = []
+        for day in itinerary.itinerary_days.prefetch_related("day_items").all():
+            days.append(
+                {
+                    "day": day.day,
+                    "date": day.date.isoformat() if day.date else None,
+                    "title": day.title,
+                    "summary": day.summary,
+                    "items": [
+                        {
+                            "time": item.time.isoformat() if item.time else None,
+                            "title": item.title,
+                            "description": item.description,
+                            "notes": item.notes,
+                            "item_type": item.item_type,
+                            "estimated_cost": item.estimated_cost,
+                        }
+                        for item in day.day_items.all()
+                    ],
+                }
+            )
+
+        routes = [
+            {
+                "date": route.date.isoformat() if route.date else None,
+                "start_time": route.start_time.isoformat() if route.start_time else None,
+                "from": route.from_point,
+                "to": route.to_point,
+                "transport_mode": route.transport_mode,
+                "estimated_duration": route.estimated_duration,
+                "estimated_cost": route.estimated_cost,
+                "notes": route.notes,
+            }
+            for route in itinerary.route_plan_items.all()
+        ]
+        budget = getattr(itinerary, "rough_budget", None)
+        context["itinerary"] = {
+            "title": itinerary.title,
+            "summary": itinerary.summary,
+            "message": itinerary.message,
+            "days": days,
+            "routes": routes,
+            "budget": {
+                "currency": trip.budget_currency,
+                "transport": budget.transport,
+                "food": budget.food,
+                "activities": budget.activities,
+                "tickets_or_entry": budget.tickets_or_entry,
+                "miscellaneous": budget.miscellaneous,
+                "total": budget.total_estimated_budget,
+                "note": budget.budget_note,
+            }
+            if budget
+            else None,
+        }
+
+    preparation = getattr(trip, "structured_preparation", None)
+    if preparation:
+        context["preparation"] = {
+            "title": preparation.title,
+            "summary": preparation.summary,
+            "message": preparation.message,
+            "packing_items": [
+                {
+                    "item": item.item,
+                    "quantity": item.quantity,
+                    "category": item.category,
+                    "priority": item.priority,
+                    "is_packed": item.is_packed,
+                    "notes": item.additional_notes,
+                }
+                for item in preparation.packing_items.all()
+            ],
+            "required_documents": [
+                {
+                    "name": document.document_name,
+                    "required_level": document.required_level,
+                    "notes": document.additional_note,
+                }
+                for document in preparation.required_documents.all()
+            ],
+            "heads_up": [
+                {
+                    "title": item.title,
+                    "category": item.category,
+                    "severity": item.severity,
+                    "notes": item.additional_note,
+                }
+                for item in preparation.heads_up.all()
+            ],
+        }
+
+    return context
+
+
+def run_guide_agent_for_session(session, user_query):
+    from trips.agents.guide_agent import GuideAgentClient
+
+    client = GuideAgentClient(
+        session.trip,
+        trip_context=build_trip_guide_context(session.trip),
+    )
+    result = async_to_sync(client.run_agent)(
+        user_query=user_query,
+        user_id=str(session.user_id),
+        session_id=session.external_session_id or None,
     )
 
     external_session_id = result.get("session_id") or ""
@@ -175,7 +575,7 @@ def build_preparation_agent_query(trip_context):
 
 
 def build_itinerary_planning_context(trip):
-    agent_context = trip.agent_context or {}
+    agent_context = trip.metadata or {}
     recommendations = agent_context.get("recommendations") or {}
     trip_snapshot = build_trip_snapshot(trip)
 
@@ -195,7 +595,7 @@ def build_itinerary_planning_context(trip):
         "preference_context": (agent_context.get("preference_qna") or {}).get("context"),
         "selected_recommendations": {
             "attractions": _serialize_selected_attractions(_recommendation_ids(recommendations, "attraction")),
-            "activities": _serialize_selected_activities(recommendations.get("activity_ids", [])),
+            "activities": _serialize_selected_activities(_recommendation_ids(recommendations, "activity")),
             "cuisines": _serialize_selected_cuisines(_recommendation_ids(recommendations, "cuisine")),
         },
         "recommendation_messages": recommendations.get("messages", {}),
@@ -205,14 +605,30 @@ def build_itinerary_planning_context(trip):
 
 def _recommendation_ids(recommendations, item_type):
     if item_type == "attraction":
-        return recommendations.get("attraction_ids") or recommendations.get("tour_spot_ids") or []
+        ids = recommendations.get("attraction_ids") or recommendations.get("tour_spot_ids") or []
+        return _valid_uuid_strings(ids)
     if item_type == "cuisine":
-        return recommendations.get("cuisine_ids") or recommendations.get("food_item_ids") or []
-    return recommendations.get(f"{item_type}_ids") or []
+        ids = recommendations.get("cuisine_ids") or recommendations.get("food_item_ids") or []
+        return _valid_uuid_strings(ids)
+    return _valid_uuid_strings(recommendations.get(f"{item_type}_ids") or [])
+
+
+def _valid_uuid_strings(values):
+    valid_ids = []
+    seen = set()
+    for value in values or []:
+        try:
+            parsed = str(UUID(str(value)))
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if parsed not in seen:
+            valid_ids.append(parsed)
+            seen.add(parsed)
+    return valid_ids
 
 
 def _serialize_selected_attractions(selected_ids):
-    items = Attraction.objects.filter(id__in=selected_ids)
+    items = Attraction.objects.filter(id__in=selected_ids).prefetch_related("tags", "images")
     item_map = {str(item.id): item for item in items}
     return [
         {
@@ -220,12 +636,17 @@ def _serialize_selected_attractions(selected_ids):
             "name": item.name,
             "type": item.attraction_type,
             "description": item.description,
+            "how_to_reach": item.how_to_reach,
             "address": item.address,
             "latitude": item.latitude,
             "longitude": item.longitude,
             "budget_tier": item.budget_tier,
             "avg_duration_hours": item.avg_duration_hours,
             "best_time_of_day": item.best_time_of_day,
+            "picking_reasons": item.picking_reasons,
+            "notes": item.notes,
+            "tags": [tag.name for tag in item.tags.all()],
+            "images": [image.image_url for image in item.images.all()],
             "entrance_fee_required": item.entrance_fee_required,
             "approx_entrance_fee": item.approx_entrance_fee,
         }
@@ -246,9 +667,10 @@ def _serialize_selected_activities(selected_ids):
             "difficulty_level": item.difficulty_level,
             "budget_tier": item.budget_tier,
             "approx_cost": str(item.approx_cost) if item.approx_cost is not None else None,
-            "cost_unit": item.cost_unit,
             "duration_hours": item.duration_hours,
             "best_season": item.best_season,
+            "picking_reasons": item.picking_reasons,
+            "notes": item.notes,
             "booking_required": item.booking_required,
         }
         for item_id in selected_ids
@@ -265,12 +687,13 @@ def _serialize_selected_cuisines(selected_ids):
             "name": item.name,
             "type": item.cuisine_type,
             "description": item.description,
-            "ingredients_note": item.ingredients_note,
             "spice_level": item.spice_level,
             "meal_type": item.meal_type,
             "is_vegetarian_friendly": item.is_vegetarian_friendly,
-            "is_must_try": item.is_must_try,
-            "approx_price_range": item.approx_price_range,
+            "is_featured": item.is_featured,
+            "approx_cost": item.approx_cost,
+            "picking_reasons": item.picking_reasons,
+            "notes": item.notes,
         }
         for item_id in selected_ids
         if (item := item_map.get(str(item_id)))
@@ -279,21 +702,24 @@ def _serialize_selected_cuisines(selected_ids):
 
 def update_trip_agent_context_from_qna(trip, agent_response, session, user):
     qna_response = agent_response.get("response") or {}
-    context = qna_response.get("context")
-    if not qna_response.get("is_qna_complete") or not context:
+    context = qna_response.get("context", None)
+    is_qna_complete = qna_response.get("is_qna_complete", False)
+    
+    if not is_qna_complete or not context:
         return False
 
-    agent_context = trip.agent_context or {}
+    agent_context = trip.metadata or {}
     agent_context["preference_qna"] = {
-        "context": context,
+        "context": str(context).strip(),
         "session_id": str(session.id),
         "external_session_id": session.external_session_id,
-        "total_questions": session.qna_count,
     }
-    trip.agent_context = agent_context
-    trip.current_step = max(trip.current_step, 3)
+
+    trip.metadata = agent_context
+    trip.current_step = PlanningStep.RECOMMENDATION
     trip.updated_by = user
-    trip.save(update_fields=["agent_context", "current_step", "updated_by", "updated_at"])
+    trip.is_qna_complete = is_qna_complete
+    trip.save(update_fields=["metadata", "current_step", "is_qna_complete", "updated_by", "updated_at"])
 
     session.is_active = False
     session.updated_by = user
@@ -306,9 +732,13 @@ def update_trip_agent_context_from_recommendations(trip, agent_response, session
     messages = recommendations.get("messages") if isinstance(recommendations.get("messages"), dict) else {}
     normalized_recommendations = {
         "is_discovery_complete": recommendations.get("is_discovery_complete", False),
-        "attraction_ids": recommendations.get("attraction_ids") or recommendations.get("tour_spot_ids", []),
-        "activity_ids": recommendations.get("activity_ids", []),
-        "cuisine_ids": recommendations.get("cuisine_ids") or recommendations.get("food_item_ids", []),
+        "attraction_ids": _valid_uuid_strings(
+            recommendations.get("attraction_ids") or recommendations.get("tour_spot_ids", [])
+        ),
+        "activity_ids": _valid_uuid_strings(recommendations.get("activity_ids", [])),
+        "cuisine_ids": _valid_uuid_strings(
+            recommendations.get("cuisine_ids") or recommendations.get("food_item_ids", [])
+        ),
         "messages": {
             "attractions": messages.get("attractions") or messages.get("tour_spots") or "",
             "activities": messages.get("activities") or "",
@@ -323,7 +753,7 @@ def update_trip_agent_context_from_recommendations(trip, agent_response, session
         trip.save(update_fields=["updated_by", "updated_at"])
         return normalized_recommendations
 
-    agent_context = trip.agent_context or {}
+    agent_context = trip.metadata or {}
     agent_context["recommendations"] = normalized_recommendations
 
     with transaction.atomic():
@@ -333,10 +763,9 @@ def update_trip_agent_context_from_recommendations(trip, agent_response, session
                 "attraction_recommendation_message": normalized_recommendations["messages"]["attractions"],
                 "cusine_recommendation_message": normalized_recommendations["messages"]["cuisines"],
                 "activity_recommendation_message": normalized_recommendations["messages"]["activities"],
-                "session_id": str(session.id),
-                "is_finalized": True,
+                "external_session_id": session.external_session_id,
                 "metadata": {
-                    "external_session_id": session.external_session_id,
+                    "session_id": str(session.id),
                 },
             },
         )
@@ -379,13 +808,13 @@ def update_trip_agent_context_from_recommendations(trip, agent_response, session
             ]
         )
 
-        trip.agent_context = agent_context
-        trip.current_step = max(trip.current_step, 4)
+        trip.metadata = agent_context
+        trip.current_step = PlanningStep.ITINERARY
         trip.is_recommendation_complete = True
         trip.updated_by = user
         trip.save(
             update_fields=[
-                "agent_context",
+                "metadata",
                 "current_step",
                 "is_recommendation_complete",
                 "updated_by",
@@ -425,10 +854,9 @@ def update_trip_agent_context_from_itinerary(trip, agent_response, session, user
                 "title": normalized_itinerary["title"],
                 "summary": normalized_itinerary["summary"],
                 "message": normalized_itinerary["message"],
-                "session_id": str(session.id),
-                "is_finalized": True,
+                "external_session_id": session.external_session_id,
                 "metadata": {
-                    "external_session_id": session.external_session_id,
+                    "session_id": str(session.id),
                 },
             },
         )
@@ -505,15 +933,15 @@ def update_trip_agent_context_from_itinerary(trip, agent_response, session, user
             },
         )
 
-        agent_context = trip.agent_context or {}
+        agent_context = trip.metadata or {}
         agent_context["itinerary_design"] = normalized_itinerary
-        trip.agent_context = agent_context
-        trip.current_step = max(trip.current_step, 5)
+        trip.metadata = agent_context
+        trip.current_step = PlanningStep.PREPARATION
         trip.is_itinerary_design_complete = True
         trip.updated_by = user
         trip.save(
             update_fields=[
-                "agent_context",
+                "metadata",
                 "current_step",
                 "is_itinerary_design_complete",
                 "updated_by",
@@ -646,10 +1074,9 @@ def update_trip_agent_context_from_preparation(trip, agent_response, session, us
                 "title": normalized_preparation["title"],
                 "summary": normalized_preparation["summary"],
                 "message": normalized_preparation["message"],
-                "is_finalized": True,
-                "session_id": str(session.id),
+                "external_session_id": session.external_session_id,
                 "metadata": {
-                    "external_session_id": session.external_session_id,
+                    "session_id": str(session.id),
                 },
             },
         )
@@ -665,13 +1092,13 @@ def update_trip_agent_context_from_preparation(trip, agent_response, session, us
                     item=item.get("item", ""),
                     category=_choice_or_default(
                         item.get("category"),
-                        TripPreparationPackingItem.CATEGORY_CHOICES,
-                        TripPreparationPackingItem.OTHER,
+                        PackingItemsType.choices,
+                        PackingItemsType.OTHER,
                     ),
                     priority=_choice_or_default(
                         item.get("priority"),
-                        TripPreparationPackingItem.PRIORITY_CHOICES,
-                        TripPreparationPackingItem.RECOMMENDED,
+                        PriorityType.choices,
+                        PriorityType.RECOMMENDED,
                     ),
                     additional_notes=item.get("reason") or "",
                     sort_order=index,
@@ -688,8 +1115,8 @@ def update_trip_agent_context_from_preparation(trip, agent_response, session, us
                     document_name=item.get("document", ""),
                     required_level=_choice_or_default(
                         item.get("required_level"),
-                        TripRequiredDocumentItem.REQUIRED_LEVEL_CHOICES,
-                        TripRequiredDocumentItem.RECOMMENDED,
+                        RequiredType.choices,
+                        RequiredType.RECOMMENDED,
                     ),
                     additional_note=item.get("reason") or "",
                     sort_order=index,
@@ -706,13 +1133,13 @@ def update_trip_agent_context_from_preparation(trip, agent_response, session, us
                     title=item.get("title", ""),
                     category=_choice_or_default(
                         item.get("category"),
-                        TripHeadsUpInfoItem.CATEGORY_CHOICES,
-                        TripHeadsUpInfoItem.OTHER,
+                        HeadsUpType.choices,
+                        HeadsUpType.OTHER,
                     ),
                     severity=_choice_or_default(
                         item.get("severity"),
-                        TripHeadsUpInfoItem.SEVERITY_CHOICES,
-                        TripHeadsUpInfoItem.LOW,
+                        SeverityType.choices,
+                        SeverityType.LOW,
                     ),
                     additional_note=item.get("details") or "",
                     sort_order=index,
@@ -722,15 +1149,15 @@ def update_trip_agent_context_from_preparation(trip, agent_response, session, us
             ]
         )
 
-        agent_context = trip.agent_context or {}
+        agent_context = trip.metadata or {}
         agent_context["trip_preparation"] = normalized_preparation
-        trip.agent_context = agent_context
-        trip.current_step = max(trip.current_step, 6)
+        trip.metadata = agent_context
+        trip.current_step = PlanningStep.OVERVIEW
         trip.is_trip_preparation_complete = True
         trip.updated_by = user
         trip.save(
             update_fields=[
-                "agent_context",
+                "metadata",
                 "current_step",
                 "is_trip_preparation_complete",
                 "updated_by",

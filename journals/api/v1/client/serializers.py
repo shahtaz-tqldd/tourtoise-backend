@@ -1,6 +1,7 @@
 from django.db import transaction
 from rest_framework import serializers
 
+from accounts.services.user_profile import increment_user_journal_count
 from app.utils.cloudinary import upload_image
 from journals.models import Journal, JournalComment, JournalImage, JournalTag
 
@@ -25,7 +26,9 @@ class JournalListSerializer(serializers.ModelSerializer):
     images = JournalImageSerializer(many=True, read_only=True)
     comments_count = serializers.IntegerField(read_only=True)
     saves_count = serializers.IntegerField(read_only=True)
+    reactions_count = serializers.IntegerField(read_only=True)
     is_saved = serializers.BooleanField(read_only=True)
+    is_reacted = serializers.BooleanField(read_only=True)
 
     class Meta:
         model = Journal
@@ -38,7 +41,9 @@ class JournalListSerializer(serializers.ModelSerializer):
             "images",
             "comments_count",
             "saves_count",
+            "reactions_count",
             "is_saved",
+            "is_reacted",
             "created_at",
             "updated_at",
         )
@@ -112,6 +117,7 @@ class JournalWriteSerializer(serializers.ModelSerializer):
         )
         self._set_tags(journal, tags)
         self._add_images(journal, image_urls, image_files)
+        increment_user_journal_count(request.user)
         return journal
 
     @transaction.atomic
@@ -216,3 +222,14 @@ class JournalCommentWriteSerializer(serializers.Serializer):
             updated_by=request.user,
             **validated_data,
         )
+
+    def update(self, instance, validated_data):
+        request = self.context["request"]
+        image_file = validated_data.pop("image", None)
+        if image_file:
+            validated_data["image_url"] = upload_image(image_file, folder="journal-comments")["url"]
+        for field, value in validated_data.items():
+            setattr(instance, field, value)
+        instance.updated_by = request.user
+        instance.save()
+        return instance

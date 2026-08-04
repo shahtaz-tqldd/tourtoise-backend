@@ -117,7 +117,7 @@ class ChatSessionMessageListAPIView(ChatPaginationMixin, ChatQuerysetMixin, Gene
             queryset = queryset.filter(content__icontains=search)
 
         return self.paginate_with_meta(
-            queryset.order_by("sequence", "created_at"),
+            queryset.order_by("created_at"),
             ChatMessageSerializer,
             "Chat messages fetched successfully.",
         )
@@ -150,7 +150,6 @@ class ChatQuestionAPIView(GenericAPIView):
         user_message = ChatMessage.objects.create(
             session=session,
             sender=ChatMessageSender.USER,
-            sequence=ChatMessage.next_sequence_for_session(session),
             content=message,
             created_by=request.user,
             updated_by=request.user,
@@ -158,9 +157,8 @@ class ChatQuestionAPIView(GenericAPIView):
         agent_message = ChatMessage.objects.create(
             session=session,
             sender=ChatMessageSender.AGENT,
-            sequence=user_message.sequence + 1,
             content=FALLBACK_AGENT_ANSWER,
-            payload={"fallback": True},
+            metadata={"fallback": True},
             created_by=request.user,
             updated_by=request.user,
         )

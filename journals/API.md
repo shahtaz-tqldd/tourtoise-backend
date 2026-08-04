@@ -45,13 +45,15 @@ All list endpoints support:
   ],
   "comments_count": 3,
   "saves_count": 5,
+  "reactions_count": 8,
   "is_saved": true,
+  "is_reacted": true,
   "created_at": "2026-06-21T10:00:00Z",
   "updated_at": "2026-06-21T10:00:00Z"
 }
 ```
 
-`is_saved` is always `false` for anonymous requests. Private journals are only visible to their author.
+`is_saved` and `is_reacted` are always `false` for anonymous requests. Private journals are only visible to their author.
 
 ### Comment or reply
 
@@ -243,7 +245,7 @@ Authentication: required; journal author only. No body.
 }
 ```
 
-Deleting a journal also deletes its image records, comments, replies, and saves.
+Deleting a journal also deletes its image records, comments, replies, saves, and reactions.
 
 ## Save endpoints
 
@@ -283,6 +285,52 @@ Authentication: required. No body. The operation is idempotent.
   "data": {
     "journal_id": "a6d0b466-d74d-4aa2-831e-cc6f434d750b",
     "saved": false
+  }
+}
+```
+
+## Reaction endpoints
+
+Journal reactions are simple heart reactions. Each authenticated user can react once to an accessible journal.
+
+### React to journal
+
+```http
+POST /api/v1/journals/{journal_id}/react/
+```
+
+Authentication: required. No body. The operation is idempotent.
+
+```json
+{
+  "status": 200,
+  "success": true,
+  "message": "Journal reacted successfully.",
+  "data": {
+    "journal_id": "a6d0b466-d74d-4aa2-831e-cc6f434d750b",
+    "reacted": true,
+    "reactions_count": 8
+  }
+}
+```
+
+### Remove journal reaction
+
+```http
+DELETE /api/v1/journals/{journal_id}/react/
+```
+
+Authentication: required. No body. The operation is idempotent.
+
+```json
+{
+  "status": 200,
+  "success": true,
+  "message": "Journal reaction removed successfully.",
+  "data": {
+    "journal_id": "a6d0b466-d74d-4aa2-831e-cc6f434d750b",
+    "reacted": false,
+    "reactions_count": 7
   }
 }
 ```
@@ -343,6 +391,24 @@ POST /api/v1/journals/{journal_id}/comments/{comment_id}/replies/
 Authentication: required. Body fields and validation are identical to Create journal comment. Replies cannot contain nested replies.
 
 Response: `201 Created` with a Comment object whose `parent` is the root comment UUID, and message `Reply created successfully.`
+
+### Update comment or reply
+
+```http
+PATCH /api/v1/journals/comments/{comment_id}/update/
+PUT /api/v1/journals/comments/{comment_id}/update/
+```
+
+Authentication: required; comment/reply author only. Body fields and validation are identical to Create journal comment. Use `PATCH` for normal edits; `PUT` is also accepted with the same validation.
+
+```json
+{
+  "text": "Updated comment text",
+  "image_url": "https://example.com/updated-comment.jpg"
+}
+```
+
+Response: `200 OK` with a Comment object and message `Comment updated successfully.`
 
 ### Delete comment or reply
 

@@ -6,6 +6,8 @@ from rest_framework.generics import GenericAPIView
 from rest_framework.permissions import IsAuthenticated
 
 from app.utils.response import APIResponse
+from accounts.choices import CreditTransactionType
+from accounts.services.credit import CreditService, InsufficientCreditsError
 from trips.api.v1.client.serializers import (
     TripChatCreateMessageSerializer,
     TripChatMessageSerializer,
@@ -61,6 +63,19 @@ class TripChatMessageListAPIView(TripChatSessionMixin, GenericAPIView):
         trip = self.get_trip()
         if not is_trip_plan_ready(trip):
             return self.plan_not_ready_response()
+
+        try:
+            CreditService.ensure_credits(
+                user=request.user,
+                amount=CreditService.TRIP_CHAT_COST,
+            )
+        except InsufficientCreditsError as exc:
+            return APIResponse.error(
+                errors={"credit": [str(exc)]},
+                message="Insufficient credits.",
+                status=status.HTTP_402_PAYMENT_REQUIRED,
+            )
+
         session = self.get_session(trip)
         if session is None:
             raise Http404
@@ -119,18 +134,35 @@ class TripChatCreateMessageAPIView(TripChatSessionMixin, GenericAPIView):
         if session is None:
             raise Http404
 
-        user_message = create_conversation_message(
-            session=session,
-            sender=AgentMessageSender.USER,
-            content=serializer.validated_data["message"],
-            user=request.user,
-            read_at=timezone.now(),
-        )
+        try:
+            with CreditService.charge_agent_generation(
+                user=request.user,
+                amount=CreditService.TRIP_CHAT_COST,
+                transaction_type=CreditTransactionType.TRIP_CHAT,
+                description="Trip chat agent response",
+                metadata={
+                    "endpoint": "TripChatCreateMessageAPIView",
+                    "trip_id": str(trip.id),
+                },
+            ):
+                user_message = create_conversation_message(
+                    session=session,
+                    sender=AgentMessageSender.USER,
+                    content=serializer.validated_data["message"],
+                    user=request.user,
+                    read_at=timezone.now(),
+                )
 
-        agent_result = run_guide_agent_for_session(
-            session=session,
-            user_query=serializer.validated_data["message"],
-        )
+                agent_result = run_guide_agent_for_session(
+                    session=session,
+                    user_query=serializer.validated_data["message"],
+                )
+        except InsufficientCreditsError as exc:
+            return APIResponse.error(
+                errors={"credit": [str(exc)]},
+                message="Insufficient credits.",
+                status=status.HTTP_402_PAYMENT_REQUIRED,
+            )
         agent_message = create_conversation_message(
             session=session,
             sender=AgentMessageSender.AGENT,

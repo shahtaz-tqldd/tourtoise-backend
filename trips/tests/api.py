@@ -698,6 +698,8 @@ class TripAgentActiveApiTests(TestCase):
         session = TripAgentConversationSession.objects.get(trip=self.trip)
         self.assertEqual(session.qna_count, 1)
         self.assertEqual(TripAgentMessage.objects.filter(session=session).count(), 2)
+        self.user.credit.refresh_from_db()
+        self.assertEqual(self.user.credit.balance, 99)
 
     def test_manual_preferences_keep_agent_active_and_update_user_profile(self):
         with patch("trips.api.v1.client.views.run_plan_agent_for_session") as run_agent:
@@ -757,6 +759,8 @@ class TripAgentActiveApiTests(TestCase):
         session = TripAgentConversationSession.objects.get(trip=self.trip)
         self.assertEqual(session.qna_count, 1)
         self.assertEqual(TripAgentMessage.objects.filter(session=session).count(), 2)
+        self.user.credit.refresh_from_db()
+        self.assertEqual(self.user.credit.balance, 99)
 
         profile = self.user.profile
         profile.refresh_from_db()
@@ -839,10 +843,28 @@ class TripChatApiTests(TestCase):
         self.assertEqual(session.user, self.user)
         self.assertEqual(TripConversationMessage.objects.filter(session=session).count(), 2)
         self.assertFalse(TripAgentConversationSession.objects.filter(trip=self.trip).exists())
+        self.user.credit.refresh_from_db()
+        self.assertEqual(self.user.credit.balance, 99)
         run_guide_agent.assert_called_once_with(
             session=session,
             user_query="What is my first stop?",
         )
+
+    @patch("trips.api.v1.client.views.trip_chat.run_guide_agent_for_session")
+    def test_trip_chat_rejects_message_without_credit(self, run_guide_agent):
+        self.user.credit.balance = 0
+        self.user.credit.save(update_fields=["balance"])
+
+        response = self.client.post(
+            f"{self.url}create-message/",
+            {"message": "What is my first stop?"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_402_PAYMENT_REQUIRED)
+        self.assertEqual(response.data["message"], "Insufficient credits.")
+        self.assertFalse(TripConversationMessage.objects.filter(session__trip=self.trip).exists())
+        run_guide_agent.assert_not_called()
 
     def test_lists_trip_chat_messages_for_session(self):
         session = TripConversationSession.objects.create(
@@ -1032,6 +1054,8 @@ class TripAgentCreateMessageApiTests(TestCase):
         session.refresh_from_db()
         self.assertFalse(session.is_active)
         self.assertEqual(TripAgentMessage.objects.filter(session=session).count(), 2)
+        self.user.credit.refresh_from_db()
+        self.assertEqual(self.user.credit.balance, 99)
 
     def test_rejects_trip_from_another_user(self):
         other_trip = Trip.objects.create(

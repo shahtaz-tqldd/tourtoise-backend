@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 
-from accounts.models import User, UserProfile
+from accounts.models import User, UserProfile, UserCredit
 
 
 @admin.register(User)
@@ -61,3 +61,11 @@ class UserProfileAdmin(admin.ModelAdmin):
         "total_trip_count",
         "total_journal_count",
     )
+
+
+@admin.register(UserCredit)
+class UserCreditAdmin(admin.ModelAdmin):
+    list_display = ("user", "balance", "created_at")
+
+
+

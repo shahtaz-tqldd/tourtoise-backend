@@ -1,14 +1,13 @@
 import uuid
-
 from django.apps import apps
 from django.contrib.auth.base_user import BaseUserManager
 from django.contrib.auth.models import AbstractBaseUser, PermissionsMixin
 from django.core.validators import RegexValidator
-from django.db import models
+from django.db import models, transaction
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
-from accounts.choices import AccountProvider, AccountStatus
+from accounts.choices import AccountProvider, AccountStatus, CreditTransactionType
 from app.base.validators import validate_timezone_name
 
 
@@ -20,6 +19,7 @@ phone_regex = RegexValidator(
 class UserManager(BaseUserManager):
     use_in_migrations = True
 
+    @transaction.atomic
     def _create_user(self, email, password, **extra_fields):
         if not email:
             raise ValueError("The email field is required.")
@@ -29,6 +29,17 @@ class UserManager(BaseUserManager):
         user.set_password(password)
         user.save(using=self._db)
         apps.get_model("accounts", "UserProfile").objects.get_or_create(user=user)
+        credit_account, created = apps.get_model("accounts", "UserCredit").objects.get_or_create(
+            user=user,
+            defaults={"balance": 100},
+        )
+        if created:
+            apps.get_model("accounts", "CreditTransaction").objects.create(
+                account=credit_account,
+                transaction_type=CreditTransactionType.INITIAL_GRANT,
+                amount=100,
+                description="Initial credit grant",
+            )
         return user
 
     def create_user(self, email, password=None, **extra_fields):
@@ -161,3 +172,48 @@ class UserProfile(models.Model):
     @property
     def location(self):
         return ", ".join(filter(None, [self.city, self.country_of_residence]))
+
+
+class UserCredit(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="credit")
+    balance = models.PositiveIntegerField(default=0)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = _("User credit")
+        verbose_name_plural = _("User credits")
+
+    def __str__(self):
+        return f"{self.user.email} - {self.balance} credits"
+
+
+class CreditTransaction(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    account = models.ForeignKey(UserCredit, on_delete=models.CASCADE, related_name="transactions")
+    transaction_type = models.CharField(
+        max_length=30,
+        choices=CreditTransactionType.choices,
+    )
+
+    # Positive means credit added; zero can mark a capped monthly refill.
+    # Negative means credit spent.
+    amount = models.IntegerField()
+
+    description = models.TextField(blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["account", "-created_at"]),
+            models.Index(fields=["transaction_type", "-created_at"]),
+        ]
+
+    def __str__(self):
+        return f"{self.account.user.email} - {self.transaction_type} {self.amount}"

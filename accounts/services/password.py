@@ -29,8 +29,8 @@ def send_user_password_reset_email(user):
         "reset_link": reset_link,
     }
     subject = "Reset your Tourtoise password"
-    message = render_to_string("accounts/emails/password_reset.txt", context)
-    html_message = render_to_string("accounts/emails/password_reset.html", context)
+    message = render_to_string("emails/password_reset.txt", context)
+    html_message = render_to_string("emails/password_reset.html", context)
 
     try:
         send_password_reset_email.delay(

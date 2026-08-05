@@ -1,5 +1,7 @@
 from datetime import timedelta
 
+from celery.schedules import crontab
+
 from app.settings.env import BASE_DIR, PROJECT_DIR, env, env_bool, env_float, env_int, env_list
 
 APP_ENV = env("APP_ENV", "dev")
@@ -83,6 +85,10 @@ CELERY_TIMEZONE = env("CELERY_TIMEZONE", "UTC")
 CELERY_RESULT_EXTENDED = True
 CELERY_IMPORTS = ("accounts.tasks", "destinations.tasks", "trips.tasks")
 CELERY_BEAT_SCHEDULE = {
+    "add-monthly-user-credits": {
+        "task": "accounts.tasks.add_monthly_credits",
+        "schedule": crontab(minute=0, hour=0, day_of_month=1),
+    },
     "permanently-delete-expired-accounts-daily": {
         "task": "accounts.tasks.permanently_delete_expired_accounts",
         "schedule": 60 * 60 * 24,

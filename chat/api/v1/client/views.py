@@ -1,3 +1,4 @@
+from asgiref.sync import async_to_sync
 from django.db import transaction
 from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404
@@ -9,17 +10,12 @@ from app.base.pagination import CustomPagination
 from app.utils.response import APIResponse
 from chat.choices import ChatMessageSender
 from chat.models import ChatMessage, ChatSession
+from chat.agents.discovery_agent import DiscoveryAgentClient
 from chat.api.v1.client.serializers import (
     ChatMessageSerializer,
     ChatQuestionSerializer,
     ChatSessionCreateSerializer,
     ChatSessionSerializer,
-)
-
-
-FALLBACK_AGENT_ANSWER = (
-    "Thanks for your question. The chat agent is not connected yet, "
-    "so this is a fallback response for now."
 )
 
 
@@ -127,52 +123,85 @@ class ChatQuestionAPIView(GenericAPIView):
     permission_classes = [IsAuthenticated]
     serializer_class = ChatQuestionSerializer
 
-    @transaction.atomic
     def post(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         session_id = serializer.validated_data.get("session_id")
         message = serializer.validated_data["message"]
 
-        if session_id:
-            session = get_object_or_404(
-                ChatSession.objects.select_for_update().filter(user=request.user),
-                pk=session_id,
-            )
-        else:
-            session = ChatSession.objects.create(
-                user=request.user,
-                title=message[:180],
+        with transaction.atomic():
+            if session_id:
+                session = get_object_or_404(
+                    ChatSession.objects.select_for_update().filter(user=request.user),
+                    pk=session_id,
+                )
+            else:
+                session = ChatSession.objects.create(
+                    user=request.user,
+                    title=message[:180],
+                    created_by=request.user,
+                    updated_by=request.user,
+                )
+
+            user_message = ChatMessage.objects.create(
+                session=session,
+                sender=ChatMessageSender.USER,
+                content=message,
                 created_by=request.user,
                 updated_by=request.user,
             )
 
-        user_message = ChatMessage.objects.create(
-            session=session,
-            sender=ChatMessageSender.USER,
-            content=message,
-            created_by=request.user,
-            updated_by=request.user,
+        external_session_id = session.metadata.get("discovery_agent_session_id")
+        result = async_to_sync(
+            DiscoveryAgentClient(
+                request.user,
+                source_session_id=str(session.id),
+            ).run_agent
+        )(
+            user_query=message,
+            user_id=str(request.user.id),
+            session_id=external_session_id,
         )
-        agent_message = ChatMessage.objects.create(
-            session=session,
-            sender=ChatMessageSender.AGENT,
-            content=FALLBACK_AGENT_ANSWER,
-            metadata={"fallback": True},
-            created_by=request.user,
-            updated_by=request.user,
-        )
+        response = result["response"]
+        agent_metadata = {
+            **result["meta"],
+            "destinations": response.get("destinations", []),
+            "handoff": response.get("handoff"),
+        }
 
-        if not session.title:
-            session.title = message[:180]
-        session.updated_by = request.user
-        session.save(update_fields=["title", "updated_by", "updated_at"])
+        with transaction.atomic():
+            session = ChatSession.objects.select_for_update().get(
+                pk=session.pk,
+                user=request.user,
+            )
+            agent_message = ChatMessage.objects.create(
+                session=session,
+                sender=ChatMessageSender.AGENT,
+                content=response["message"],
+                metadata=agent_metadata,
+                created_by=request.user,
+                updated_by=request.user,
+            )
+
+            metadata = dict(session.metadata)
+            if result.get("session_id"):
+                metadata["discovery_agent_session_id"] = result["session_id"]
+            if response.get("handoff"):
+                metadata["trip_planning_handoff"] = response["handoff"]
+            session.metadata = metadata
+            if not session.title:
+                session.title = message[:180]
+            session.updated_by = request.user
+            session.save(
+                update_fields=["title", "metadata", "updated_by", "updated_at"]
+            )
 
         return APIResponse.success(
             data={
                 "session_id": str(session.id),
                 "user_message": ChatMessageSerializer(user_message).data,
                 "agent_message": ChatMessageSerializer(agent_message).data,
+                "handoff": response.get("handoff"),
             },
             message="Chat message created successfully.",
             status=status.HTTP_201_CREATED,

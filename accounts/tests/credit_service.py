@@ -105,6 +105,30 @@ class CreditServiceTests(TestCase):
         self.assertEqual(self.account.balance, 0)
         self.assertFalse(self.account.transactions.exists())
 
+    def test_premium_user_does_not_receive_monthly_credits(self):
+        self.user.status = AccountStatus.PREMIUM
+        self.user.save(update_fields=["status"])
+        self.account.balance = 50
+        self.account.save(update_fields=["balance"])
+
+        reward = CreditService.add_monthly_credits(
+            user=self.user,
+            as_of=datetime(2026, 8, 1, tzinfo=datetime_timezone.utc),
+        )
+        processed = CreditService.add_monthly_credits_to_all_users(
+            as_of=datetime(2026, 8, 1, tzinfo=datetime_timezone.utc),
+        )
+
+        self.account.refresh_from_db()
+        self.assertIsNone(reward)
+        self.assertEqual(processed, 0)
+        self.assertEqual(self.account.balance, 50)
+        self.assertFalse(
+            self.account.transactions.filter(
+                transaction_type=CreditTransactionType.MONTHLY_REWARD
+            ).exists()
+        )
+
     def test_monthly_credits_add_25_without_exceeding_100(self):
         for starting_balance, expected_amount in ((50, 25), (75, 25), (95, 5), (100, 0)):
             with self.subTest(starting_balance=starting_balance):

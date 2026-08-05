@@ -156,6 +156,9 @@ class CreditService:
         as_of: datetime | None = None,
     ) -> CreditTransaction | None:
         """Apply this month's refill once, adding up to 25 credits with a 100 cap."""
+        if user.status == AccountStatus.PREMIUM:
+            return None
+
         as_of = as_of or timezone.now()
         if timezone.is_naive(as_of):
             as_of = timezone.make_aware(as_of, timezone.get_current_timezone())
@@ -192,7 +195,7 @@ class CreditService:
         """Apply the monthly refill to every active account and return the processed count."""
         users = User.objects.filter(
             is_active=True,
-            status__in=[AccountStatus.ACTIVE, AccountStatus.PREMIUM],
+            status=AccountStatus.ACTIVE,
         ).only("id")
 
         processed_count = 0

@@ -9,9 +9,140 @@ from datetime import timedelta
 from accounts.choices import AccountProvider, AccountStatus
 from accounts.models import UserProfile
 from accounts.tasks import permanently_delete_expired_accounts
+from notification.models import Notification, NotificationRead, NotificationType
+from trips.choices import AgentMessageSender, TripStatus
+from trips.models import Trip, TripConversationMessage, TripConversationSession
 
 
 User = get_user_model()
+
+
+class UserProfileStatesApiTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            email="profile-states@example.com",
+            password="testpass123",
+        )
+        self.other_user = User.objects.create_user(
+            email="other-profile-states@example.com",
+            password="testpass123",
+        )
+        self.client.force_authenticate(user=self.user)
+        self.url = "/api/v1/accounts/profile-states/"
+
+    def test_profile_states_requires_authentication(self):
+        self.client.force_authenticate(user=None)
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_profile_states_returns_zero_counts_and_no_trip(self):
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            response.data["data"],
+            {
+                "unread_message": 0,
+                "unread_notification": 0,
+                "in_progress_trip": None,
+            },
+        )
+
+    def test_profile_states_returns_unread_counts_and_in_progress_trip(self):
+        today = timezone.localdate()
+        trip = Trip.objects.create(
+            user=self.user,
+            title="Current Adventure",
+            status=TripStatus.IN_PROGRESS,
+            start_date=today,
+            end_date=today + timedelta(days=4),
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        other_trip = Trip.objects.create(
+            user=self.other_user,
+            title="Someone Else's Trip",
+            status=TripStatus.IN_PROGRESS,
+            created_by=self.other_user,
+            updated_by=self.other_user,
+        )
+
+        unread_trip_notification = Notification.objects.create(
+            recipient=self.user,
+            trip=trip,
+            notification_type=NotificationType.TRIP,
+            title="Trip update",
+        )
+        read_notification = Notification.objects.create(
+            recipient=self.user,
+            notification_type=NotificationType.GENERAL,
+            title="Read update",
+        )
+        NotificationRead.objects.create(
+            notification=read_notification,
+            user=self.user,
+            created_by=self.user,
+        )
+        Notification.objects.create(
+            notification_type=NotificationType.GLOBAL,
+            title="Global update",
+        )
+        Notification.objects.create(
+            recipient=self.other_user,
+            trip=other_trip,
+            notification_type=NotificationType.TRIP,
+            title="Other user's update",
+        )
+
+        session = TripConversationSession.objects.create(
+            trip=trip,
+            user=self.user,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        TripConversationMessage.objects.create(
+            session=session,
+            sender=AgentMessageSender.AGENT,
+            content="Unread message",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        TripConversationMessage.objects.create(
+            session=session,
+            sender=AgentMessageSender.AGENT,
+            content="Read message",
+            read_at=timezone.now(),
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        TripConversationMessage.objects.create(
+            session=session,
+            sender=AgentMessageSender.USER,
+            content="User message",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["data"]["unread_message"], 1)
+        self.assertEqual(response.data["data"]["unread_notification"], 2)
+        self.assertEqual(
+            response.data["data"]["in_progress_trip"],
+            {
+                "name": "Current Adventure",
+                "start_date": today,
+                "end_date": today + timedelta(days=4),
+                "trip_id": str(trip.id),
+                "unread_notification": 1,
+                "unread_message": 1,
+            },
+        )
+        self.assertEqual(unread_trip_notification.trip_id, trip.id)
 
 
 class RegisterApiTests(TestCase):

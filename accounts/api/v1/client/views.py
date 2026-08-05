@@ -1,4 +1,6 @@
 from django.contrib.auth import get_user_model
+from django.db.models import Count, IntegerField, OuterRef, Q, Subquery, Value
+from django.db.models.functions import Coalesce
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework import serializers as drf_serializers
@@ -9,6 +11,7 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.views import TokenRefreshView
 
 from app.utils.response import APIResponse
+from notification.models import Notification, NotificationType
 from accounts.api.v1.client.serializers import (
     ChangePasswordSerializer,
     GoogleLoginSerializer,
@@ -20,6 +23,8 @@ from accounts.api.v1.client.serializers import (
     UserSerializer,
     UserUpdateSerializer,
 )
+from trips.choices import AgentMessageSender, TripStatus
+from trips.models import Trip, TripConversationMessage
 
 User = get_user_model()
 
@@ -160,6 +165,81 @@ class UserDetailsView(APIView):
 
     def get(self, request, *args, **kwargs):
         return APIResponse.success(data=UserSerializer(request.user).data)
+
+
+class UserProfileStatesView(APIView):
+    """Return the authenticated user's unread counts and active trip summary."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, *args, **kwargs):
+        unread_notifications = Notification.objects.filter(
+            Q(recipient=request.user)
+            | Q(notification_type=NotificationType.GLOBAL, recipient__isnull=True)
+        ).exclude(read_receipts__user=request.user)
+        unread_messages = TripConversationMessage.objects.filter(
+            session__user=request.user,
+            sender=AgentMessageSender.AGENT,
+            read_at__isnull=True,
+        )
+
+        trip_unread_notifications = (
+            Notification.objects.filter(
+                trip_id=OuterRef("pk"),
+                recipient=request.user,
+                notification_type=NotificationType.TRIP,
+            )
+            .exclude(read_receipts__user=request.user)
+            .values("trip_id")
+            .annotate(total=Count("pk"))
+            .values("total")[:1]
+        )
+        trip_unread_messages = (
+            TripConversationMessage.objects.filter(
+                session__trip_id=OuterRef("pk"),
+                session__user=request.user,
+                sender=AgentMessageSender.AGENT,
+                read_at__isnull=True,
+            )
+            .values("session__trip_id")
+            .annotate(total=Count("pk"))
+            .values("total")[:1]
+        )
+        in_progress_trip = (
+            Trip.objects.filter(user=request.user, status=TripStatus.IN_PROGRESS)
+            .annotate(
+                unread_notification=Coalesce(
+                    Subquery(trip_unread_notifications, output_field=IntegerField()),
+                    Value(0),
+                ),
+                unread_message=Coalesce(
+                    Subquery(trip_unread_messages, output_field=IntegerField()),
+                    Value(0),
+                ),
+            )
+            .order_by("-updated_at")
+            .first()
+        )
+
+        trip_data = None
+        if in_progress_trip:
+            trip_data = {
+                "name": in_progress_trip.title,
+                "start_date": in_progress_trip.start_date,
+                "end_date": in_progress_trip.end_date,
+                "trip_id": str(in_progress_trip.id),
+                "unread_notification": in_progress_trip.unread_notification,
+                "unread_message": in_progress_trip.unread_message,
+            }
+
+        return APIResponse.success(
+            data={
+                "unread_message": unread_messages.count(),
+                "unread_notification": unread_notifications.count(),
+                "in_progress_trip": trip_data,
+            },
+            message="User profile states fetched successfully.",
+        )
 
 
 class PublicUserDetailsView(GenericAPIView):

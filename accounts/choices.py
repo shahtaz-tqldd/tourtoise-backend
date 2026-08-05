@@ -22,3 +22,13 @@ class TravelStyle(models.TextChoices):
     SOLO = "SOLO", _("Solo")
     WELLNESS = "WELLNESS", _("Wellness")
     BUSINESS = "BUSINESS", _("Business")
+
+
+class CreditTransactionType(models.TextChoices):
+    INITIAL_GRANT = "initial_grant", "Initial grant"
+    MONTHLY_REWARD = "monthly_reward", "Monthly reward"
+    TRIP_PLAN = "trip_plan", "Trip plan"
+    TRIP_CHAT = "trip_chat", "Trip chat"
+    AGENT_CHAT = "agent_chat", "Agent chat"
+    REFUND = "refund", "Refund"
+    ADMIN_ADJUSTMENT = "admin_adjustment", "Admin adjustment"

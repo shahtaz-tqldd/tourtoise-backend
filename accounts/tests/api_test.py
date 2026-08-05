@@ -174,6 +174,22 @@ class RegisterApiTests(TestCase):
         self.assertEqual(second_response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(User.objects.count(), 2)
         self.assertEqual(UserProfile.objects.filter(username__isnull=True).count(), 2)
+        self.assertEqual(first_response.data["data"]["credit"], 100)
+        self.assertEqual(second_response.data["data"]["credit"], 100)
+
+    def test_user_details_returns_credit_balance(self):
+        user = User.objects.create_user(
+            email="details-credit@example.com",
+            password="testpass123",
+        )
+        user.credit.balance = 65
+        user.credit.save(update_fields=["balance"])
+        self.client.force_authenticate(user=user)
+
+        response = self.client.get("/api/v1/accounts/self-details/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["data"]["credit"], 65)
 
     def test_register_returns_validation_error_for_duplicate_username(self):
         existing_user = User.objects.create_user(email="existing@example.com", password="testpass123")

@@ -114,3 +114,19 @@ class ChatQuestionAPIViewTests(TestCase):
         self.assertEqual(
             agent_message.metadata["query_intention"], "destination_recommendation"
         )
+        self.user.credit.refresh_from_db()
+        self.assertEqual(self.user.credit.balance, 98)
+
+    @patch("chat.api.v1.client.views.DiscoveryAgentClient")
+    def test_rejects_question_without_enough_credits(self, client_class):
+        self.user.credit.balance = 1
+        self.user.credit.save(update_fields=["balance"])
+        request = self.factory.post("/chat/ask/", {"message": "Food and culture"})
+        force_authenticate(request, user=self.user)
+
+        response = ChatQuestionAPIView.as_view()(request)
+
+        self.assertEqual(response.status_code, 402)
+        self.assertEqual(response.data["message"], "Insufficient credits.")
+        self.assertFalse(ChatSession.objects.filter(user=self.user).exists())
+        client_class.assert_not_called()

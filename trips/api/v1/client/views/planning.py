@@ -5,6 +5,8 @@ from rest_framework.generics import GenericAPIView
 from rest_framework.permissions import IsAuthenticated
 
 from app.utils.response import APIResponse
+from accounts.choices import CreditTransactionType
+from accounts.services.credit import CreditService, InsufficientCreditsError
 from destinations.api.v1.client.serializers import (
     ClientActivitySerializer,
     ClientAttractionSerializer,
@@ -62,6 +64,22 @@ def run_plan_agent_for_session(*args, **kwargs):
     return _run_plan_agent_for_session(*args, **kwargs)
 
 
+def insufficient_credits_response(exc):
+    return APIResponse.error(
+        errors={"credit": [str(exc)]},
+        message="Insufficient credits.",
+        status=status.HTTP_402_PAYMENT_REQUIRED,
+    )
+
+
+def preflight_agent_credits(user, amount):
+    try:
+        CreditService.ensure_credits(user=user, amount=amount)
+    except InsufficientCreditsError as exc:
+        return insufficient_credits_response(exc)
+    return None
+
+
 class TripAgentInitAPIView(UserTripQuerysetMixin, GenericAPIView):
     """
     Activate/update trip planning agent preferences for the current trip step.
@@ -79,32 +97,49 @@ class TripAgentInitAPIView(UserTripQuerysetMixin, GenericAPIView):
             pk=serializer.validated_data["trip_id"],
         )
 
+        credit_error = preflight_agent_credits(
+            request.user,
+            CreditService.PREFERENCE_QUESTION_COST,
+        )
+        if credit_error:
+            return credit_error
+
         normalized_payload = serializer.normalized_preferences()
 
         trip_snapshot = build_trip_snapshot(trip)
 
-        session = get_or_create_planning_step_session(
-            trip,
-            request.user,
-            step=PlanningStep.PREFERENCE,
-        )
+        try:
+            with CreditService.charge_agent_generation(
+                user=request.user,
+                amount=CreditService.PREFERENCE_QUESTION_COST,
+                transaction_type=CreditTransactionType.TRIP_PLAN,
+                description="Trip preference question generation",
+                metadata={"step": PlanningStep.PREFERENCE, "trip_id": str(trip.id)},
+            ):
+                session = get_or_create_planning_step_session(
+                    trip,
+                    request.user,
+                    step=PlanningStep.PREFERENCE,
+                )
 
-        create_agent_message(
-            session=session,
-            sender=AgentMessageSender.SYSTEM,
-            content="Trip planning",
-            metadata={
-                "trip_snapshot": trip_snapshot,
-            },
-            user=request.user,
-        )
+                create_agent_message(
+                    session=session,
+                    sender=AgentMessageSender.SYSTEM,
+                    content="Trip planning",
+                    metadata={
+                        "trip_snapshot": trip_snapshot,
+                    },
+                    user=request.user,
+                )
 
-        plan_agent_response = run_plan_agent_for_session(
-            session=session,
-            user_query=build_initial_agent_query(normalized_payload, trip_snapshot),
-            preferences=normalized_payload,
-            trip_snapshot=trip_snapshot,
-        )
+                plan_agent_response = run_plan_agent_for_session(
+                    session=session,
+                    user_query=build_initial_agent_query(normalized_payload, trip_snapshot),
+                    preferences=normalized_payload,
+                    trip_snapshot=trip_snapshot,
+                )
+        except InsufficientCreditsError as exc:
+            return insufficient_credits_response(exc)
         qna_response = plan_agent_response["response"]
         agent_message = qna_response.get("question") or qna_response.get("context") or ""
 
@@ -187,6 +222,13 @@ class TripAgentCreateMessageAPIView(UserTripQuerysetMixin, GenericAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        credit_error = preflight_agent_credits(
+            request.user,
+            CreditService.PREFERENCE_QUESTION_COST,
+        )
+        if credit_error:
+            return credit_error
+
         session_id = serializer.validated_data.get("session_id")
         if session_id:
             session = get_object_or_404(
@@ -205,18 +247,27 @@ class TripAgentCreateMessageAPIView(UserTripQuerysetMixin, GenericAPIView):
                 step=PlanningStep.PREFERENCE,
             )
 
-        create_agent_message(
-            session=session,
-            sender=AgentMessageSender.USER,
-            content=serializer.validated_data["message"],
-            user=request.user,
-        )
+        try:
+            with CreditService.charge_agent_generation(
+                user=request.user,
+                amount=CreditService.PREFERENCE_QUESTION_COST,
+                transaction_type=CreditTransactionType.TRIP_PLAN,
+                description="Trip preference question generation",
+                metadata={"step": PlanningStep.PREFERENCE, "trip_id": str(trip.id)},
+            ):
+                create_agent_message(
+                    session=session,
+                    sender=AgentMessageSender.USER,
+                    content=serializer.validated_data["message"],
+                    user=request.user,
+                )
 
-        
-        plan_agent_response = run_plan_agent_for_session(
-            session=session,
-            user_query=serializer.validated_data["message"]
-        )
+                plan_agent_response = run_plan_agent_for_session(
+                    session=session,
+                    user_query=serializer.validated_data["message"],
+                )
+        except InsufficientCreditsError as exc:
+            return insufficient_credits_response(exc)
         qna_response = plan_agent_response["response"]
         agent_message = qna_response.get("question", None) 
         system_message = qna_response.get("context", None)
@@ -305,6 +356,13 @@ class TripPlanningRecommendationsAPIView(UserTripQuerysetMixin, GenericAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        credit_error = preflight_agent_credits(
+            request.user,
+            CreditService.RECOMMENDATION_COST,
+        )
+        if credit_error:
+            return credit_error
+
         destination_id = str(trip_destination.destination_id)
         trip_snapshot = build_trip_snapshot(trip)
         preferences = {
@@ -312,26 +370,40 @@ class TripPlanningRecommendationsAPIView(UserTripQuerysetMixin, GenericAPIView):
             "preference_context": (trip.metadata or {}).get("preference_qna", {}).get("context"),
         }
 
-        session = get_or_create_planning_step_session(trip, request.user, current_step=3)
-        create_agent_message(
-            session=session,
-            sender=AgentMessageSender.USER,
-            content="Generate trip recommendations.",
-            metadata={
-                "destination_id": destination_id,
-                "preferences": preferences,
-                "trip_snapshot": trip_snapshot,
-            },
-            user=request.user,
-        )
+        try:
+            with CreditService.charge_agent_generation(
+                user=request.user,
+                amount=CreditService.RECOMMENDATION_COST,
+                transaction_type=CreditTransactionType.TRIP_PLAN,
+                description="Trip recommendation generation",
+                metadata={"step": PlanningStep.RECOMMENDATION, "trip_id": str(trip.id)},
+            ):
+                session = get_or_create_planning_step_session(trip, request.user, current_step=3)
+                create_agent_message(
+                    session=session,
+                    sender=AgentMessageSender.USER,
+                    content="Generate trip recommendations.",
+                    metadata={
+                        "destination_id": destination_id,
+                        "preferences": preferences,
+                        "trip_snapshot": trip_snapshot,
+                    },
+                    user=request.user,
+                )
 
-        plan_agent_response = run_plan_agent_for_session(
-            session=session,
-            user_query=build_recommendations_agent_query(preferences, trip_snapshot, destination_id),
-            preferences=preferences,
-            trip_snapshot=trip_snapshot,
-            destination_id=destination_id,
-        )
+                plan_agent_response = run_plan_agent_for_session(
+                    session=session,
+                    user_query=build_recommendations_agent_query(
+                        preferences,
+                        trip_snapshot,
+                        destination_id,
+                    ),
+                    preferences=preferences,
+                    trip_snapshot=trip_snapshot,
+                    destination_id=destination_id,
+                )
+        except InsufficientCreditsError as exc:
+            return insufficient_credits_response(exc)
         recommendations = update_trip_agent_context_from_recommendations(
             trip,
             plan_agent_response,
@@ -531,26 +603,43 @@ class TripPlanningItinerariesAPIView(UserTripQuerysetMixin, GenericAPIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        credit_error = preflight_agent_credits(
+            request.user,
+            CreditService.ITINERARY_COST,
+        )
+        if credit_error:
+            return credit_error
+
         trip_context = build_itinerary_planning_context(trip)
 
-        session = get_or_create_planning_step_session(trip, request.user, current_step=4)
-        create_agent_message(
-            session=session,
-            sender=AgentMessageSender.USER,
-            content="Generate trip itinerary.",
-            metadata={
-                "trip_context": trip_context,
-            },
-            user=request.user,
-        )
+        try:
+            with CreditService.charge_agent_generation(
+                user=request.user,
+                amount=CreditService.ITINERARY_COST,
+                transaction_type=CreditTransactionType.TRIP_PLAN,
+                description="Trip itinerary generation",
+                metadata={"step": PlanningStep.ITINERARY, "trip_id": str(trip.id)},
+            ):
+                session = get_or_create_planning_step_session(trip, request.user, current_step=4)
+                create_agent_message(
+                    session=session,
+                    sender=AgentMessageSender.USER,
+                    content="Generate trip itinerary.",
+                    metadata={
+                        "trip_context": trip_context,
+                    },
+                    user=request.user,
+                )
 
-        plan_agent_response = run_plan_agent_for_session(
-            session=session,
-            user_query=build_itinerary_agent_query(trip_context),
-            preferences=trip.preferences or {},
-            trip_snapshot=trip_context,
-            trip_context=trip_context,
-        )
+                plan_agent_response = run_plan_agent_for_session(
+                    session=session,
+                    user_query=build_itinerary_agent_query(trip_context),
+                    preferences=trip.preferences or {},
+                    trip_snapshot=trip_context,
+                    trip_context=trip_context,
+                )
+        except InsufficientCreditsError as exc:
+            return insufficient_credits_response(exc)
         itinerary = update_trip_agent_context_from_itinerary(
             trip,
             plan_agent_response,
@@ -714,26 +803,43 @@ class TripPlanningPrepartionAPIView(UserTripQuerysetMixin, GenericAPIView):
                     message="Trip preparation fetched successfully.",
                 )
 
+        credit_error = preflight_agent_credits(
+            request.user,
+            CreditService.PREPARATION_COST,
+        )
+        if credit_error:
+            return credit_error
+
         trip_context = build_itinerary_planning_context(trip)
 
-        session = get_or_create_planning_step_session(trip, request.user, current_step=5)
-        create_agent_message(
-            session=session,
-            sender=AgentMessageSender.USER,
-            content="Generate trip preparation.",
-            metadata={
-                "trip_context": trip_context,
-            },
-            user=request.user,
-        )
+        try:
+            with CreditService.charge_agent_generation(
+                user=request.user,
+                amount=CreditService.PREPARATION_COST,
+                transaction_type=CreditTransactionType.TRIP_PLAN,
+                description="Trip preparation generation",
+                metadata={"step": PlanningStep.PREPARATION, "trip_id": str(trip.id)},
+            ):
+                session = get_or_create_planning_step_session(trip, request.user, current_step=5)
+                create_agent_message(
+                    session=session,
+                    sender=AgentMessageSender.USER,
+                    content="Generate trip preparation.",
+                    metadata={
+                        "trip_context": trip_context,
+                    },
+                    user=request.user,
+                )
 
-        plan_agent_response = run_plan_agent_for_session(
-            session=session,
-            user_query=build_preparation_agent_query(trip_context),
-            preferences=trip.preferences or {},
-            trip_snapshot=trip_context,
-            trip_context=trip_context,
-        )
+                plan_agent_response = run_plan_agent_for_session(
+                    session=session,
+                    user_query=build_preparation_agent_query(trip_context),
+                    preferences=trip.preferences or {},
+                    trip_snapshot=trip_context,
+                    trip_context=trip_context,
+                )
+        except InsufficientCreditsError as exc:
+            return insufficient_credits_response(exc)
         preparation = update_trip_agent_context_from_preparation(
             trip,
             plan_agent_response,

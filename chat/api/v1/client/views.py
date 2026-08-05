@@ -8,6 +8,8 @@ from rest_framework.permissions import IsAuthenticated
 
 from app.base.pagination import CustomPagination
 from app.utils.response import APIResponse
+from accounts.choices import CreditTransactionType
+from accounts.services.credit import CreditService, InsufficientCreditsError
 from chat.choices import ChatMessageSender
 from chat.models import ChatMessage, ChatSession
 from chat.agents.discovery_agent import DiscoveryAgentClient
@@ -129,39 +131,65 @@ class ChatQuestionAPIView(GenericAPIView):
         session_id = serializer.validated_data.get("session_id")
         message = serializer.validated_data["message"]
 
-        with transaction.atomic():
-            if session_id:
-                session = get_object_or_404(
-                    ChatSession.objects.select_for_update().filter(user=request.user),
-                    pk=session_id,
-                )
-            else:
-                session = ChatSession.objects.create(
-                    user=request.user,
-                    title=message[:180],
-                    created_by=request.user,
-                    updated_by=request.user,
-                )
-
-            user_message = ChatMessage.objects.create(
-                session=session,
-                sender=ChatMessageSender.USER,
-                content=message,
-                created_by=request.user,
-                updated_by=request.user,
+        try:
+            CreditService.ensure_credits(
+                user=request.user,
+                amount=CreditService.AGENT_CHAT_COST,
+            )
+        except InsufficientCreditsError as exc:
+            return APIResponse.error(
+                errors={"credit": [str(exc)]},
+                message="Insufficient credits.",
+                status=status.HTTP_402_PAYMENT_REQUIRED,
             )
 
-        external_session_id = session.metadata.get("discovery_agent_session_id")
-        result = async_to_sync(
-            DiscoveryAgentClient(
-                request.user,
-                source_session_id=str(session.id),
-            ).run_agent
-        )(
-            user_query=message,
-            user_id=str(request.user.id),
-            session_id=external_session_id,
-        )
+        try:
+            with CreditService.charge_agent_generation(
+                user=request.user,
+                amount=CreditService.AGENT_CHAT_COST,
+                transaction_type=CreditTransactionType.AGENT_CHAT,
+                description="Discovery chat agent response",
+                metadata={"endpoint": "ChatQuestionAPIView"},
+            ):
+                with transaction.atomic():
+                    if session_id:
+                        session = get_object_or_404(
+                            ChatSession.objects.select_for_update().filter(user=request.user),
+                            pk=session_id,
+                        )
+                    else:
+                        session = ChatSession.objects.create(
+                            user=request.user,
+                            title=message[:180],
+                            created_by=request.user,
+                            updated_by=request.user,
+                        )
+
+                    user_message = ChatMessage.objects.create(
+                        session=session,
+                        sender=ChatMessageSender.USER,
+                        content=message,
+                        created_by=request.user,
+                        updated_by=request.user,
+                    )
+
+                external_session_id = session.metadata.get("discovery_agent_session_id")
+                result = async_to_sync(
+                    DiscoveryAgentClient(
+                        request.user,
+                        source_session_id=str(session.id),
+                    ).run_agent
+                )(
+                    user_query=message,
+                    user_id=str(request.user.id),
+                    session_id=external_session_id,
+                )
+        except InsufficientCreditsError as exc:
+            return APIResponse.error(
+                errors={"credit": [str(exc)]},
+                message="Insufficient credits.",
+                status=status.HTTP_402_PAYMENT_REQUIRED,
+            )
         response = result["response"]
         agent_metadata = {
             **result["meta"],

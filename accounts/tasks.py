@@ -7,6 +7,7 @@ from django.utils import timezone
 from datetime import timedelta
 
 from accounts.choices import AccountStatus
+from accounts.services.credit import CreditService
 
 
 User = get_user_model()
@@ -37,3 +38,8 @@ def permanently_delete_expired_accounts():
     user_count = queryset.count()
     queryset.delete()
     return user_count
+
+
+@shared_task
+def add_monthly_credits():
+    return CreditService.add_monthly_credits_to_all_users()

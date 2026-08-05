@@ -49,6 +49,7 @@ def build_unique_username_from_email(email):
 
 
 class UserSerializer(serializers.ModelSerializer):
+    credit = serializers.IntegerField(source="credit.balance", read_only=True, default=0)
     username = serializers.CharField(source="profile.username", read_only=True)
     avatar_url = serializers.URLField(source="profile.avatar_url", read_only=True)
     bio = serializers.CharField(source="profile.bio", read_only=True)
@@ -92,6 +93,7 @@ class UserSerializer(serializers.ModelSerializer):
             "is_email_verified",
             "is_staff",
             "is_superuser",
+            "credit",
             "username",
             "avatar_url",
             "bio",

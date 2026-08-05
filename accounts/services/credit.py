@@ -27,14 +27,20 @@ class CreditService:
         if amount < 0:
             raise ValueError("Credit amount cannot be negative.")
 
+        if user.status == AccountStatus.PREMIUM:
+            return True
+
         account, _ = UserCredit.objects.get_or_create(user=user)
         return account.balance >= amount
 
     @staticmethod
-    def ensure_credits(*, user: User, amount: int) -> int:
+    def ensure_credits(*, user: User, amount: int) -> int | None:
         """Return the current balance or raise before a credit-backed operation starts."""
         if amount <= 0:
             raise ValueError("Credit amount must be greater than zero.")
+
+        if user.status == AccountStatus.PREMIUM:
+            return None
 
         account, _ = UserCredit.objects.get_or_create(user=user)
         if account.balance < amount:
@@ -78,9 +84,12 @@ class CreditService:
         transaction_type: str,
         description: str = "",
         metadata: dict | None = None,
-    ) -> CreditTransaction:
+    ) -> CreditTransaction | None:
         if amount <= 0:
             raise ValueError("Credit amount must be greater than zero.")
+
+        if user.status == AccountStatus.PREMIUM:
+            return None
 
         account, _ = UserCredit.objects.select_for_update().get_or_create(user=user)
         if account.balance < amount:
@@ -112,6 +121,10 @@ class CreditService:
         metadata: dict | None = None,
     ):
         """Charge an agent call and refund it when content generation raises an error."""
+        if user.status == AccountStatus.PREMIUM:
+            yield None
+            return
+
         credit_transaction = cls.spend_credits(
             user=user,
             amount=amount,

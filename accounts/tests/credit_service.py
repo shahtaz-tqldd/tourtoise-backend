@@ -2,7 +2,7 @@ from datetime import datetime, timezone as datetime_timezone
 
 from django.test import TestCase
 
-from accounts.choices import CreditTransactionType
+from accounts.choices import AccountStatus, CreditTransactionType
 from accounts.models import CreditTransaction, User
 from accounts.services.credit import CreditService, InsufficientCreditsError
 
@@ -78,6 +78,32 @@ class CreditServiceTests(TestCase):
                 (CreditTransactionType.AGENT_CHAT, -2),
             ],
         )
+
+    def test_premium_user_bypasses_credit_checks_and_spending(self):
+        self.user.status = AccountStatus.PREMIUM
+        self.user.save(update_fields=["status"])
+        self.account.balance = 0
+        self.account.save(update_fields=["balance"])
+
+        self.assertTrue(CreditService.check_credits(user=self.user, amount=1000))
+        self.assertIsNone(CreditService.ensure_credits(user=self.user, amount=1000))
+        transaction = CreditService.spend_credits(
+            user=self.user,
+            amount=1000,
+            transaction_type=CreditTransactionType.AGENT_CHAT,
+        )
+        with CreditService.charge_agent_generation(
+            user=self.user,
+            amount=1000,
+            transaction_type=CreditTransactionType.AGENT_CHAT,
+            description="Premium generation",
+        ):
+            pass
+
+        self.account.refresh_from_db()
+        self.assertIsNone(transaction)
+        self.assertEqual(self.account.balance, 0)
+        self.assertFalse(self.account.transactions.exists())
 
     def test_monthly_credits_add_25_without_exceeding_100(self):
         for starting_balance, expected_amount in ((50, 25), (75, 25), (95, 5), (100, 0)):

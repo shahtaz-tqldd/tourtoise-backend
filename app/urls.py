@@ -16,6 +16,7 @@ v1_admin_urls = [
     path("accounts/", include("accounts.api.v1.admin.urls")),
     path("destinations/", include("destinations.api.v1.admin.urls")),
     path("trips/", include("trips.api.v1.admin.urls")),
+    path("analytics/", include("analytics.api.v1.admin.urls")),
 ]
 
 urlpatterns = [

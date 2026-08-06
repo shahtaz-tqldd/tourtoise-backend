@@ -27,6 +27,7 @@ MODULER_APPS = [
     "chat.apps.ChatConfig",
     "notification.apps.NotificationConfig",
     "vector_store.apps.VectorStoreConfig",
+    "analytics.apps.AnalyticsConfig",
 ]
 
 INSTALLED_APPS = DJANGO_BASE_APPS + THIRD_PARTY_APPS + MODULER_APPS

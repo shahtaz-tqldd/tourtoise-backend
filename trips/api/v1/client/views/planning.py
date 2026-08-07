@@ -7,6 +7,8 @@ from rest_framework.permissions import IsAuthenticated
 from app.utils.response import APIResponse
 from accounts.choices import CreditTransactionType
 from accounts.services.credit import CreditService, InsufficientCreditsError
+from analytics.choices import AIUsageType
+from analytics.services.ai_usage import record_ai_usage
 from destinations.api.v1.client.serializers import (
     ClientActivitySerializer,
     ClientAttractionSerializer,
@@ -377,7 +379,7 @@ class TripPlanningRecommendationsAPIView(UserTripQuerysetMixin, GenericAPIView):
                 transaction_type=CreditTransactionType.TRIP_PLAN,
                 description="Trip recommendation generation",
                 metadata={"step": PlanningStep.RECOMMENDATION, "trip_id": str(trip.id)},
-            ):
+            ) as credit_transaction:
                 session = get_or_create_planning_step_session(trip, request.user, current_step=3)
                 create_agent_message(
                     session=session,
@@ -402,6 +404,14 @@ class TripPlanningRecommendationsAPIView(UserTripQuerysetMixin, GenericAPIView):
                     trip_snapshot=trip_snapshot,
                     destination_id=destination_id,
                 )
+                record_ai_usage(
+                    user=request.user,
+                    trip=trip,
+                    usage_type=AIUsageType.TRIP_PLANNING,
+                    cost=plan_agent_response.get("cost") or 0,
+                    tokens=plan_agent_response.get("total_tokens") or 0,
+                )
+            credit_spent = abs(credit_transaction.amount) if credit_transaction else 0
         except InsufficientCreditsError as exc:
             return insufficient_credits_response(exc)
         recommendations = update_trip_agent_context_from_recommendations(
@@ -429,6 +439,7 @@ class TripPlanningRecommendationsAPIView(UserTripQuerysetMixin, GenericAPIView):
                 errors=recommendations,
                 message="Trip agent recommendations could not be generated.",
                 status=status.HTTP_502_BAD_GATEWAY,
+                meta={"credit_spent": credit_spent},
             )
 
         return APIResponse.success(
@@ -436,6 +447,7 @@ class TripPlanningRecommendationsAPIView(UserTripQuerysetMixin, GenericAPIView):
                 **self._serialize_recommendations(recommendations),
                 **build_planning_response_meta(trip),
             },
+            meta={"credit_spent": credit_spent},
             message="Trip recommendations created successfully.",
         )
 
@@ -619,7 +631,7 @@ class TripPlanningItinerariesAPIView(UserTripQuerysetMixin, GenericAPIView):
                 transaction_type=CreditTransactionType.TRIP_PLAN,
                 description="Trip itinerary generation",
                 metadata={"step": PlanningStep.ITINERARY, "trip_id": str(trip.id)},
-            ):
+            ) as credit_transaction:
                 session = get_or_create_planning_step_session(trip, request.user, current_step=4)
                 create_agent_message(
                     session=session,
@@ -638,6 +650,14 @@ class TripPlanningItinerariesAPIView(UserTripQuerysetMixin, GenericAPIView):
                     trip_snapshot=trip_context,
                     trip_context=trip_context,
                 )
+                record_ai_usage(
+                    user=request.user,
+                    trip=trip,
+                    usage_type=AIUsageType.TRIP_PLANNING,
+                    cost=plan_agent_response.get("cost") or 0,
+                    tokens=plan_agent_response.get("total_tokens") or 0,
+                )
+            credit_spent = abs(credit_transaction.amount) if credit_transaction else 0
         except InsufficientCreditsError as exc:
             return insufficient_credits_response(exc)
         itinerary = update_trip_agent_context_from_itinerary(
@@ -665,6 +685,7 @@ class TripPlanningItinerariesAPIView(UserTripQuerysetMixin, GenericAPIView):
                 errors=itinerary,
                 message="Trip agent itinerary could not be generated.",
                 status=status.HTTP_502_BAD_GATEWAY,
+                meta={"credit_spent": credit_spent},
             )
 
         saved_itinerary = self._get_saved_itinerary(trip)
@@ -673,6 +694,7 @@ class TripPlanningItinerariesAPIView(UserTripQuerysetMixin, GenericAPIView):
                 **(self._serialize_saved_itinerary(saved_itinerary) if saved_itinerary else itinerary),
                 **build_planning_response_meta(trip),
             },
+            meta={"credit_spent": credit_spent},
             message="Trip itinerary created successfully.",
         )
 
@@ -819,7 +841,7 @@ class TripPlanningPrepartionAPIView(UserTripQuerysetMixin, GenericAPIView):
                 transaction_type=CreditTransactionType.TRIP_PLAN,
                 description="Trip preparation generation",
                 metadata={"step": PlanningStep.PREPARATION, "trip_id": str(trip.id)},
-            ):
+            ) as credit_transaction:
                 session = get_or_create_planning_step_session(trip, request.user, current_step=5)
                 create_agent_message(
                     session=session,
@@ -838,6 +860,14 @@ class TripPlanningPrepartionAPIView(UserTripQuerysetMixin, GenericAPIView):
                     trip_snapshot=trip_context,
                     trip_context=trip_context,
                 )
+                record_ai_usage(
+                    user=request.user,
+                    trip=trip,
+                    usage_type=AIUsageType.TRIP_PLANNING,
+                    cost=plan_agent_response.get("cost") or 0,
+                    tokens=plan_agent_response.get("total_tokens") or 0,
+                )
+            credit_spent = abs(credit_transaction.amount) if credit_transaction else 0
         except InsufficientCreditsError as exc:
             return insufficient_credits_response(exc)
         preparation = update_trip_agent_context_from_preparation(
@@ -865,6 +895,7 @@ class TripPlanningPrepartionAPIView(UserTripQuerysetMixin, GenericAPIView):
                 errors=preparation,
                 message="Trip agent preparation could not be generated.",
                 status=status.HTTP_502_BAD_GATEWAY,
+                meta={"credit_spent": credit_spent},
             )
 
         saved_preparation = self._get_saved_preparation(trip)
@@ -873,6 +904,7 @@ class TripPlanningPrepartionAPIView(UserTripQuerysetMixin, GenericAPIView):
                 **(self._serialize_saved_preparation(saved_preparation) if saved_preparation else preparation),
                 **build_planning_response_meta(trip),
             },
+            meta={"credit_spent": credit_spent},
             message="Trip preparation created successfully.",
         )
 

@@ -8,6 +8,8 @@ from rest_framework.permissions import IsAuthenticated
 from app.utils.response import APIResponse
 from accounts.choices import CreditTransactionType
 from accounts.services.credit import CreditService, InsufficientCreditsError
+from analytics.choices import AIUsageType
+from analytics.services.ai_usage import record_ai_usage
 from trips.api.v1.client.serializers import (
     TripChatCreateMessageSerializer,
     TripChatMessageSerializer,
@@ -144,7 +146,7 @@ class TripChatCreateMessageAPIView(TripChatSessionMixin, GenericAPIView):
                     "endpoint": "TripChatCreateMessageAPIView",
                     "trip_id": str(trip.id),
                 },
-            ):
+            ) as credit_transaction:
                 user_message = create_conversation_message(
                     session=session,
                     sender=AgentMessageSender.USER,
@@ -157,6 +159,14 @@ class TripChatCreateMessageAPIView(TripChatSessionMixin, GenericAPIView):
                     session=session,
                     user_query=serializer.validated_data["message"],
                 )
+                record_ai_usage(
+                    user=request.user,
+                    trip=trip,
+                    usage_type=AIUsageType.TRIP_CHAT,
+                    cost=agent_result.get("cost") or 0,
+                    tokens=agent_result.get("total_tokens") or 0,
+                )
+            credit_spent = abs(credit_transaction.amount) if credit_transaction else 0
         except InsufficientCreditsError as exc:
             return APIResponse.error(
                 errors={"credit": [str(exc)]},
@@ -188,6 +198,7 @@ class TripChatCreateMessageAPIView(TripChatSessionMixin, GenericAPIView):
                 "user_message": TripChatMessageSerializer(user_message).data,
                 "agent_message": TripChatMessageSerializer(agent_message).data,
             },
+            meta={"credit_spent": credit_spent},
             message="Trip chat message created successfully.",
             status=status.HTTP_201_CREATED,
         )

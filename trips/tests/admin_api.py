@@ -3,17 +3,10 @@ from django.test import TestCase
 from rest_framework import status
 from rest_framework.test import APIClient
 
+from analytics.choices import AIUsageType
+from analytics.services.ai_usage import record_ai_usage
 from destinations.models import Destination
-from trips.choices import AgentMessageSender, PlanningStep
-from trips.models import (
-    Trip,
-    TripAgentConversationSession,
-    TripAgentMessage,
-    TripConversationMessage,
-    TripConversationSession,
-    TripDestination,
-    TripPlanningSession,
-)
+from trips.models import Trip, TripDestination
 
 
 User = get_user_model()
@@ -72,60 +65,40 @@ class AdminTripListApiTests(TestCase):
     def test_includes_separate_planning_and_trip_chat_usage(self):
         trip = self.create_trip("Usage Trip")
         self.add_primary_destination(trip)
-        planning_session = TripPlanningSession.objects.create(
-            trip=trip,
+        record_ai_usage(
             user=self.traveler,
-            created_by=self.traveler,
-            updated_by=self.traveler,
-        )
-        step_session = TripAgentConversationSession.objects.create(
-            planning_session=planning_session,
             trip=trip,
+            usage_type=AIUsageType.TRIP_PLANNING,
+            cost=0.0001,
+            tokens=40,
+        )
+        record_ai_usage(
             user=self.traveler,
-            step=PlanningStep.PREFERENCE,
-            created_by=self.traveler,
-            updated_by=self.traveler,
-        )
-        TripAgentMessage.objects.create(
-            session=step_session,
-            sender=AgentMessageSender.AGENT,
-            content="First planning response",
-            metadata={"cost": 0.0001, "total_tokens": 40},
-        )
-        TripAgentMessage.objects.create(
-            session=step_session,
-            sender=AgentMessageSender.SYSTEM,
-            content="Second planning response",
-            metadata={"cost": 0.0002, "total_tokens": 60},
-        )
-        TripAgentMessage.objects.create(
-            session=step_session,
-            sender=AgentMessageSender.USER,
-            content="Planning question",
-        )
-
-        conversation = TripConversationSession.objects.create(
             trip=trip,
+            usage_type=AIUsageType.TRIP_PLANNING,
+            cost=0.0002,
+            tokens=60,
+        )
+        record_ai_usage(
             user=self.traveler,
-            created_by=self.traveler,
-            updated_by=self.traveler,
+            trip=trip,
+            usage_type=AIUsageType.TRIP_CHAT,
+            cost=0.0004,
+            tokens=75,
         )
-        TripConversationMessage.objects.create(
-            session=conversation,
-            sender=AgentMessageSender.USER,
-            content="Chat question",
+        record_ai_usage(
+            user=self.traveler,
+            trip=trip,
+            usage_type=AIUsageType.TRIP_CHAT,
+            cost=0.0006,
+            tokens=125,
         )
-        TripConversationMessage.objects.create(
-            session=conversation,
-            sender=AgentMessageSender.AGENT,
-            content="First chat response",
-            metadata={"cost": 0.0004, "total_tokens": 75},
-        )
-        TripConversationMessage.objects.create(
-            session=conversation,
-            sender=AgentMessageSender.AGENT,
-            content="Second chat response",
-            metadata={"cost": 0.0006, "total_tokens": 125},
+        record_ai_usage(
+            user=self.traveler,
+            trip=trip,
+            usage_type=AIUsageType.CHAT,
+            cost=1,
+            tokens=10_000,
         )
 
         response = self.client.get("/api/v1/admin/trips/list/")
@@ -152,9 +125,9 @@ class AdminTripListApiTests(TestCase):
         self.assertEqual(row["planning"]["tokens"], 100)
         self.assertAlmostEqual(row["trip_chat"]["cost"], 0.001)
         self.assertEqual(row["trip_chat"]["tokens"], 200)
-        self.assertEqual(row["trip_chat"]["total_message"], 3)
+        self.assertEqual(row["trip_chat"]["total_message"], 2)
 
-    def test_returns_zero_usage_for_trip_without_messages(self):
+    def test_returns_zero_usage_for_trip_without_ai_usage(self):
         self.create_trip("Empty Trip")
 
         response = self.client.get("/api/v1/admin/trips/list/")

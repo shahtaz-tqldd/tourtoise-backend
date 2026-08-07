@@ -1,10 +1,13 @@
 import json
+from decimal import Decimal
 from unittest.mock import patch
 
 from django.test import SimpleTestCase, TestCase
 from rest_framework.test import APIRequestFactory, force_authenticate
 
 from accounts.models import User
+from analytics.choices import AIUsageType
+from analytics.models import AIUsage
 from chat.agents.discovery_agent.client import DiscoveryAgentClient
 from chat.agents.discovery_agent.helpers import _parse_response
 from chat.api.v1.client.views import ChatQuestionAPIView
@@ -101,6 +104,7 @@ class ChatQuestionAPIViewTests(TestCase):
         response = ChatQuestionAPIView.as_view()(request)
 
         self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data["meta"]["credit_spent"], 2)
         session = ChatSession.objects.get(user=self.user)
         self.assertEqual(session.metadata["discovery_agent_session_id"], "adk-session-1")
         self.assertEqual(
@@ -116,6 +120,12 @@ class ChatQuestionAPIViewTests(TestCase):
         )
         self.user.credit.refresh_from_db()
         self.assertEqual(self.user.credit.balance, 98)
+        usage = AIUsage.objects.get(user=self.user)
+        self.assertEqual(usage.usage_type, AIUsageType.CHAT)
+        self.assertEqual(usage.cost, Decimal("0.00100000"))
+        self.assertEqual(usage.tokens, 12)
+        self.assertIsNone(usage.trip)
+        self.assertEqual(usage.metadata, {})
 
     @patch("chat.api.v1.client.views.DiscoveryAgentClient")
     def test_rejects_question_without_enough_credits(self, client_class):
@@ -129,4 +139,5 @@ class ChatQuestionAPIViewTests(TestCase):
         self.assertEqual(response.status_code, 402)
         self.assertEqual(response.data["message"], "Insufficient credits.")
         self.assertFalse(ChatSession.objects.filter(user=self.user).exists())
+        self.assertFalse(AIUsage.objects.filter(user=self.user).exists())
         client_class.assert_not_called()

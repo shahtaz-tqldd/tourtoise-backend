@@ -1,7 +1,8 @@
 from calendar import monthrange
 from datetime import date, datetime, time, timedelta
+from decimal import Decimal
 
-from django.db.models import Count
+from django.db.models import Count, Q, Sum
 from django.db.models.functions import TruncDate, TruncMonth
 from django.utils import timezone
 from rest_framework.generics import GenericAPIView
@@ -9,12 +10,16 @@ from rest_framework.permissions import IsAuthenticated
 
 from accounts.models import User
 from accounts.permissions import IsSuperAdmin
-from analytics.api.v1.admin.serializers import UserGrowthQuerySerializer
+from analytics.api.v1.admin.serializers import (
+    AIUsageQuerySerializer,
+    UserGrowthQuerySerializer,
+)
+from analytics.choices import AIUsageType
+from analytics.models import AIUsage
 from app.utils.response import APIResponse
-from chat.models import ChatMessage
 from journals.models import Journal
 from trips.choices import TripStatus
-from trips.models import Trip, TripConversationMessage
+from trips.models import Trip
 
 
 def _month_start(value):
@@ -57,39 +62,7 @@ class OverviewStatsAPIView(GenericAPIView):
         users = User.objects.all()
         trips = Trip.objects.all()
         journals = Journal.objects.all()
-        chat_messages = ChatMessage.objects.all()
-        trip_messages = TripConversationMessage.objects.all()
-
-        chat_total = chat_messages.count()
-        trip_message_total = trip_messages.count()
-        chat_this_month = chat_messages.filter(
-            created_at__gte=current_month_start,
-            created_at__lt=now,
-        ).count()
-        trip_messages_this_month = trip_messages.filter(
-            created_at__gte=current_month_start,
-            created_at__lt=now,
-        ).count()
-
-        # The combined percentage is calculated from the combined message counts,
-        # rather than averaging the two models' individual percentages.
-        current_30_start = now - timedelta(days=30)
-        previous_30_start = now - timedelta(days=60)
-        current_message_count = (
-            chat_messages.filter(created_at__gte=current_30_start, created_at__lt=now).count()
-            + trip_messages.filter(created_at__gte=current_30_start, created_at__lt=now).count()
-        )
-        previous_message_count = (
-            chat_messages.filter(created_at__gte=previous_30_start, created_at__lt=current_30_start).count()
-            + trip_messages.filter(created_at__gte=previous_30_start, created_at__lt=current_30_start).count()
-        )
-        if previous_message_count == 0:
-            message_growth = 100.0 if current_message_count else 0.0
-        else:
-            message_growth = round(
-                ((current_message_count - previous_message_count) / previous_message_count) * 100,
-                2,
-            )
+        ai_usages = AIUsage.objects.all()
 
         return APIResponse.success(
             data={
@@ -115,12 +88,93 @@ class OverviewStatsAPIView(GenericAPIView):
                     "growth_percentage_30_days": _growth_percentage(journals, now),
                 },
                 "ai_messages": {
-                    "total": chat_total + trip_message_total,
-                    "this_month": chat_this_month + trip_messages_this_month,
-                    "growth_percentage_30_days": message_growth,
+                    "total": ai_usages.count(),
+                    "this_month": ai_usages.filter(
+                        created_at__gte=current_month_start,
+                        created_at__lt=now,
+                    ).count(),
+                    "growth_percentage_30_days": _growth_percentage(ai_usages, now),
                 },
             },
             message="Overview stats fetched successfully.",
+        )
+
+
+class AIUsageStatsAPIView(GenericAPIView):
+    """AI usage totals, optionally filtered by an inclusive date range."""
+
+    permission_classes = [IsAuthenticated, IsSuperAdmin]
+    serializer_class = AIUsageQuerySerializer
+
+    def get(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.query_params)
+        serializer.is_valid(raise_exception=True)
+
+        queryset = AIUsage.objects.all()
+        start_date = serializer.validated_data.get("start_date")
+        end_date = serializer.validated_data.get("end_date")
+        if start_date:
+            queryset = queryset.filter(created_at__gte=_aware_start(start_date))
+        if end_date:
+            queryset = queryset.filter(
+                created_at__lt=_aware_start(end_date + timedelta(days=1))
+            )
+
+        totals = queryset.aggregate(
+            total_message=Count("id"),
+            total_cost=Sum("cost", default=Decimal("0")),
+            total_tokens=Sum("tokens", default=0),
+            trip_planning_cost=Sum(
+                "cost",
+                filter=Q(usage_type=AIUsageType.TRIP_PLANNING),
+                default=Decimal("0"),
+            ),
+            trip_planning_tokens=Sum(
+                "tokens",
+                filter=Q(usage_type=AIUsageType.TRIP_PLANNING),
+                default=0,
+            ),
+            chat_cost=Sum(
+                "cost",
+                filter=Q(usage_type=AIUsageType.CHAT),
+                default=Decimal("0"),
+            ),
+            chat_tokens=Sum(
+                "tokens",
+                filter=Q(usage_type=AIUsageType.CHAT),
+                default=0,
+            ),
+            trip_chat_cost=Sum(
+                "cost",
+                filter=Q(usage_type=AIUsageType.TRIP_CHAT),
+                default=Decimal("0"),
+            ),
+            trip_chat_tokens=Sum(
+                "tokens",
+                filter=Q(usage_type=AIUsageType.TRIP_CHAT),
+                default=0,
+            ),
+        )
+
+        return APIResponse.success(
+            data={
+                "total_message": totals["total_message"],
+                "total_cost": float(totals["total_cost"]),
+                "total_tokens": totals["total_tokens"],
+                "trip_planning": {
+                    "cost": float(totals["trip_planning_cost"]),
+                    "tokens": totals["trip_planning_tokens"],
+                },
+                "chat": {
+                    "cost": float(totals["chat_cost"]),
+                    "tokens": totals["chat_tokens"],
+                },
+                "trip_chat": {
+                    "cost": float(totals["trip_chat_cost"]),
+                    "tokens": totals["trip_chat_tokens"],
+                },
+            },
+            message="AI usage stats fetched successfully.",
         )
 
 

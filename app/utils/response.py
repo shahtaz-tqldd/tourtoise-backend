@@ -18,11 +18,14 @@ class APIResponse:
         return Response(response, status=status)
 
     @staticmethod
-    def error(errors=None, message="An error occured!", status=400):
+    def error(errors=None, message="An error occured!", status=400, meta=None):
 
         response = {"status": status, "success": False, "message": message}
 
         if errors is not None:
             response["errors"] = errors
+
+        if meta is not None:
+            response["meta"] = meta
 
         return Response(response, status=status)

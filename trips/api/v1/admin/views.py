@@ -9,35 +9,42 @@ from django.db.models import (
     Sum,
     Value,
 )
-from django.db.models.functions import Cast, Coalesce
+from django.db.models.functions import Coalesce
 from django.shortcuts import get_object_or_404
 from rest_framework.generics import GenericAPIView
 from rest_framework.permissions import IsAuthenticated
 
 from accounts.permissions import IsSuperAdmin
+from analytics.choices import AIUsageType
+from analytics.models import AIUsage
 from app.base.pagination import CustomPagination
 from app.utils.response import APIResponse
 from trips.api.v1.admin.serializers import AdminTripDetailSerializer, AdminTripListSerializer
-from trips.models import Trip, TripAgentMessage, TripConversationMessage, TripDestination
+from trips.models import Trip, TripDestination
 
 
-def _sum_message_metadata(queryset, *, trip_field, metadata_key, output_field):
-    """Return one aggregate metadata value for the outer trip."""
+def _sum_ai_usage(*, usage_type, field, output_field):
     return Subquery(
-        queryset.filter(**{trip_field: OuterRef("pk")})
+        AIUsage.objects.filter(
+            trip_id=OuterRef("pk"),
+            usage_type=usage_type,
+        )
         .order_by()
-        .values(trip_field)
-        .annotate(total=Sum(Cast(f"metadata__{metadata_key}", output_field=output_field)))
+        .values("trip_id")
+        .annotate(total=Sum(field, output_field=output_field))
         .values("total")[:1],
         output_field=output_field,
     )
 
 
-def _related_count(queryset, *, trip_field):
+def _count_ai_usage(*, usage_type):
     return Subquery(
-        queryset.filter(**{trip_field: OuterRef("pk")})
+        AIUsage.objects.filter(
+            trip_id=OuterRef("pk"),
+            usage_type=usage_type,
+        )
         .order_by()
-        .values(trip_field)
+        .values("trip_id")
         .annotate(total=Count("id"))
         .values("total")[:1],
         output_field=BigIntegerField(),
@@ -87,14 +94,12 @@ class AdminTripListAPIView(TripPaginationMixin, GenericAPIView):
     Frontend response:
     - 200 success with paginated trip rows for admin dashboards.
     - Each row includes planning and trip-chat cost/token totals, plus the number
-      of persisted post-planning conversation messages.
+      of trip-chat AI responses recorded in analytics.
     """
 
     permission_classes = [IsAuthenticated, IsSuperAdmin]
 
     def get_queryset(self):
-        planning_messages = TripAgentMessage.objects.all()
-        conversation_messages = TripConversationMessage.objects.all()
         float_output = FloatField()
         integer_output = BigIntegerField()
 
@@ -111,50 +116,43 @@ class AdminTripListAPIView(TripPaginationMixin, GenericAPIView):
             )
             .annotate(
                 planning_cost=Coalesce(
-                    _sum_message_metadata(
-                        planning_messages,
-                        trip_field="session__trip_id",
-                        metadata_key="cost",
+                    _sum_ai_usage(
+                        usage_type=AIUsageType.TRIP_PLANNING,
+                        field="cost",
                         output_field=float_output,
                     ),
                     Value(0.0),
                     output_field=float_output,
                 ),
                 planning_total_tokens=Coalesce(
-                    _sum_message_metadata(
-                        planning_messages,
-                        trip_field="session__trip_id",
-                        metadata_key="total_tokens",
+                    _sum_ai_usage(
+                        usage_type=AIUsageType.TRIP_PLANNING,
+                        field="tokens",
                         output_field=integer_output,
                     ),
                     Value(0),
                     output_field=integer_output,
                 ),
                 trip_chat_cost=Coalesce(
-                    _sum_message_metadata(
-                        conversation_messages,
-                        trip_field="session__trip_id",
-                        metadata_key="cost",
+                    _sum_ai_usage(
+                        usage_type=AIUsageType.TRIP_CHAT,
+                        field="cost",
                         output_field=float_output,
                     ),
                     Value(0.0),
                     output_field=float_output,
                 ),
                 trip_chat_total_tokens=Coalesce(
-                    _sum_message_metadata(
-                        conversation_messages,
-                        trip_field="session__trip_id",
-                        metadata_key="total_tokens",
+                    _sum_ai_usage(
+                        usage_type=AIUsageType.TRIP_CHAT,
+                        field="tokens",
                         output_field=integer_output,
                     ),
                     Value(0),
                     output_field=integer_output,
                 ),
-                conversation_messages_count=Coalesce(
-                    _related_count(
-                        conversation_messages,
-                        trip_field="session__trip_id",
-                    ),
+                trip_chat_messages_count=Coalesce(
+                    _count_ai_usage(usage_type=AIUsageType.TRIP_CHAT),
                     Value(0),
                     output_field=integer_output,
                 ),

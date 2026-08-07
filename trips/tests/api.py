@@ -1,4 +1,5 @@
 from datetime import date, timedelta
+from decimal import Decimal
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -10,6 +11,8 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient
 
+from analytics.choices import AIUsageType
+from analytics.models import AIUsage
 from destinations.choices import BudgetTier, DestinationType
 from destinations.choices import Status as DestinationStatus
 from destinations.models import Destination
@@ -828,6 +831,7 @@ class TripChatApiTests(TestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["meta"]["credit_spent"], 1)
         self.assertEqual(response.data["data"]["user_message"]["sender"], "user")
         self.assertEqual(response.data["data"]["agent_message"]["sender"], "agent")
         self.assertEqual(
@@ -845,6 +849,11 @@ class TripChatApiTests(TestCase):
         self.assertFalse(TripAgentConversationSession.objects.filter(trip=self.trip).exists())
         self.user.credit.refresh_from_db()
         self.assertEqual(self.user.credit.balance, 99)
+        usage = AIUsage.objects.get(user=self.user, trip=self.trip)
+        self.assertEqual(usage.usage_type, AIUsageType.TRIP_CHAT)
+        self.assertEqual(usage.cost, Decimal("0.00010000"))
+        self.assertEqual(usage.tokens, 42)
+        self.assertEqual(usage.metadata, {})
         run_guide_agent.assert_called_once_with(
             session=session,
             user_query="What is my first stop?",
@@ -864,6 +873,7 @@ class TripChatApiTests(TestCase):
         self.assertEqual(response.status_code, status.HTTP_402_PAYMENT_REQUIRED)
         self.assertEqual(response.data["message"], "Insufficient credits.")
         self.assertFalse(TripConversationMessage.objects.filter(session__trip=self.trip).exists())
+        self.assertFalse(AIUsage.objects.filter(user=self.user, trip=self.trip).exists())
         run_guide_agent.assert_not_called()
 
     def test_lists_trip_chat_messages_for_session(self):

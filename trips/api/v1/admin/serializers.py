@@ -17,7 +17,7 @@ class AdminTripPlanningUsageSerializer(serializers.Serializer):
 
 class AdminTripChatUsageSerializer(serializers.Serializer):
     total_message = serializers.IntegerField(
-        source="conversation_messages_count",
+        source="trip_chat_messages_count",
         read_only=True,
     )
     cost = serializers.FloatField(source="trip_chat_cost", read_only=True)

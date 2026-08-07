@@ -10,6 +10,8 @@ from app.base.pagination import CustomPagination
 from app.utils.response import APIResponse
 from accounts.choices import CreditTransactionType
 from accounts.services.credit import CreditService, InsufficientCreditsError
+from analytics.choices import AIUsageType
+from analytics.services.ai_usage import record_ai_usage
 from chat.choices import ChatMessageSender
 from chat.models import ChatMessage, ChatSession
 from chat.agents.discovery_agent import DiscoveryAgentClient
@@ -150,7 +152,7 @@ class ChatQuestionAPIView(GenericAPIView):
                 transaction_type=CreditTransactionType.AGENT_CHAT,
                 description="Discovery chat agent response",
                 metadata={"endpoint": "ChatQuestionAPIView"},
-            ):
+            ) as credit_transaction:
                 with transaction.atomic():
                     if session_id:
                         session = get_object_or_404(
@@ -184,6 +186,13 @@ class ChatQuestionAPIView(GenericAPIView):
                     user_id=str(request.user.id),
                     session_id=external_session_id,
                 )
+                record_ai_usage(
+                    user=request.user,
+                    usage_type=AIUsageType.CHAT,
+                    cost=result["meta"].get("cost") or 0,
+                    tokens=result["meta"].get("token_usage") or 0,
+                )
+            credit_spent = abs(credit_transaction.amount) if credit_transaction else 0
         except InsufficientCreditsError as exc:
             return APIResponse.error(
                 errors={"credit": [str(exc)]},
@@ -231,6 +240,7 @@ class ChatQuestionAPIView(GenericAPIView):
                 "agent_message": ChatMessageSerializer(agent_message).data,
                 "handoff": response.get("handoff"),
             },
+            meta={"credit_spent": credit_spent},
             message="Chat message created successfully.",
             status=status.HTTP_201_CREATED,
         )

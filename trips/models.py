@@ -710,7 +710,7 @@ class ScheduledTripNotification(BaseModel):
         default=ScheduledNotificationStatusType.PENDING,
     )
 
-    payload = models.JSONField(default=dict, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
 
     alert = models.ForeignKey(
         "notification.Notification",

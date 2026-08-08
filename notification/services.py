@@ -25,7 +25,7 @@ def create_notification(
     message="",
     recipient=None,
     trip=None,
-    payload=None,
+    metadata=None,
     created_by=None,
 ):
     notification = Notification(
@@ -34,7 +34,7 @@ def create_notification(
         message=message,
         recipient=recipient,
         trip=trip,
-        payload=payload or {},
+        metadata=metadata or {},
         created_by=created_by,
     )
     notification.full_clean()
@@ -43,18 +43,18 @@ def create_notification(
     return notification
 
 
-def create_general_notification(*, recipient, title, message="", payload=None, created_by=None):
+def create_general_notification(*, recipient, title, message="", metadata=None, created_by=None):
     return create_notification(
         notification_type=NotificationType.GENERAL,
         recipient=recipient,
         title=title,
         message=message,
-        payload=payload,
+        metadata=metadata,
         created_by=created_by,
     )
 
 
-def create_trip_notification(*, recipient, trip, title, message="", payload=None, created_by=None):
+def create_trip_notification(*, recipient, trip, title, message="", metadata=None, created_by=None):
     if trip.user_id != recipient.id:
         raise ValidationError("Trip notification recipient must own the trip.")
     return create_notification(
@@ -63,17 +63,17 @@ def create_trip_notification(*, recipient, trip, title, message="", payload=None
         trip=trip,
         title=title,
         message=message,
-        payload=payload,
+        metadata=metadata,
         created_by=created_by,
     )
 
 
-def create_global_notification(*, title, message="", payload=None, created_by=None):
+def create_global_notification(*, title, message="", metadata=None, created_by=None):
     return create_notification(
         notification_type=NotificationType.GLOBAL,
         title=title,
         message=message,
-        payload=payload,
+        metadata=metadata,
         created_by=created_by,
     )
 

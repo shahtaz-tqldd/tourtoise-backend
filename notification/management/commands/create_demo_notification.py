@@ -37,20 +37,20 @@ class Command(BaseCommand):
             help="Notification message.",
         )
         parser.add_argument(
-            "--payload",
+            "--metadata",
             default="{}",
-            help='JSON object payload. Example: --payload \'{"source":"demo"}\'',
+            help='JSON object metadata. Example: --metadata \'{"source":"demo"}\'',
         )
 
     def handle(self, *args, **options):
-        payload = self.parse_payload(options["payload"])
+        metadata = self.parse_metadata(options["metadata"])
         notification_type = options["type"]
 
         if notification_type == "global":
             notification = create_global_notification(
                 title=options["title"],
                 message=options["message"],
-                payload=payload,
+                metadata=metadata,
             )
             self.stdout.write(
                 self.style.SUCCESS(f"Created global demo notification {notification.id}.")
@@ -70,7 +70,7 @@ class Command(BaseCommand):
             trip=trip,
             title=options["title"],
             message=options["message"],
-            payload=payload,
+            metadata=metadata,
         )
         self.stdout.write(
             self.style.SUCCESS(
@@ -78,13 +78,13 @@ class Command(BaseCommand):
             )
         )
 
-    def parse_payload(self, raw_payload):
+    def parse_metadata(self, raw_metadata):
         try:
-            payload = json.loads(raw_payload)
+            metadata = json.loads(raw_metadata)
         except json.JSONDecodeError as exc:
-            raise CommandError(f"--payload must be valid JSON: {exc}") from exc
+            raise CommandError(f"--metadata must be valid JSON: {exc}") from exc
 
-        if not isinstance(payload, dict):
-            raise CommandError("--payload must be a JSON object.")
+        if not isinstance(metadata, dict):
+            raise CommandError("--metadata must be a JSON object.")
 
-        return payload
+        return metadata

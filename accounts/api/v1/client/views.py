@@ -10,10 +10,12 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 from rest_framework_simplejwt.views import TokenRefreshView
 
+from app.base.pagination import CustomPagination
 from app.utils.response import APIResponse
 from notification.models import Notification, NotificationType
 from accounts.api.v1.client.serializers import (
     ChangePasswordSerializer,
+    CreditTransactionSerializer,
     GoogleLoginSerializer,
     LoginSerializer,
     PublicUserProfileSerializer,
@@ -165,6 +167,32 @@ class UserDetailsView(APIView):
 
     def get(self, request, *args, **kwargs):
         return APIResponse.success(data=UserSerializer(request.user).data)
+
+
+class CreditHistoryView(GenericAPIView):
+    """Return the authenticated user's paginated credit transaction history."""
+
+    permission_classes = [IsAuthenticated]
+    serializer_class = CreditTransactionSerializer
+    pagination_class = CustomPagination
+
+    def get(self, request, *args, **kwargs):
+        queryset = request.user.credit.transactions.all()
+        paginator = self.pagination_class()
+        page = paginator.paginate_queryset(queryset, request, view=self)
+
+        return APIResponse.success(
+            data=self.get_serializer(page, many=True).data,
+            meta={
+                "count": paginator.page.paginator.count,
+                "page": paginator.page.number,
+                "page_size": paginator.get_page_size(request),
+                "num_pages": paginator.page.paginator.num_pages,
+                "next": paginator.get_next_link(),
+                "previous": paginator.get_previous_link(),
+            },
+            message="Credit history fetched successfully.",
+        )
 
 
 class UserProfileStatesView(APIView):

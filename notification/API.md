@@ -64,7 +64,7 @@ Response:
       "notification_type": "trip",
       "title": "Trip itinerary updated",
       "message": "Your itinerary has new recommendations.",
-      "payload": {
+      "metadata": {
         "source": "planning_agent"
       },
       "trip_id": "9c81f9fa-6ed1-4c98-8db0-7844033958d1",
@@ -156,7 +156,7 @@ Socket event payload:
   "notification_type": "trip",
   "title": "Trip itinerary updated",
   "message": "Your itinerary has new recommendations.",
-  "payload": {
+  "metadata": {
     "source": "planning_agent"
   },
   "trip_id": "9c81f9fa-6ed1-4c98-8db0-7844033958d1",
@@ -183,7 +183,7 @@ create_general_notification(
     recipient=user,
     title="Welcome back",
     message="Your account is ready.",
-    payload={"source": "accounts"},
+    metadata={"source": "accounts"},
 )
 
 create_trip_notification(
@@ -191,13 +191,13 @@ create_trip_notification(
     trip=trip,
     title="Trip itinerary updated",
     message="Your itinerary has new recommendations.",
-    payload={"source": "planning_agent"},
+    metadata={"source": "planning_agent"},
 )
 
 create_global_notification(
     title="Scheduled maintenance",
     message="Tourtoise will be unavailable for maintenance tonight.",
-    payload={"severity": "info"},
+    metadata={"severity": "info"},
 )
 ```
 
@@ -224,11 +224,11 @@ env/bin/python manage.py create_demo_notification \
   --message "This notification includes a trip_id in the socket payload."
 ```
 
-Add custom payload:
+Add custom metadata:
 
 ```bash
 env/bin/python manage.py create_demo_notification \
   --type trip \
   --trip-id 9c81f9fa-6ed1-4c98-8db0-7844033958d1 \
-  --payload '{"source":"manual_demo","severity":"info"}'
+  --metadata '{"source":"manual_demo","severity":"info"}'
 ```

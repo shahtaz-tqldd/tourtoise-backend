@@ -11,12 +11,32 @@ from uuid import uuid4
 from app.utils.cloudinary import delete_image, upload_image
 from accounts.choices import AccountProvider, AccountStatus
 from accounts.services.firebase import FirebaseVerificationError, verify_firebase_id_token
-from accounts.models import UserProfile
+from accounts.models import CreditTransaction, UserProfile
 from accounts.services.password import resolve_password_reset_user, send_user_password_reset_email
-from app.base.validators import validate_timezone_name
+from app.base.validators import validate_bio_word_count, validate_timezone_name
 
 
 User = get_user_model()
+
+
+class CreditTransactionSerializer(serializers.ModelSerializer):
+    transaction_type_display = serializers.CharField(
+        source="get_transaction_type_display",
+        read_only=True,
+    )
+
+    class Meta:
+        model = CreditTransaction
+        fields = (
+            "id",
+            "transaction_type",
+            "transaction_type_display",
+            "amount",
+            "description",
+            "metadata",
+            "created_at",
+        )
+        read_only_fields = fields
 
 
 def get_or_create_profile(user):
@@ -183,7 +203,11 @@ class PublicUserProfileSerializer(serializers.ModelSerializer):
 
 class UserUpdateSerializer(serializers.ModelSerializer):
     username = serializers.SlugField(required=False, allow_blank=True)
-    bio = serializers.CharField(required=False, allow_blank=True)
+    bio = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        validators=[validate_bio_word_count],
+    )
     date_of_birth = serializers.DateField(required=False, allow_null=True)
     gender = serializers.CharField(required=False, allow_blank=True)
     country_of_residence = serializers.CharField(required=False, allow_blank=True)

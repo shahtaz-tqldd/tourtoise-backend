@@ -69,7 +69,7 @@ def create_trip_lifecycle_event(trip, event_type, occurred_at=None):
             "local_date": local_datetime.date(),
             "local_time": local_datetime.time().replace(tzinfo=None),
             "timezone": timezone_name,
-            "payload": {
+            "metadata": {
                 "trip_id": str(trip.id),
                 "status": trip.status,
             },
@@ -168,7 +168,7 @@ def _build_schedule_specs(trip, timezone_name, now):
     trip_day = trip.start_date
     day_number = 1
     while trip_day <= trip.end_date:
-        common_payload = {
+        common_metadata = {
             "trip_id": str(trip.id),
             "trip_day": day_number,
             "date": trip_day.isoformat(),
@@ -181,7 +181,7 @@ def _build_schedule_specs(trip, timezone_name, now):
                 trip_day,
                 DAILY_SUMMARY_TIME,
                 timezone_name,
-                common_payload,
+                common_metadata,
             )
         )
         specs.append(
@@ -192,7 +192,7 @@ def _build_schedule_specs(trip, timezone_name, now):
                 trip_day,
                 DAILY_CHECK_IN_TIME,
                 timezone_name,
-                common_payload,
+                common_metadata,
             )
         )
         trip_day += timedelta(days=1)
@@ -208,7 +208,7 @@ def _schedule_spec(
     local_date,
     local_time,
     timezone_name,
-    payload,
+    metadata,
 ):
     local_datetime = datetime.combine(
         local_date,
@@ -233,7 +233,7 @@ def _schedule_spec(
         "local_date": local_date,
         "local_time": local_time,
         "timezone": timezone_name,
-        "payload": dict(payload),
+        "metadata": dict(metadata),
         "idempotency_key": key,
     }
 
@@ -291,11 +291,11 @@ def _send_scheduled_alert(schedule):
         return schedule.alert
 
     if schedule.event_type == ScheduledTripEventType.PACKING_REMINDER:
-        title, message, payload = _packing_alert_content(schedule)
+        title, message, metadata = _packing_alert_content(schedule)
     elif schedule.event_type == ScheduledTripEventType.DAILY_SUMMARY:
-        title, message, payload = _daily_summary_alert_content(schedule)
+        title, message, metadata = _daily_summary_alert_content(schedule)
     elif schedule.event_type == ScheduledTripEventType.TRIP_STARTED:
-        title, message, payload = _trip_started_alert_content(schedule)
+        title, message, metadata = _trip_started_alert_content(schedule)
     else:
         raise ValueError(f"Unsupported alert event: {schedule.event_type}")
 
@@ -304,7 +304,7 @@ def _send_scheduled_alert(schedule):
         trip=schedule.trip,
         title=title,
         message=message,
-        payload=payload,
+        metadata=metadata,
     )
     schedule.alert = alert
     schedule.save(update_fields=["alert", "updated_at"])
@@ -380,7 +380,7 @@ def build_scheduled_trip_message(schedule):
             f"Your {schedule.trip.title} trip is complete. "
             "How was your overall experience?"
         )
-    day_number = schedule.payload.get("trip_day")
+    day_number = schedule.metadata.get("trip_day")
     if day_number:
         return f"How was day {day_number} of your trip?"
     return "How was your day?"
@@ -417,7 +417,7 @@ def _packing_alert_content(schedule):
         f"Pack for {schedule.trip.title}",
         message,
         {
-            **schedule.payload,
+            **schedule.metadata,
             "event_type": schedule.event_type,
             "packing_items": packing_items,
             "required_documents": required_documents,
@@ -442,7 +442,7 @@ def _trip_started_alert_content(schedule):
         "Your trip has started",
         message,
         {
-            **schedule.payload,
+            **schedule.metadata,
             "event_type": schedule.event_type,
             "title": schedule.trip.title,
             "start_date": schedule.trip.start_date.isoformat(),
@@ -456,7 +456,7 @@ def _trip_started_alert_content(schedule):
 
 def _daily_summary_alert_content(schedule):
     itinerary = getattr(schedule.trip, "trip_itinerary", None)
-    day_number = schedule.payload.get("trip_day")
+    day_number = schedule.metadata.get("trip_day")
     destination_name = _destination_name_for_date(schedule.trip, schedule.local_date)
     itinerary_day = None
     if itinerary and day_number:
@@ -495,7 +495,7 @@ def _daily_summary_alert_content(schedule):
         title,
         message,
         {
-            **schedule.payload,
+            **schedule.metadata,
             "event_type": schedule.event_type,
             "destination": destination_name,
             "summary": message,

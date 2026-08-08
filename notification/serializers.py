@@ -15,7 +15,7 @@ class NotificationSerializer(serializers.ModelSerializer):
             "notification_type",
             "title",
             "message",
-            "payload",
+            "metadata",
             "trip_id",
             "is_read",
             "read_at",

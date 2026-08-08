@@ -36,7 +36,7 @@ class Notification(BaseModel):
     )
     title = models.CharField(max_length=180)
     message = models.TextField(blank=True)
-    payload = models.JSONField(default=dict, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
 
     class Meta:
         ordering = ["-created_at"]

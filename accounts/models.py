@@ -8,7 +8,7 @@ from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
 from accounts.choices import AccountProvider, AccountStatus, CreditTransactionType
-from app.base.validators import validate_timezone_name
+from app.base.validators import validate_bio_word_count, validate_timezone_name
 
 
 phone_regex = RegexValidator(
@@ -40,6 +40,13 @@ class UserManager(BaseUserManager):
                 amount=100,
                 description="Initial credit grant",
             )
+        apps.get_model("notification", "Notification").objects.create(
+            recipient=user,
+            notification_type="general",
+            title="Welcome to Tourtoise!",
+            message="Your account is ready. Start exploring and planning your next adventure.",
+            metadata={"show_app_feature": True},
+        )
         return user
 
     def create_user(self, email, password=None, **extra_fields):
@@ -130,7 +137,7 @@ class UserProfile(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="profile")
     username = models.SlugField(max_length=50, unique=True, blank=True, null=True)
     avatar_url = models.URLField(blank=True)
-    bio = models.TextField(blank=True)
+    bio = models.TextField(blank=True, validators=[validate_bio_word_count])
     date_of_birth = models.DateField(blank=True, null=True)
     gender = models.CharField(max_length=30, blank=True)
     country_of_residence = models.CharField(max_length=100, blank=True)

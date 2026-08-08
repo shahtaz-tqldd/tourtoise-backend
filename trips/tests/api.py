@@ -17,6 +17,7 @@ from destinations.choices import BudgetTier, DestinationType
 from destinations.choices import Status as DestinationStatus
 from destinations.models import Destination
 from notification.models import Notification, NotificationRead, NotificationType
+from trips.choices import TripStatus
 from trips.models import (
     Trip,
     TripAgentConversationSession,
@@ -1122,6 +1123,7 @@ class TripRequiredDocumentApiTests(TestCase):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(response.data["data"]["document_name"], "Passport")
         self.assertEqual(response.data["data"]["document_file_name"], "passport.jpg")
+        self.assertTrue(response.data["data"]["is_packed"])
         self.assertEqual(
             response.data["data"]["document"],
             {
@@ -1167,6 +1169,7 @@ class TripRequiredDocumentApiTests(TestCase):
             "https://res.cloudinary.com/demo/raw/upload/trip-documents/visa.pdf",
         )
         self.assertEqual(response.data["data"]["document_file_name"], "visa.pdf")
+        self.assertTrue(response.data["data"]["is_packed"])
         self.assertEqual(
             response.data["data"]["document"],
             {
@@ -1178,6 +1181,32 @@ class TripRequiredDocumentApiTests(TestCase):
         document.refresh_from_db()
         self.assertEqual(document.document_file_name, "visa.pdf")
         self.assertEqual(document.document_url_public_id, "trip-documents/visa")
+        self.assertTrue(document.is_packed)
+
+    def test_user_can_update_required_document_is_packed(self):
+        preparation = TripPreparation.objects.create(
+            trip=self.trip,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        document = TripRequiredDocumentItem.objects.create(
+            preparation=preparation,
+            document_name="Travel insurance",
+            sort_order=1,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+
+        response = self.client.patch(
+            f"{self.url}{document.id}/",
+            {"is_packed": True},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data["data"]["is_packed"])
+        document.refresh_from_db()
+        self.assertTrue(document.is_packed)
 
     def test_lists_required_document_file_name(self):
         preparation = TripPreparation.objects.create(trip=self.trip, created_by=self.user, updated_by=self.user)
@@ -1491,6 +1520,51 @@ class TripPlanApiTests(TestCase):
         self.assertEqual(day["title"], "Arrival")
         self.assertEqual(len(day["items"]), 1)
         self.assertEqual(day["items"][0]["title"], "Breakfast")
+
+    @patch(
+        "trips.api.v1.client.views.trip_extensions.timezone.localdate",
+        return_value=date(2026, 8, 6),
+    )
+    def test_in_progress_plan_starts_from_trip_local_current_day(self, localdate_mock):
+        self.user.profile.timezone = "Asia/Dhaka"
+        self.user.profile.save(update_fields=["timezone"])
+        trip = Trip.objects.create(
+            user=self.user,
+            title="In-progress Plan Trip",
+            status=TripStatus.IN_PROGRESS,
+            start_date=date(2026, 8, 4),
+            end_date=date(2026, 8, 8),
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        itinerary = TripItinerary.objects.create(trip=trip, title="August itinerary")
+        for day_number in range(1, 6):
+            TripItineraryDay.objects.create(
+                itinerary=itinerary,
+                day=day_number,
+                date=date(2026, 8, day_number + 3),
+                title=f"Day {day_number}",
+            )
+
+        response = self.client.get(f"/api/v1/trips/{trip.id}/plan/daywise/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            [item["date"] for item in response.data["data"]],
+            ["2026-08-06", "2026-08-07", "2026-08-08", "2026-08-04", "2026-08-05"],
+        )
+        self.assertEqual(
+            [item["is_complete"] for item in response.data["data"]],
+            [False, False, False, True, True],
+        )
+        self.assertEqual(str(localdate_mock.call_args.kwargs["timezone"]), "Asia/Dhaka")
+
+    def test_non_in_progress_plan_keeps_default_order_and_shape(self):
+        response = self.client.get(f"/api/v1/trips/{self.trip.id}/plan/daywise/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual([item["day"] for item in response.data["data"]], [1])
+        self.assertNotIn("is_complete", response.data["data"][0])
 
     def test_returns_empty_daywise_plan_when_trip_has_no_itinerary(self):
         trip = Trip.objects.create(

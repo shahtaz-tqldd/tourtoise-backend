@@ -404,6 +404,7 @@ def _packing_alert_content(schedule):
             {
                 "name": document.document_name,
                 "required_level": document.required_level,
+                "is_packed": document.is_packed,
                 "notes": document.additional_note,
             }
             for document in preparation.required_documents.all()

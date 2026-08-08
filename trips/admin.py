@@ -141,8 +141,8 @@ class TripPreparationPackingItemAdmin(admin.ModelAdmin):
 
 @admin.register(TripRequiredDocumentItem)
 class TripRequiredDocumentItemAdmin(admin.ModelAdmin):
-    list_display = ("preparation", "document_name", "required_level", "sort_order")
-    list_filter = ("required_level",)
+    list_display = ("preparation", "document_name", "required_level", "is_packed", "sort_order")
+    list_filter = ("required_level", "is_packed")
     search_fields = ("preparation__trip__title", "document_name")
     autocomplete_fields = ("preparation",)
 

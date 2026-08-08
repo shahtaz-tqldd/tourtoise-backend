@@ -382,6 +382,7 @@ class TripRequiredDocumentItemSerializer(PreparationItemSortOrderMixin, serializ
             "document",
             "document_url",
             "document_url_public_id",
+            "is_packed",
             "required_level",
             "sort_order",
             "additional_note",
@@ -413,6 +414,7 @@ class TripRequiredDocumentItemSerializer(PreparationItemSortOrderMixin, serializ
             validated_data["document_file_name"] = document.name
             validated_data["document_url"] = upload["url"]
             validated_data["document_url_public_id"] = upload["public_id"]
+            validated_data["is_packed"] = True
         return super().create(validated_data)
 
     def update(self, instance, validated_data):
@@ -422,6 +424,7 @@ class TripRequiredDocumentItemSerializer(PreparationItemSortOrderMixin, serializ
             validated_data["document_file_name"] = document.name
             validated_data["document_url"] = upload["url"]
             validated_data["document_url_public_id"] = upload["public_id"]
+            validated_data["is_packed"] = True
 
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
@@ -693,7 +696,7 @@ class TripDetailsSerializer(serializers.ModelSerializer):
                 },
                 "documents": {
                     "total_count": 0,
-                    "uploaded_count": 0,
+                    "is_packed_count": 0,
                 },
             }
 
@@ -706,7 +709,7 @@ class TripDetailsSerializer(serializers.ModelSerializer):
             },
             "documents": {
                 "total_count": len(required_documents),
-                "uploaded_count": sum(1 for item in required_documents if item.document_url),
+                "is_packed_count": sum(1 for item in required_documents if item.is_packed),
             },
         }
     def get_external_session_id(self, obj):

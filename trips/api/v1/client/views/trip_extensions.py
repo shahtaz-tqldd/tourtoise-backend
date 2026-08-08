@@ -1,9 +1,13 @@
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.generics import GenericAPIView
 from rest_framework.permissions import IsAuthenticated
 
 from app.utils.response import APIResponse
+from trips.choices import TripStatus
 
 from trips.api.v1.client.serializers import (
     TripDaySerializer,
@@ -156,10 +160,32 @@ class TripDayWisePlanListAPIView(UserTripQuerysetMixin, GenericAPIView):
 
     Frontend response:
     - 200 success with itinerary days and their items.
+    - In-progress trips start with the current day in the user's timezone,
+      followed by upcoming days and then completed days.
     """
 
     permission_classes = [IsAuthenticated]
     serializer_class = TripDaySerializer
+
+    def get_trip_local_date(self, trip):
+        timezone_name = getattr(trip.user.profile, "timezone", "UTC")
+        try:
+            trip_timezone = ZoneInfo(timezone_name)
+        except (ZoneInfoNotFoundError, ValueError, TypeError):
+            trip_timezone = ZoneInfo("UTC")
+        return timezone.localdate(timezone=trip_timezone)
+
+    @staticmethod
+    def sort_days_from_current_date(days, current_date):
+        return sorted(
+            days,
+            key=lambda day: (
+                day.date is None,
+                bool(day.date and day.date < current_date),
+                day.date or current_date,
+                day.day,
+            ),
+        )
 
     def get(self, request, *args, **kwargs):
         trip = self.get_trip_by_id()
@@ -168,8 +194,19 @@ class TripDayWisePlanListAPIView(UserTripQuerysetMixin, GenericAPIView):
         except TripItinerary.DoesNotExist:
             days = []
 
+        if trip.status == TripStatus.IN_PROGRESS:
+            current_date = self.get_trip_local_date(trip)
+            days = self.sort_days_from_current_date(list(days), current_date)
+            data = self.get_serializer(days, many=True).data
+            for day, serialized_day in zip(days, data):
+                serialized_day["is_complete"] = bool(
+                    day.date and day.date < current_date
+                )
+        else:
+            data = self.get_serializer(days, many=True).data
+
         return APIResponse.success(
-            data=self.get_serializer(days, many=True).data,
+            data=data,
             message="Trip day-wise plan fetched successfully.",
         )
 

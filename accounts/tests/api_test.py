@@ -6,9 +6,10 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient
 from datetime import timedelta
+from unittest.mock import patch
 
 from accounts.choices import AccountProvider, AccountStatus, CreditTransactionType
-from accounts.models import CreditTransaction, UserProfile
+from accounts.models import CreditTransaction, EmailVerificationOTP, UserProfile
 from accounts.tasks import permanently_delete_expired_accounts
 from notification.models import Notification, NotificationRead, NotificationType
 from trips.choices import AgentMessageSender, TripStatus
@@ -269,46 +270,76 @@ class RegisterApiTests(TestCase):
         self.client = APIClient()
         self.url = "/api/v1/accounts/register/"
 
-    def test_register_allows_multiple_users_without_username(self):
-        first_response = self.client.post(
-            self.url,
-            {
-                "email": "first@example.com",
-                "password": "testpass123",
-                "confirm_password": "testpass123",
-            },
-            format="json",
-        )
-        second_response = self.client.post(
-            self.url,
-            {
-                "email": "second@example.com",
-                "password": "testpass123",
-                "confirm_password": "testpass123",
-            },
-            format="json",
-        )
+    @patch("accounts.services.verification.secrets.randbelow", return_value=1234)
+    def test_register_allows_multiple_users_without_username(self, _randbelow):
+        with patch("accounts.services.verification.send_email_verification_otp.delay"):
+            with self.captureOnCommitCallbacks(execute=True):
+                first_response = self.client.post(
+                    self.url,
+                    {
+                        "email": "first@example.com",
+                        "password": "testpass123",
+                        "confirm_password": "testpass123",
+                    },
+                    format="json",
+                )
+                second_response = self.client.post(
+                    self.url,
+                    {
+                        "email": "second@example.com",
+                        "password": "testpass123",
+                        "confirm_password": "testpass123",
+                    },
+                    format="json",
+                )
 
         self.assertEqual(first_response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(second_response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(User.objects.count(), 2)
         self.assertEqual(UserProfile.objects.filter(username__isnull=True).count(), 2)
-        self.assertEqual(first_response.data["data"]["credit"], 100)
-        self.assertEqual(second_response.data["data"]["credit"], 100)
+        self.assertEqual(first_response.data["data"]["credit"], 0)
+        self.assertEqual(second_response.data["data"]["credit"], 0)
+        self.assertEqual(EmailVerificationOTP.objects.count(), 2)
 
-    def test_register_creates_welcome_notification_with_app_feature_metadata(self):
-        response = self.client.post(
-            self.url,
-            {
-                "email": "welcome@example.com",
-                "password": "testpass123",
-                "confirm_password": "testpass123",
-            },
-            format="json",
-        )
+    @patch("accounts.services.verification.secrets.randbelow", return_value=1234)
+    def test_verify_otp_creates_welcome_notification_and_initial_credits(self, _randbelow):
+        with patch("accounts.services.verification.send_email_verification_otp.delay"):
+            response = self.client.post(
+                self.url,
+                {
+                    "email": "welcome@example.com",
+                    "password": "testpass123",
+                    "confirm_password": "testpass123",
+                },
+                format="json",
+            )
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         user = User.objects.get(email="welcome@example.com")
+        self.assertFalse(user.is_email_verified)
+        self.assertEqual(user.credit.balance, 0)
+        self.assertFalse(CreditTransaction.objects.filter(account=user.credit).exists())
+        self.assertFalse(Notification.objects.filter(recipient=user).exists())
+
+        verify_response = self.client.post(
+            "/api/v1/accounts/verify-otp/",
+            {"email": user.email, "otp": "1234"},
+            format="json",
+        )
+
+        self.assertEqual(verify_response.status_code, status.HTTP_200_OK)
+        self.assertIn("access_token", verify_response.data["data"])
+        self.assertIn("refresh_token", verify_response.data["data"])
+        user.refresh_from_db()
+        user.credit.refresh_from_db()
+        self.assertTrue(user.is_email_verified)
+        self.assertEqual(user.credit.balance, 100)
+        self.assertEqual(
+            user.credit.transactions.get(
+                transaction_type=CreditTransactionType.INITIAL_GRANT
+            ).amount,
+            100,
+        )
         welcome = Notification.objects.get(recipient=user)
         self.assertEqual(welcome.notification_type, NotificationType.GENERAL)
         self.assertEqual(welcome.title, "Welcome to Tourtoise!")
@@ -319,6 +350,48 @@ class RegisterApiTests(TestCase):
         notification_data = notification_response.data["data"][0]
         self.assertEqual(notification_data["metadata"], {"show_app_feature": True})
         self.assertNotIn("payload", notification_data)
+
+    @patch("accounts.services.verification.secrets.randbelow", return_value=1234)
+    def test_verify_otp_rejects_an_invalid_code_without_onboarding(self, _randbelow):
+        with patch("accounts.services.verification.send_email_verification_otp.delay"):
+            self.client.post(
+                self.url,
+                {
+                    "email": "invalid-otp@example.com",
+                    "password": "testpass123",
+                    "confirm_password": "testpass123",
+                },
+                format="json",
+            )
+
+        response = self.client.post(
+            "/api/v1/accounts/verify-otp/",
+            {"email": "invalid-otp@example.com", "otp": "9999"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        user = User.objects.get(email="invalid-otp@example.com")
+        self.assertFalse(user.is_email_verified)
+        self.assertEqual(user.credit.balance, 0)
+        self.assertFalse(Notification.objects.filter(recipient=user).exists())
+
+    def test_password_login_rejects_an_unverified_email(self):
+        user = User.objects.create_user(
+            email="unverified-login@example.com",
+            password="testpass123",
+            _defer_onboarding=True,
+        )
+
+        response = self.client.post(
+            "/api/v1/accounts/login/",
+            {"email": user.email, "password": "testpass123"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["message"], "Email is not verified.")
+        self.assertIn("Email is not verified", str(response.data["errors"]))
 
     def test_user_details_returns_credit_balance(self):
         user = User.objects.create_user(
@@ -352,7 +425,7 @@ class RegisterApiTests(TestCase):
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertFalse(response.data["success"])
-        self.assertEqual(response.data["message"], "Registration failed.")
+        self.assertEqual(response.data["message"], "This username is already taken.")
         self.assertIn("username", response.data["errors"])
         self.assertIn("already taken", str(response.data["errors"]["username"]))
 
@@ -377,6 +450,8 @@ class DeleteAccountApiTests(TestCase):
         self.assertIsNotNone(self.user.deleted_at)
 
     def test_password_login_reactivates_pending_deleted_account(self):
+        self.user.is_email_verified = True
+        self.user.save(update_fields=["is_email_verified"])
         self.user.mark_deleted()
 
         response = self.client.post(

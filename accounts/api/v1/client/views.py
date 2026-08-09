@@ -24,11 +24,29 @@ from accounts.api.v1.client.serializers import (
     ResetPasswordSerializer,
     UserSerializer,
     UserUpdateSerializer,
+    VerifyOTPSerializer,
 )
 from trips.choices import AgentMessageSender, TripStatus
 from trips.models import Trip, TripConversationMessage
 
 User = get_user_model()
+
+
+def first_error_message(errors, fallback="Request failed."):
+    """Return the first human-readable message from nested serializer errors."""
+    if isinstance(errors, dict):
+        for value in errors.values():
+            message = first_error_message(value, fallback="")
+            if message:
+                return message
+        return fallback
+    if isinstance(errors, (list, tuple)):
+        for value in errors:
+            message = first_error_message(value, fallback="")
+            if message:
+                return message
+        return fallback
+    return str(errors) if errors else fallback
 
 
 class CreateNewUserView(CreateAPIView):
@@ -54,7 +72,10 @@ class CreateNewUserView(CreateAPIView):
         if not serializer.is_valid():
             return APIResponse.error(
                 errors=serializer.errors,
-                message="Registration failed.",
+                message=first_error_message(
+                    serializer.errors,
+                    fallback="Registration failed.",
+                ),
                 status=status.HTTP_400_BAD_REQUEST,
             )
         try:
@@ -62,12 +83,15 @@ class CreateNewUserView(CreateAPIView):
         except drf_serializers.ValidationError as exc:
             return APIResponse.error(
                 errors=exc.detail,
-                message="Registration failed.",
+                message=first_error_message(
+                    exc.detail,
+                    fallback="Registration failed.",
+                ),
                 status=status.HTTP_400_BAD_REQUEST,
             )
         return APIResponse.success(
             data=UserSerializer(user).data,
-            message="User created successfully.",
+            message="User created successfully. A verification OTP was sent to the email address.",
             status=status.HTTP_201_CREATED,
         )
 
@@ -91,10 +115,37 @@ class LoginView(GenericAPIView):
 
     def post(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data, context={"request": request})
-        serializer.is_valid(raise_exception=True)
+        if not serializer.is_valid():
+            return APIResponse.error(
+                errors=serializer.errors,
+                message=first_error_message(
+                    serializer.errors,
+                    fallback="Login failed.",
+                ),
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         return APIResponse.success(
             data=serializer.validated_data,
             message="User logged in.",
+        )
+
+
+class VerifyOTPView(GenericAPIView):
+    """Verify a registration OTP and return an access/refresh token pair."""
+
+    serializer_class = VerifyOTPSerializer
+
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        if not serializer.is_valid():
+            return APIResponse.error(
+                errors=serializer.errors,
+                message="OTP verification failed.",
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return APIResponse.success(
+            data=serializer.save(),
+            message="Email verified successfully.",
         )
 
 

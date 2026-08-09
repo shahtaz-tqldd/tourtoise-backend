@@ -13,6 +13,12 @@ from accounts.choices import AccountProvider, AccountStatus
 from accounts.services.firebase import FirebaseVerificationError, verify_firebase_id_token
 from accounts.models import CreditTransaction, UserProfile
 from accounts.services.password import resolve_password_reset_user, send_user_password_reset_email
+from accounts.services.verification import (
+    InvalidVerificationOTP,
+    complete_email_verification,
+    issue_email_verification_otp,
+    verify_email_otp,
+)
 from app.base.validators import validate_bio_word_count, validate_timezone_name
 
 
@@ -407,7 +413,11 @@ class RegisterSerializer(serializers.ModelSerializer):
         try:
             with transaction.atomic():
                 validated_data["provider"] = AccountProvider.PASSWORD
-                user = User.objects.create_user(password=password, **validated_data)
+                user = User.objects.create_user(
+                    password=password,
+                    _defer_onboarding=True,
+                    **validated_data,
+                )
                 if username:
                     profile = get_or_create_profile(user)
                     profile.username = username
@@ -424,7 +434,27 @@ class RegisterSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 {"non_field_errors": "Could not create user. Please try again."}
             ) from exc
+        issue_email_verification_otp(user)
         return user
+
+
+class VerifyOTPSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    otp = serializers.RegexField(
+        regex=r"^\d{4}$",
+        error_messages={"invalid": "OTP must be exactly 4 digits."},
+    )
+
+    def validate(self, attrs):
+        try:
+            user = verify_email_otp(email=attrs["email"], otp=attrs["otp"])
+        except InvalidVerificationOTP as exc:
+            raise serializers.ValidationError({"otp": str(exc)}) from exc
+        attrs["user"] = user
+        return attrs
+
+    def save(self, **kwargs):
+        return build_auth_token_payload(self.validated_data["user"])
 
 
 class LoginSerializer(serializers.Serializer):
@@ -443,6 +473,9 @@ class LoginSerializer(serializers.Serializer):
 
         if not user.is_active:
             raise serializers.ValidationError({"error": "User is disabled."})
+
+        if user.provider == AccountProvider.PASSWORD and not user.is_email_verified:
+            raise serializers.ValidationError({"error": "Email is not verified."})
 
         if user.status == AccountStatus.DEACTIVATED or user.deleted_at:
             user.reactivate()
@@ -517,6 +550,7 @@ class GoogleLoginSerializer(serializers.Serializer):
                         firebase_id_token=self.validated_data["firebase_id_token"],
                         google_access_token=self.validated_data.get("google_access_token") or "",
                         is_email_verified=self.validated_data["email_verified"],
+                        _defer_onboarding=not self.validated_data["email_verified"],
                     )
                     profile = get_or_create_profile(user)
                     profile.username = build_unique_username_from_email(email)
@@ -566,6 +600,8 @@ class GoogleLoginSerializer(serializers.Serializer):
                 {"error": "Could not complete Google login. Please try again."}
             ) from exc
 
+        if user.is_email_verified:
+            user = complete_email_verification(user)
         return build_auth_token_payload(user)
 
 

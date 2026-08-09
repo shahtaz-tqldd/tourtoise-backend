@@ -5,6 +5,7 @@ from django.test import TestCase
 from accounts.choices import AccountStatus, CreditTransactionType
 from accounts.models import CreditTransaction, User
 from accounts.services.credit import CreditService, InsufficientCreditsError
+from accounts.services.verification import complete_email_verification
 
 
 class CreditServiceTests(TestCase):
@@ -18,11 +19,14 @@ class CreditServiceTests(TestCase):
         self.account.save(update_fields=["balance"])
         self.account.transactions.all().delete()
 
-    def test_new_user_receives_initial_100_credits(self):
+    def test_verified_user_receives_initial_100_credits(self):
         new_user = User.objects.create_user(
             email="initial-credits@example.com",
             password="testpass123",
+            _defer_onboarding=True,
         )
+        complete_email_verification(new_user)
+        new_user.credit.refresh_from_db()
 
         self.assertEqual(new_user.credit.balance, 100)
         initial_grant = new_user.credit.transactions.get(

@@ -8,7 +8,7 @@ from django.utils import timezone
 from rest_framework import serializers
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from accounts.models import UserProfile
+from accounts.models import CreditRequest, UserProfile
 from app.utils.cloudinary import delete_image, upload_image
 
 User = get_user_model()
@@ -170,3 +170,49 @@ class AccountListSerializer(serializers.ModelSerializer):
             "created_at",
         )
         read_only_fields = fields
+
+
+class CreditRequestUserSerializer(serializers.ModelSerializer):
+    username = serializers.CharField(source="profile.username", read_only=True)
+
+    class Meta:
+        model = User
+        fields = ("id", "email", "name", "username")
+        read_only_fields = fields
+
+
+class AdminCreditRequestSerializer(serializers.ModelSerializer):
+    user = CreditRequestUserSerializer(read_only=True)
+    reviewed_by = CreditRequestUserSerializer(read_only=True)
+
+    class Meta:
+        model = CreditRequest
+        fields = (
+            "id",
+            "user",
+            "reason",
+            "status",
+            "approved_amount",
+            "reviewed_by",
+            "reviewed_at",
+            "credit_transaction_id",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = fields
+
+
+class ReviewCreditRequestSerializer(serializers.Serializer):
+    action = serializers.ChoiceField(choices=("approve", "reject"))
+    amount = serializers.IntegerField(required=False, min_value=1, max_value=2147483647)
+
+    def validate(self, attrs):
+        if attrs["action"] == "approve" and "amount" not in attrs:
+            raise serializers.ValidationError(
+                {"amount": "Amount is required when approving a credit request."}
+            )
+        if attrs["action"] == "reject" and "amount" in attrs:
+            raise serializers.ValidationError(
+                {"amount": "Amount must not be provided when rejecting a credit request."}
+            )
+        return attrs

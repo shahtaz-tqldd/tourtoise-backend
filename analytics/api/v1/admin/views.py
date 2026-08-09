@@ -61,7 +61,7 @@ class OverviewStatsAPIView(GenericAPIView):
 
         users = User.objects.all()
         trips = Trip.objects.all()
-        journals = Journal.objects.all()
+        journals = Journal.objects.filter(deleted_at__isnull=True)
         ai_usages = AIUsage.objects.all()
 
         return APIResponse.success(

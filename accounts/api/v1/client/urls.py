@@ -14,6 +14,7 @@ auth_apis = [
 profile_apis = [
     path("self-details/", views.UserDetailsView.as_view(), name="user-details"),
     path("credit-history/", views.CreditHistoryView.as_view(), name="credit-history"),
+    path("credit-requests/", views.CreditRequestCreateView.as_view(), name="credit-request-create"),
     path("profile-states/", views.UserProfileStatesView.as_view(), name="user-profile-states"),
     path("public/<slug:username>/", views.PublicUserDetailsView.as_view(), name="public-user-details"),
     path("update/", views.UserDetailsUpdateView.as_view(), name="update-user"),

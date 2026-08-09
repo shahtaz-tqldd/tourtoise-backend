@@ -9,9 +9,9 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from uuid import uuid4
 
 from app.utils.cloudinary import delete_image, upload_image
-from accounts.choices import AccountProvider, AccountStatus
+from accounts.choices import AccountProvider, AccountStatus, CreditRequestStatus
 from accounts.services.firebase import FirebaseVerificationError, verify_firebase_id_token
-from accounts.models import CreditTransaction, UserProfile
+from accounts.models import CreditRequest, CreditTransaction, UserProfile
 from accounts.services.password import resolve_password_reset_user, send_user_password_reset_email
 from accounts.services.verification import (
     InvalidVerificationOTP,
@@ -43,6 +43,32 @@ class CreditTransactionSerializer(serializers.ModelSerializer):
             "created_at",
         )
         read_only_fields = fields
+
+
+class CreditRequestSerializer(serializers.ModelSerializer):
+    reason = serializers.CharField(max_length=2000, allow_blank=False, trim_whitespace=True)
+
+    class Meta:
+        model = CreditRequest
+        fields = ("id", "reason", "status", "approved_amount", "created_at", "reviewed_at")
+        read_only_fields = ("id", "status", "approved_amount", "created_at", "reviewed_at")
+
+    def validate(self, attrs):
+        user = self.context["request"].user
+        if CreditRequest.objects.filter(
+            user=user,
+            status=CreditRequestStatus.PENDING,
+        ).exists():
+            raise serializers.ValidationError(
+                {"detail": "You already have a pending credit request."}
+            )
+        return attrs
+
+    def create(self, validated_data):
+        return CreditRequest.objects.create(
+            user=self.context["request"].user,
+            **validated_data,
+        )
 
 
 def get_or_create_profile(user):

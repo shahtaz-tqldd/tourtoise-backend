@@ -1,4 +1,5 @@
 from django.contrib.auth import get_user_model
+from django.db import IntegrityError, transaction
 from django.db.models import Count, IntegerField, OuterRef, Q, Subquery, Value
 from django.db.models.functions import Coalesce
 from django.shortcuts import get_object_or_404
@@ -16,6 +17,7 @@ from notification.models import Notification, NotificationType
 from accounts.api.v1.client.serializers import (
     ChangePasswordSerializer,
     CreditTransactionSerializer,
+    CreditRequestSerializer,
     GoogleLoginSerializer,
     LoginSerializer,
     PublicUserProfileSerializer,
@@ -26,6 +28,8 @@ from accounts.api.v1.client.serializers import (
     UserUpdateSerializer,
     VerifyOTPSerializer,
 )
+from accounts.choices import CreditRequestStatus
+from accounts.models import CreditRequest
 from trips.choices import AgentMessageSender, TripStatus
 from trips.models import Trip, TripConversationMessage
 
@@ -246,6 +250,36 @@ class CreditHistoryView(GenericAPIView):
         )
 
 
+class CreditRequestCreateView(CreateAPIView):
+    """Create a credit request when the user has no pending request."""
+
+    permission_classes = [IsAuthenticated]
+    serializer_class = CreditRequestSerializer
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        if not serializer.is_valid():
+            return APIResponse.error(
+                errors=serializer.errors,
+                message=first_error_message(serializer.errors),
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            with transaction.atomic():
+                credit_request = serializer.save()
+        except IntegrityError:
+            return APIResponse.error(
+                errors={"detail": ["You already have a pending credit request."]},
+                message="You already have a pending credit request.",
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return APIResponse.success(
+            data=self.get_serializer(credit_request).data,
+            message="Credit request submitted successfully.",
+            status=status.HTTP_201_CREATED,
+        )
+
+
 class UserProfileStatesView(APIView):
     """Return the authenticated user's unread counts and active trip summary."""
 
@@ -316,6 +350,10 @@ class UserProfileStatesView(APIView):
                 "unread_message": unread_messages.count(),
                 "unread_notification": unread_notifications.count(),
                 "in_progress_trip": trip_data,
+                "has_pending_credit_request": CreditRequest.objects.filter(
+                    user=request.user,
+                    status=CreditRequestStatus.PENDING,
+                ).exists(),
             },
             message="User profile states fetched successfully.",
         )

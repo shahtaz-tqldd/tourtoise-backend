@@ -1,4 +1,4 @@
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import BooleanField, Count, Exists, OuterRef, Q, Value
 from django.shortcuts import get_object_or_404
 from rest_framework import status
@@ -11,10 +11,14 @@ from app.utils.response import APIResponse
 from journals.api.v1.client.serializers import (
     JournalCommentSerializer,
     JournalCommentWriteSerializer,
+    ContentReportCreateSerializer,
     JournalListSerializer,
     JournalWriteSerializer,
 )
 from journals.models import (
+    ContentReport,
+    ContentReportStatus,
+    ContentReportTarget,
     Journal,
     JournalComment,
     JournalReaction,
@@ -25,10 +29,14 @@ from journals.models import (
 
 class JournalQuerysetMixin:
     def get_base_queryset(self):
-        queryset = Journal.objects.select_related("author", "author__profile").prefetch_related(
-            "tags", "images"
-        ).annotate(
-            comments_count=Count("comments", distinct=True),
+        queryset = Journal.objects.filter(deleted_at__isnull=True).select_related(
+            "author", "author__profile"
+        ).prefetch_related("tags", "images").annotate(
+            comments_count=Count(
+                "comments",
+                filter=Q(comments__deleted_at__isnull=True),
+                distinct=True,
+            ),
             saves_count=Count("saved_by_users", distinct=True),
             reactions_count=Count("reactions", distinct=True),
         )
@@ -289,9 +297,17 @@ class JournalCommentListCreateAPIView(CommentPaginationMixin, JournalQuerysetMix
 
     def get(self, request, *args, **kwargs):
         journal = self.get_accessible_journal()
-        comments = journal.comments.filter(parent__isnull=True).select_related(
+        comments = journal.comments.filter(
+            parent__isnull=True,
+            deleted_at__isnull=True,
+        ).select_related(
             "author", "author__profile"
-        ).annotate(replies_count=Count("replies")).order_by("created_at")
+        ).annotate(
+            replies_count=Count(
+                "replies",
+                filter=Q(replies__deleted_at__isnull=True),
+            )
+        ).order_by("created_at")
         return self.paginate_comments(comments, "Comments fetched successfully.")
 
     def post(self, request, *args, **kwargs):
@@ -322,13 +338,14 @@ class CommentReplyListCreateAPIView(CommentPaginationMixin, JournalQuerysetMixin
             pk=self.kwargs["comment_id"],
             journal=journal,
             parent__isnull=True,
+            deleted_at__isnull=True,
         )
 
     def get(self, request, *args, **kwargs):
         parent = self.get_parent(self.get_accessible_journal())
-        replies = parent.replies.select_related("author", "author__profile").annotate(
-            replies_count=Value(0)
-        ).order_by("created_at")
+        replies = parent.replies.filter(deleted_at__isnull=True).select_related(
+            "author", "author__profile"
+        ).annotate(replies_count=Value(0)).order_by("created_at")
         return self.paginate_comments(replies, "Replies fetched successfully.")
 
     def post(self, request, *args, **kwargs):
@@ -353,9 +370,13 @@ class CommentDeleteAPIView(GenericAPIView):
 
     def delete(self, request, *args, **kwargs):
         comment = get_object_or_404(
-            JournalComment,
+            JournalComment.objects.filter(
+                Q(parent__isnull=True) | Q(parent__deleted_at__isnull=True)
+            ),
             pk=self.kwargs["comment_id"],
             author=request.user,
+            deleted_at__isnull=True,
+            journal__deleted_at__isnull=True,
         )
         comment.delete()
         return APIResponse.success(message="Comment deleted successfully.")
@@ -373,11 +394,18 @@ class CommentUpdateAPIView(GenericAPIView):
 
     def _update(self, request, partial):
         comment = get_object_or_404(
-            JournalComment.objects.select_related("author", "author__profile").annotate(
-                replies_count=Count("replies")
+            JournalComment.objects.filter(
+                Q(parent__isnull=True) | Q(parent__deleted_at__isnull=True)
+            ).select_related("author", "author__profile").annotate(
+                replies_count=Count(
+                    "replies",
+                    filter=Q(replies__deleted_at__isnull=True),
+                )
             ),
             pk=self.kwargs["comment_id"],
             author=request.user,
+            deleted_at__isnull=True,
+            journal__deleted_at__isnull=True,
         )
         serializer = self.get_serializer(
             comment,
@@ -390,4 +418,88 @@ class CommentUpdateAPIView(GenericAPIView):
         return APIResponse.success(
             data=JournalCommentSerializer(comment).data,
             message="Comment updated successfully.",
+        )
+
+
+class JournalReportCreateAPIView(JournalQuerysetMixin, GenericAPIView):
+    permission_classes = [IsAuthenticated]
+    serializer_class = ContentReportCreateSerializer
+
+    def post(self, request, *args, **kwargs):
+        journal = self.get_accessible_journal()
+        if journal.author_id == request.user.id:
+            return APIResponse.error(
+                errors={"detail": ["You cannot report your own journal."]},
+                message="You cannot report your own journal.",
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return self._create_report(
+            request,
+            target_type=ContentReportTarget.JOURNAL,
+            journal=journal,
+        )
+
+    def _create_report(self, request, **target):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        duplicate_filter = {
+            "reporter": request.user,
+            "status": ContentReportStatus.PENDING,
+            **target,
+        }
+        if ContentReport.objects.filter(**duplicate_filter).exists():
+            return APIResponse.error(
+                errors={"detail": ["You already have a pending report for this content."]},
+                message="You already have a pending report for this content.",
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            with transaction.atomic():
+                report = serializer.save(
+                    reporter=request.user,
+                    created_by=request.user,
+                    updated_by=request.user,
+                    **target,
+                )
+        except IntegrityError:
+            return APIResponse.error(
+                errors={"detail": ["You already have a pending report for this content."]},
+                message="You already have a pending report for this content.",
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return APIResponse.success(
+            data=self.get_serializer(report).data,
+            message="Report submitted successfully.",
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class CommentReportCreateAPIView(JournalReportCreateAPIView):
+    def post(self, request, *args, **kwargs):
+        comment = get_object_or_404(
+            JournalComment.objects.filter(
+                Q(parent__isnull=True) | Q(parent__deleted_at__isnull=True)
+            ).select_related("author", "journal"),
+            pk=self.kwargs["comment_id"],
+            deleted_at__isnull=True,
+            journal__deleted_at__isnull=True,
+        )
+        if (
+            comment.journal.visibility != JournalVisibility.PUBLIC
+            and comment.journal.author_id != request.user.id
+        ):
+            return APIResponse.error(
+                message="Not found.",
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        if comment.author_id == request.user.id:
+            return APIResponse.error(
+                errors={"detail": ["You cannot report your own comment."]},
+                message="You cannot report your own comment.",
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return self._create_report(
+            request,
+            target_type=ContentReportTarget.COMMENT,
+            comment=comment,
         )

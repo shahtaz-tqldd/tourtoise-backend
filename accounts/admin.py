@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 
-from accounts.models import User, UserProfile, UserCredit
+from accounts.models import EmailVerificationOTP, User, UserProfile, UserCredit
 
 
 @admin.register(User)
@@ -67,5 +67,11 @@ class UserProfileAdmin(admin.ModelAdmin):
 class UserCreditAdmin(admin.ModelAdmin):
     list_display = ("user", "balance", "created_at")
 
+
+@admin.register(EmailVerificationOTP)
+class EmailVerificationOTPAdmin(admin.ModelAdmin):
+    list_display = ("user", "expires_at", "created_at")
+    search_fields = ("user__email",)
+    readonly_fields = ("code_hash", "created_at", "updated_at")
 
 

@@ -6,6 +6,8 @@ from django.test import TestCase
 from rest_framework import status
 from rest_framework.test import APIClient
 
+from accounts.choices import CreditRequestStatus, CreditTransactionType
+from accounts.models import CreditRequest
 from chat.choices import ChatMessageSender
 from chat.models import ChatMessage, ChatSession
 from journals.models import Journal
@@ -223,3 +225,119 @@ class UpdateAdminApiTests(TestCase):
 
         self.assertEqual(info_response.status_code, status.HTTP_403_FORBIDDEN)
         self.assertEqual(password_response.status_code, status.HTTP_403_FORBIDDEN)
+
+
+class AdminCreditRequestApiTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.admin = User.objects.create_user(
+            email="credit-admin@example.com",
+            password="testpass123",
+            is_staff=True,
+        )
+        self.user = User.objects.create_user(
+            email="credit-applicant@example.com",
+            password="testpass123",
+        )
+        self.other_user = User.objects.create_user(
+            email="other-credit-applicant@example.com",
+            password="testpass123",
+        )
+        self.list_url = "/api/v1/admin/accounts/credit-requests/"
+
+    def test_admin_can_list_all_requests_and_filter_by_status(self):
+        pending = CreditRequest.objects.create(user=self.user, reason="Pending reason")
+        CreditRequest.objects.create(
+            user=self.other_user,
+            reason="Rejected reason",
+            status=CreditRequestStatus.REJECTED,
+            reviewed_by=self.admin,
+        )
+        self.client.force_authenticate(user=self.admin)
+
+        all_response = self.client.get(self.list_url)
+        pending_response = self.client.get(self.list_url, {"status": "pending"})
+
+        self.assertEqual(all_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(all_response.data["meta"]["count"], 2)
+        self.assertEqual(pending_response.data["meta"]["count"], 1)
+        self.assertEqual(pending_response.data["data"][0]["id"], str(pending.id))
+        self.assertEqual(pending_response.data["data"][0]["user"]["email"], self.user.email)
+
+    def test_admin_approval_adds_credits_and_ledger_transaction(self):
+        credit_request = CreditRequest.objects.create(user=self.user, reason="Plan more trips")
+        starting_balance = self.user.credit.balance
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.patch(
+            f"{self.list_url}{credit_request.id}/review/",
+            {"action": "approve", "amount": 45},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        credit_request.refresh_from_db()
+        self.user.credit.refresh_from_db()
+        self.assertEqual(credit_request.status, CreditRequestStatus.APPROVED)
+        self.assertEqual(credit_request.approved_amount, 45)
+        self.assertEqual(credit_request.reviewed_by, self.admin)
+        self.assertIsNotNone(credit_request.reviewed_at)
+        self.assertEqual(self.user.credit.balance, starting_balance + 45)
+        ledger_entry = credit_request.credit_transaction
+        self.assertEqual(ledger_entry.transaction_type, CreditTransactionType.ADMIN_ADJUSTMENT)
+        self.assertEqual(ledger_entry.amount, 45)
+        self.assertEqual(ledger_entry.metadata["credit_request_id"], str(credit_request.id))
+
+        repeated = self.client.patch(
+            f"{self.list_url}{credit_request.id}/review/",
+            {"action": "approve", "amount": 45},
+            format="json",
+        )
+        self.assertEqual(repeated.status_code, status.HTTP_400_BAD_REQUEST)
+        self.user.credit.refresh_from_db()
+        self.assertEqual(self.user.credit.balance, starting_balance + 45)
+
+    def test_admin_can_reject_without_changing_balance(self):
+        credit_request = CreditRequest.objects.create(user=self.user, reason="Not enough")
+        starting_balance = self.user.credit.balance
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.patch(
+            f"{self.list_url}{credit_request.id}/review/",
+            {"action": "reject"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        credit_request.refresh_from_db()
+        self.user.credit.refresh_from_db()
+        self.assertEqual(credit_request.status, CreditRequestStatus.REJECTED)
+        self.assertIsNone(credit_request.approved_amount)
+        self.assertEqual(self.user.credit.balance, starting_balance)
+
+    def test_approval_requires_positive_amount_and_regular_users_are_forbidden(self):
+        credit_request = CreditRequest.objects.create(user=self.user, reason="Credits")
+        self.client.force_authenticate(user=self.admin)
+
+        missing_amount = self.client.patch(
+            f"{self.list_url}{credit_request.id}/review/",
+            {"action": "approve"},
+            format="json",
+        )
+        zero_amount = self.client.patch(
+            f"{self.list_url}{credit_request.id}/review/",
+            {"action": "approve", "amount": 0},
+            format="json",
+        )
+        self.client.force_authenticate(user=self.user)
+        forbidden_list = self.client.get(self.list_url)
+        forbidden_review = self.client.patch(
+            f"{self.list_url}{credit_request.id}/review/",
+            {"action": "reject"},
+            format="json",
+        )
+
+        self.assertEqual(missing_amount.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(zero_amount.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(forbidden_list.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(forbidden_review.status_code, status.HTTP_403_FORBIDDEN)

@@ -9,7 +9,7 @@ from datetime import timedelta
 from unittest.mock import patch
 
 from accounts.choices import AccountProvider, AccountStatus, CreditTransactionType
-from accounts.models import CreditTransaction, EmailVerificationOTP, UserProfile
+from accounts.models import CreditRequest, CreditTransaction, EmailVerificationOTP, UserProfile
 from accounts.tasks import permanently_delete_expired_accounts
 from notification.models import Notification, NotificationRead, NotificationType
 from trips.choices import AgentMessageSender, TripStatus
@@ -137,6 +137,50 @@ class CreditHistoryApiTests(TestCase):
         self.assertEqual(second_page.data["data"][0]["metadata"], {"trip_id": "older-trip"})
 
 
+class CreditRequestApiTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            email="credit-request@example.com",
+            password="testpass123",
+        )
+        self.url = "/api/v1/accounts/credit-requests/"
+
+    def test_requires_authentication(self):
+        response = self.client.post(self.url, {"reason": "I need more credits."})
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_user_can_create_one_pending_request(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.post(
+            self.url,
+            {"reason": "I need credits to plan another trip."},
+            format="json",
+        )
+        duplicate = self.client.post(
+            self.url,
+            {"reason": "Please add some more."},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["data"]["status"], "pending")
+        self.assertEqual(response.data["data"]["reason"], "I need credits to plan another trip.")
+        self.assertEqual(duplicate.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(CreditRequest.objects.filter(user=self.user).count(), 1)
+
+    def test_reason_is_required_and_cannot_be_blank(self):
+        self.client.force_authenticate(user=self.user)
+
+        missing = self.client.post(self.url, {}, format="json")
+        blank = self.client.post(self.url, {"reason": "   "}, format="json")
+
+        self.assertEqual(missing.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(blank.status_code, status.HTTP_400_BAD_REQUEST)
+
+
 class UserProfileStatesApiTests(TestCase):
     def setUp(self):
         self.client = APIClient()
@@ -168,8 +212,17 @@ class UserProfileStatesApiTests(TestCase):
                 "unread_message": 0,
                 "unread_notification": 1,
                 "in_progress_trip": None,
+                "has_pending_credit_request": False,
             },
         )
+
+    def test_profile_states_reports_pending_credit_request(self):
+        CreditRequest.objects.create(user=self.user, reason="More trip planning")
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data["data"]["has_pending_credit_request"])
 
     def test_profile_states_returns_unread_counts_and_in_progress_trip(self):
         today = timezone.localdate()

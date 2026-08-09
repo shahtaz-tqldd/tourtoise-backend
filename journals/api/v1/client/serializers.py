@@ -3,7 +3,7 @@ from rest_framework import serializers
 
 from accounts.services.user_profile import increment_user_journal_count
 from app.utils.cloudinary import upload_image
-from journals.models import Journal, JournalComment, JournalImage, JournalTag
+from journals.models import ContentReport, Journal, JournalComment, JournalImage, JournalTag
 
 
 class JournalAuthorSerializer(serializers.Serializer):
@@ -233,3 +233,12 @@ class JournalCommentWriteSerializer(serializers.Serializer):
         instance.updated_by = request.user
         instance.save()
         return instance
+
+
+class ContentReportCreateSerializer(serializers.ModelSerializer):
+    reason = serializers.CharField(max_length=2000, allow_blank=False, trim_whitespace=True)
+
+    class Meta:
+        model = ContentReport
+        fields = ("id", "target_type", "reason", "status", "created_at")
+        read_only_fields = ("id", "target_type", "status", "created_at")

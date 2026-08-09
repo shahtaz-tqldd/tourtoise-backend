@@ -32,3 +32,9 @@ class CreditTransactionType(models.TextChoices):
     AGENT_CHAT = "agent_chat", "Agent chat"
     REFUND = "refund", "Refund"
     ADMIN_ADJUSTMENT = "admin_adjustment", "Admin adjustment"
+
+
+class CreditRequestStatus(models.TextChoices):
+    PENDING = "pending", _("Pending")
+    APPROVED = "approved", _("Approved")
+    REJECTED = "rejected", _("Rejected")

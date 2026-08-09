@@ -7,7 +7,12 @@ from django.db import models, transaction
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
-from accounts.choices import AccountProvider, AccountStatus, CreditTransactionType
+from accounts.choices import (
+    AccountProvider,
+    AccountStatus,
+    CreditRequestStatus,
+    CreditTransactionType,
+)
 from app.base.validators import validate_bio_word_count, validate_timezone_name
 from app.base.models import BaseMinModel
 
@@ -246,3 +251,46 @@ class CreditTransaction(models.Model):
 
     def __str__(self):
         return f"{self.account.user.email} - {self.transaction_type} {self.amount}"
+
+
+class CreditRequest(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="credit_requests")
+    reason = models.TextField()
+    status = models.CharField(
+        max_length=10,
+        choices=CreditRequestStatus.choices,
+        default=CreditRequestStatus.PENDING,
+    )
+    approved_amount = models.PositiveIntegerField(null=True, blank=True)
+    reviewed_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        related_name="reviewed_credit_requests",
+        null=True,
+        blank=True,
+    )
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    credit_transaction = models.OneToOneField(
+        CreditTransaction,
+        on_delete=models.SET_NULL,
+        related_name="credit_request",
+        null=True,
+        blank=True,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user"],
+                condition=models.Q(status=CreditRequestStatus.PENDING),
+                name="unique_pending_credit_request_per_user",
+            ),
+        ]
+        indexes = [models.Index(fields=["status", "-created_at"])]
+
+    def __str__(self):
+        return f"{self.user.email} - {self.status}"

@@ -1,5 +1,9 @@
+from django.db import transaction
 from django.db.models import BigIntegerField, Count, OuterRef, Q, Subquery, Value
 from django.db.models.functions import Coalesce
+from django.shortcuts import get_object_or_404
+from django.utils import timezone
+from rest_framework import status
 from rest_framework.generics import GenericAPIView
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
@@ -8,13 +12,17 @@ from app.base.pagination import CustomPagination
 from app.utils.response import APIResponse
 from accounts.api.v1.admin.serializers import (
     AccountListSerializer,
+    AdminCreditRequestSerializer,
     AdminDetailsSerializer,
     AdminLoginSerializer,
     UpdateAdminInfoSerializer,
     UpdateAdminPasswordSerializer,
+    ReviewCreditRequestSerializer,
 )
-from accounts.models import User, UserCredit
+from accounts.choices import CreditRequestStatus, CreditTransactionType
+from accounts.models import CreditRequest, User, UserCredit
 from accounts.permissions import IsAdmin, IsSuperAdmin
+from accounts.services.credit import CreditService
 from chat.models import ChatMessage
 from journals.models import Journal
 from trips.models import Trip, TripConversationMessage
@@ -174,7 +182,10 @@ class AccountListAPIView(GenericAPIView):
                     output_field=integer_output,
                 ),
                 journal_count=Coalesce(
-                    _related_count(Journal.objects.all(), user_field="author_id"),
+                        _related_count(
+                            Journal.objects.filter(deleted_at__isnull=True),
+                            user_field="author_id",
+                        ),
                     Value(0),
                     output_field=integer_output,
                 ),
@@ -240,3 +251,96 @@ class AccountListAPIView(GenericAPIView):
         if normalized in {"false", "0", "no"}:
             return False
         return None
+
+
+class AdminCreditRequestListAPIView(GenericAPIView):
+    """Return all credit requests, newest first, with optional status filtering."""
+
+    permission_classes = [IsAuthenticated, IsAdmin]
+    serializer_class = AdminCreditRequestSerializer
+    pagination_class = CustomPagination
+
+    def get(self, request, *args, **kwargs):
+        queryset = CreditRequest.objects.select_related(
+            "user__profile", "reviewed_by__profile"
+        )
+        request_status = request.query_params.get("status")
+        if request_status:
+            valid_statuses = {choice.value for choice in CreditRequestStatus}
+            if request_status not in valid_statuses:
+                return APIResponse.error(
+                    errors={"status": ["Invalid credit request status."]},
+                    message="Invalid credit request status.",
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            queryset = queryset.filter(status=request_status)
+
+        paginator = self.pagination_class()
+        page = paginator.paginate_queryset(queryset, request, view=self)
+        return APIResponse.success(
+            data=self.get_serializer(page, many=True).data,
+            meta={
+                "count": paginator.page.paginator.count,
+                "page": paginator.page.number,
+                "page_size": paginator.get_page_size(request),
+                "num_pages": paginator.page.paginator.num_pages,
+                "next": paginator.get_next_link(),
+                "previous": paginator.get_previous_link(),
+            },
+            message="Credit requests fetched successfully.",
+        )
+
+
+class AdminCreditRequestReviewAPIView(GenericAPIView):
+    """Approve a pending request with credits, or reject it."""
+
+    permission_classes = [IsAuthenticated, IsAdmin]
+    serializer_class = ReviewCreditRequestSerializer
+
+    def patch(self, request, pk, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        with transaction.atomic():
+            credit_request = get_object_or_404(
+                CreditRequest.objects.select_for_update().select_related(
+                    "user__profile", "reviewed_by__profile"
+                ),
+                pk=pk,
+            )
+            if credit_request.status != CreditRequestStatus.PENDING:
+                return APIResponse.error(
+                    errors={"detail": ["This credit request has already been reviewed."]},
+                    message="This credit request has already been reviewed.",
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            action = serializer.validated_data["action"]
+            credit_request.status = (
+                CreditRequestStatus.APPROVED
+                if action == "approve"
+                else CreditRequestStatus.REJECTED
+            )
+            credit_request.reviewed_by = request.user
+            credit_request.reviewed_at = timezone.now()
+            update_fields = ["status", "reviewed_by", "reviewed_at", "updated_at"]
+
+            if action == "approve":
+                amount = serializer.validated_data["amount"]
+                credit_transaction = CreditService.add_credits(
+                    user=credit_request.user,
+                    amount=amount,
+                    transaction_type=CreditTransactionType.ADMIN_ADJUSTMENT,
+                    description="Approved credit request",
+                    metadata={"credit_request_id": str(credit_request.id)},
+                )
+                credit_request.approved_amount = amount
+                credit_request.credit_transaction = credit_transaction
+                update_fields.extend(["approved_amount", "credit_transaction"])
+
+            credit_request.save(update_fields=update_fields)
+
+        return APIResponse.success(
+            data=AdminCreditRequestSerializer(credit_request).data,
+            message=f"Credit request {credit_request.status} successfully.",
+        )

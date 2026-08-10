@@ -84,7 +84,7 @@ class AdminContentReportReviewAPIView(GenericAPIView):
 
         with transaction.atomic():
             report = get_object_or_404(
-                ContentReport.objects.select_for_update().select_related(
+                ContentReport.objects.select_for_update(of=("self",)).select_related(
                     "reporter__profile",
                     "reviewed_by__profile",
                     "journal__author__profile",

@@ -303,7 +303,7 @@ class AdminCreditRequestReviewAPIView(GenericAPIView):
 
         with transaction.atomic():
             credit_request = get_object_or_404(
-                CreditRequest.objects.select_for_update().select_related(
+                CreditRequest.objects.select_for_update(of=("self",)).select_related(
                     "user__profile", "reviewed_by__profile"
                 ),
                 pk=pk,

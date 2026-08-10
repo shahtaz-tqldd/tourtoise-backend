@@ -546,6 +546,7 @@ class AdminDestinationWriteSerializer(serializers.ModelSerializer):
     local_languages = FlexibleJSONField(required=False)
     best_travel_months = FlexibleJSONField(required=False)
     notes = FlexibleJSONField(required=False)
+    picking_reasons = FlexibleJSONField(required=False)
     remove_image_urls = FlexibleJSONField(required=False, write_only=True)
     removed_gallery_image_ids = FlexibleJSONField(required=False, write_only=True)
     clear_cover_image = serializers.BooleanField(required=False, write_only=True, default=False)
@@ -584,6 +585,7 @@ class AdminDestinationWriteSerializer(serializers.ModelSerializer):
             "getting_around",
             "visa_notes",
             "notes",
+            "picking_reasons",
             "status",
             "gallery_images",
             "remove_image_urls",
@@ -682,6 +684,13 @@ class AdminDestinationWriteSerializer(serializers.ModelSerializer):
             return []
         if not isinstance(value, list):
             raise serializers.ValidationError("Send notes as a JSON array.")
+        return value
+
+    def validate_picking_reasons(self, value):
+        if value in (None, ""):
+            return []
+        if not isinstance(value, list):
+            raise serializers.ValidationError("Send pickign reasons as a JSON array.")
         return value
 
     def validate_remove_image_urls(self, value):
@@ -1051,6 +1060,7 @@ BULK_DESTINATION_TEMPLATE = {
             "getting_around",
             "visa_notes",
             "notes",
+            "picking_reasons",
             "status",
         ],
         "attractions": [
@@ -1138,6 +1148,7 @@ BULK_DESTINATION_TEMPLATE = {
         "getting_around",
         "visa_notes",
         "notes",
+        "picking_reasons",
         "status",
         "attraction_type",
         "how_to_reach",
@@ -1187,6 +1198,7 @@ BULK_DESTINATION_TEMPLATE = {
             "getting_around": "Taxi and local buses are common.",
             "visa_notes": "Check current visa policy before travel.",
             "notes": "Dress modestly at temples;Carry cash",
+            "picking_reasons": "Great for island hopping;Beach escaping",
             "status": "draft",
         },
         "attractions": {
@@ -1230,6 +1242,13 @@ BULK_DESTINATION_TEMPLATE = {
         "meal_type": [choice.value for choice in MealType],
     },
     "notes": [
+        "XLSX uploads should use four sheet names: destinations, attractions, activities, cuisines.",
+        "CSV uploads should use one combined sheet with record_type values: destination, attraction, activity, cuisine.",
+        "destination_key is required and links attraction/activity/cuisine rows to a destination row.",
+        "Use semicolon-separated values for list fields: image_urls, image_captions, tags, local_languages, best_travel_months, notes, picking_reasons.",
+        "tags format is Name:category;Name:category, for example Lake:experience;Adventure:activity.",
+    ],
+    "picking_reasons": [
         "XLSX uploads should use four sheet names: destinations, attractions, activities, cuisines.",
         "CSV uploads should use one combined sheet with record_type values: destination, attraction, activity, cuisine.",
         "destination_key is required and links attraction/activity/cuisine rows to a destination row.",
@@ -1669,6 +1688,7 @@ class AdminDestinationBulkUploadSerializer(serializers.Serializer):
                     "getting_around": row.get("getting_around", ""),
                     "visa_notes": row.get("visa_notes", ""),
                     "notes": self._string_list(row.get("notes")),
+                    "picking_reasons": self._string_list(row.get("picking_reasons")),
                     "status": self._choice(row.get("status"), Status, "status", index, default=Status.DRAFT),
                 }
             )

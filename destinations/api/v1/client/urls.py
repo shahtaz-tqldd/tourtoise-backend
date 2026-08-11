@@ -5,6 +5,7 @@ from destinations.api.v1.client import views
 
 urlpatterns = [
     path("list/", views.ClientDestinationListAPIView.as_view(), name="public-destination-list"),
+    path("tags/", views.ClientDestinationTagListAPIView.as_view(), name="public-destination-tag-list"),
     path("save/list/", views.ClientSavedDestinationListAPIView.as_view(), name="public-saved-destination-list"),
     path("<slug:destination_slug>/save/", views.ClientDestinationSaveAPIView.as_view(), name="public-destination-save"),
     path("<slug:slug>/attractions/", views.ClientDestinationAttractionListAPIView.as_view(), name="public-destination-attraction-list"),

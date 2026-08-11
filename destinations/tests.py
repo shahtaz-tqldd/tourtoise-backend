@@ -335,6 +335,48 @@ class ClientDestinationListSerializerTests(TestCase):
         )
 
 
+class ClientDestinationTagListApiTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.beach = DestinationTag.objects.create(name="Beach Escape", category="experience")
+        self.diving = DestinationTag.objects.create(name="Scuba Diving", category="activity")
+        self.family = DestinationTag.objects.create(name="Family Friendly", category="vibe")
+
+    def test_returns_all_tags_without_pagination(self):
+        response = self.client.get("/api/v1/destinations/tags/", {"page_size": 1})
+
+        self.assertEqual(response.status_code, drf_status.HTTP_200_OK)
+        self.assertNotIn("meta", response.data)
+        self.assertEqual(len(response.data["data"]), 3)
+        self.assertEqual(
+            [tag["name"] for tag in response.data["data"]],
+            ["Beach Escape", "Family Friendly", "Scuba Diving"],
+        )
+        self.assertEqual(
+            set(response.data["data"][0]),
+            {"id", "name", "slug", "category"},
+        )
+
+    def test_searches_name_and_category(self):
+        name_response = self.client.get("/api/v1/destinations/tags/", {"search": "scuba"})
+        category_response = self.client.get(
+            "/api/v1/destinations/tags/",
+            {"search": "vibe"},
+        )
+
+        self.assertEqual([tag["id"] for tag in name_response.data["data"]], [str(self.diving.id)])
+        self.assertEqual([tag["id"] for tag in category_response.data["data"]], [str(self.family.id)])
+
+    def test_filters_by_name_and_category(self):
+        response = self.client.get(
+            "/api/v1/destinations/tags/",
+            {"name": "escape", "category": "experience,activity"},
+        )
+
+        self.assertEqual(response.status_code, drf_status.HTTP_200_OK)
+        self.assertEqual([tag["id"] for tag in response.data["data"]], [str(self.beach.id)])
+
+
 class ClientDestinationDetailSerializerTests(TestCase):
     def test_returns_child_lists_with_images_without_ids(self):
         destination = Destination.objects.create(

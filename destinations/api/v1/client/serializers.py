@@ -23,6 +23,13 @@ class DestinationTagSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+class DestinationTagListSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DestinationTag
+        fields = ("id", "name", "category")
+        read_only_fields = fields
+
+
 class DestinationImageSerializer(serializers.ModelSerializer):
     class Meta:
         model = DestinationImage

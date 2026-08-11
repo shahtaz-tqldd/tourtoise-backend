@@ -167,6 +167,15 @@ class ChildImageUploadMixin:
         return [str(item).strip() for item in value if str(item).strip()]
 
 
+class TrainingStatusSerializerMixin:
+    def get_is_trained_completed(self, instance):
+        trained_source_ids = self.context.get("trained_source_ids", set())
+        return (
+            instance.pk in trained_source_ids
+            or str(instance.pk) in trained_source_ids
+        )
+
+
 class AdminAttractionSerializer(ChildImageUploadMixin, serializers.ModelSerializer):
     image_serializer_class = AttractionImageSerializer
     image_model = AttractionImage
@@ -440,9 +449,43 @@ class AdminCuisineSerializer(ChildImageUploadMixin, serializers.ModelSerializer)
             )
 
 
-class AdminDestinationListSerializer(serializers.ModelSerializer):
+class AdminAttractionListSerializer(TrainingStatusSerializerMixin, AdminAttractionSerializer):
+    is_trained_completed = serializers.SerializerMethodField()
+
+    class Meta(AdminAttractionSerializer.Meta):
+        fields = (*AdminAttractionSerializer.Meta.fields, "is_trained_completed")
+        read_only_fields = (
+            *AdminAttractionSerializer.Meta.read_only_fields,
+            "is_trained_completed",
+        )
+
+
+class AdminActivityListSerializer(TrainingStatusSerializerMixin, AdminActivitySerializer):
+    is_trained_completed = serializers.SerializerMethodField()
+
+    class Meta(AdminActivitySerializer.Meta):
+        fields = (*AdminActivitySerializer.Meta.fields, "is_trained_completed")
+        read_only_fields = (
+            *AdminActivitySerializer.Meta.read_only_fields,
+            "is_trained_completed",
+        )
+
+
+class AdminCuisineListSerializer(TrainingStatusSerializerMixin, AdminCuisineSerializer):
+    is_trained_completed = serializers.SerializerMethodField()
+
+    class Meta(AdminCuisineSerializer.Meta):
+        fields = (*AdminCuisineSerializer.Meta.fields, "is_trained_completed")
+        read_only_fields = (
+            *AdminCuisineSerializer.Meta.read_only_fields,
+            "is_trained_completed",
+        )
+
+
+class AdminDestinationListSerializer(TrainingStatusSerializerMixin, serializers.ModelSerializer):
     tags = DestinationTagSerializer(many=True, read_only=True)
     images = DestinationImageSerializer(many=True, read_only=True)
+    is_trained_completed = serializers.SerializerMethodField()
 
     class Meta:
         model = Destination
@@ -463,6 +506,7 @@ class AdminDestinationListSerializer(serializers.ModelSerializer):
             "status",
             "tags",
             "images",
+            "is_trained_completed",
             "created_at",
             "updated_at",
         )

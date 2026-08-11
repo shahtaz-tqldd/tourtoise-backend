@@ -50,12 +50,8 @@ def _normalize_vector_operations(operations):
         for operation in operations
         if operation["action"] == "index_tree"
     }
-    deleted_destination_ids = {
-        operation["destination_id"]
-        for operation in operations
-        if operation["action"] == "delete_tree"
-    }
-
+    # Keep exact child deletes alongside a destination tree delete. The tree
+    # lookup is metadata-based; source-id deletes also clean up stale metadata.
     normalized = []
     seen = set()
 
@@ -66,8 +62,6 @@ def _normalize_vector_operations(operations):
         destination_id = operation["destination_id"]
 
         if action == "index" and destination_id in destination_tree_ids:
-            continue
-        if action == "delete" and destination_id in deleted_destination_ids:
             continue
 
         operation_key = (action, source_type, source_id, destination_id)

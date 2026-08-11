@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import Iterable
 
 from django.db import transaction
+from django.db.models import Q
 from pgvector.django import CosineDistance
 
 from destinations.models import Activity, Attraction, Cuisine, Destination
@@ -24,7 +25,26 @@ class DestinationVectorService:
     db_alias = "vector"
 
     def __init__(self, *, embedding_service=None):
-        self.embedding_service = embedding_service or GeminiEmbeddingService()
+        self.embedding_service = embedding_service
+
+    def _get_embedding_service(self):
+        if self.embedding_service is None:
+            self.embedding_service = GeminiEmbeddingService()
+        return self.embedding_service
+
+    @classmethod
+    def get_indexed_source_ids(cls, source_type, source_ids):
+        source_ids = list(source_ids)
+        if not source_ids:
+            return set()
+
+        return set(
+            VectorDocument.objects.using(cls.db_alias)
+            .filter(source_type=source_type, source_id__in=source_ids)
+            .order_by()
+            .values_list("source_id", flat=True)
+            .distinct()
+        )
 
     def index_destination(self, destination):
         destination = self._get_destination(destination)
@@ -70,14 +90,21 @@ class DestinationVectorService:
         )
 
     def remove_destination_tree(self, destination_id):
+        """Remove a destination and every child document associated with it."""
         return (
             VectorDocument.objects.using(self.db_alias)
-            .filter(metadata__destination_id=str(destination_id))
+            .filter(
+                Q(metadata__destination_id=str(destination_id))
+                | Q(
+                    source_type=VectorDocument.SourceType.DESTINATION,
+                    source_id=destination_id,
+                )
+            )
             .delete()
         )
 
     def search(self, query, *, limit=10, source_types=None, destination_id=None):
-        query_embedding = self.embedding_service.embed_query(query)
+        query_embedding = self._get_embedding_service().embed_query(query)
         queryset = VectorDocument.objects.using(self.db_alias).annotate(
             distance=CosineDistance("embedding", query_embedding)
         )
@@ -125,7 +152,7 @@ class DestinationVectorService:
                 source_id=instance.id,
                 content=chunk,
                 metadata=chunk_metadata,
-                embedding=self.embedding_service.embed_document(chunk),
+                embedding=self._get_embedding_service().embed_document(chunk),
             )
 
     def _build_metadata(self, instance, source_type):

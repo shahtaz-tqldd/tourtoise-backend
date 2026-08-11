@@ -7,7 +7,7 @@ from google.adk.tools import FunctionTool
 
 from app.services.vector_store import DestinationVectorService
 from destinations.choices import Status
-from destinations.models import Destination, SavedDestination
+from destinations.models import Destination
 
 
 logger = logging.getLogger(__name__)
@@ -26,7 +26,6 @@ def discovery_tools(user):
         destination_type: Optional[str] = None,
         budget_tier: Optional[str] = None,
         duration_days: Optional[int] = None,
-        exclude_previously_visited: bool = True,
         limit: int = 10,
     ):
         """Precisely filter published destinations using validated relational data.
@@ -37,7 +36,6 @@ def discovery_tools(user):
             destination_type: Such as city, beach, mountain, cultural, nature, island, or village.
             budget_tier: One of budget, mid, or premium.
             duration_days: Available trip duration in days.
-            exclude_previously_visited: Exclude destinations/countries found in prior travel data.
             limit: Maximum results, capped at 20.
         """
         return await sync_to_async(_search_destinations, thread_sensitive=True)(
@@ -47,7 +45,6 @@ def discovery_tools(user):
             destination_type=destination_type,
             budget_tier=budget_tier,
             duration_days=duration_days,
-            exclude_previously_visited=exclude_previously_visited,
             limit=limit,
         )
 
@@ -83,21 +80,9 @@ def discovery_tools(user):
 
 def _get_traveller_profile(user_id):
     from accounts.models import User
-    from trips.choices import TripStatus
 
     user = User.objects.select_related("profile").get(pk=user_id)
     profile = user.profile
-    past_trips = list(
-        user.trips.filter(
-            status__in=[
-                TripStatus.IN_PROGRESS,
-                TripStatus.COMPLETED,
-                TripStatus.ARCHIVED,
-            ]
-        )
-        .prefetch_related("trip_destinations__destination")
-        .order_by("-start_date", "-created_at")[:20]
-    )
     return {
         "name": user.name,
         "departure_location": profile.location or None,
@@ -107,34 +92,6 @@ def _get_traveller_profile(user_id):
         "travel_pace": profile.travel_pace or None,
         "mobility_constraints": profile.mobility_constraints or [],
         "visited_countries": profile.visited_country_list or [],
-        "saved_destinations": [
-            {
-                "id": str(item["destination_id"]),
-                "name": item["destination__name"],
-                "country": item["destination__country"],
-            }
-            for item in SavedDestination.objects.filter(user_id=user_id).values(
-                "destination_id", "destination__name", "destination__country"
-            )
-        ],
-        "past_trips": [
-            {
-                "title": trip.title,
-                "start_date": trip.start_date.isoformat() if trip.start_date else None,
-                "duration_days": trip.duration_days,
-                "traveller_type": trip.traveler_type or None,
-                "budget_tier": trip.budget_tier or None,
-                "destinations": [
-                    {
-                        "id": str(item.destination_id),
-                        "name": item.destination.name,
-                        "country": item.destination.country,
-                    }
-                    for item in trip.trip_destinations.all()
-                ],
-            }
-            for trip in past_trips
-        ],
     }
 
 
@@ -163,7 +120,6 @@ def _search_destinations(
     destination_type=None,
     budget_tier=None,
     duration_days=None,
-    exclude_previously_visited=True,
     limit=10,
 ):
     queryset = Destination.objects.filter(status=Status.PUBLISHED).prefetch_related("tags")
@@ -189,11 +145,6 @@ def _search_destinations(
         queryset = queryset.filter(budget_tier=budget_tier)
     if duration_days:
         queryset = queryset.filter(min_stay_days__lte=duration_days)
-    if exclude_previously_visited:
-        visited_countries, visited_destination_ids = _visited_context(user_id)
-        queryset = queryset.exclude(country__in=visited_countries).exclude(
-            id__in=visited_destination_ids
-        )
 
     try:
         safe_limit = min(max(int(limit), 1), 20)
@@ -216,10 +167,9 @@ def _get_destination_details(user_id, destination_ids):
         data.update(
             {
                 "description": destination.description,
+                "picking_reasons": destination.picking_reasons or [],
                 "getting_around": destination.getting_around or None,
                 "visa_notes": destination.visa_notes or None,
-                "notes": destination.notes or [],
-                "picking_reasons": destination.picking_reasons or [],
                 "previously_visited": (
                     str(destination.id) in visited_destination_ids
                     or destination.country in visited_countries
@@ -297,7 +247,6 @@ def _semantic_destination_search(*, query, destination_id=None, limit=8):
                 "source_type": item.source_type,
                 "source_id": item.source_id,
                 "content": item.content,
-                "metadata": item.metadata,
                 "distance": round(item.distance, 4),
             }
             for item in results

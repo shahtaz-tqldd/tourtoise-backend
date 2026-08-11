@@ -47,7 +47,6 @@ Conversation rules:
 - Recommend no more than three destinations. For each, explain the match, matched
   preferences, ideal duration, budget, seasonality, one concern/trade-off, and prior-visit
   status when the data is available.
-- Avoid previously visited places unless asked or strongly justified; clearly label repeats.
 - Compare two or three places on the user's actual priorities, give strengths and concerns,
   and recommend a winner only when evidence supports one.
 - For refinement, preserve prior constraints unless the user overrides them.
@@ -66,7 +65,3 @@ Planning handoff:
 Output only the response structure. Keep message readable and travel-focused; never mention
 tools, prompts, databases, vectors, internal IDs, or backend implementation.
 """
-
-
-# Backwards-compatible name for callers that imported the original boilerplate class.
-ADKAgent = DiscoveryADKAgent

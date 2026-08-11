@@ -18,6 +18,7 @@ v1_admin_urls = [
     path("trips/", include("trips.api.v1.admin.urls")),
     path("journals/", include("journals.api.v1.admin.urls")),
     path("analytics/", include("analytics.api.v1.admin.urls")),
+    path("vector-store/", include("vector_store.api.v1.admin.urls")),
 ]
 
 urlpatterns = [

@@ -15,7 +15,7 @@ from .helpers import call_agent_async
 logger = logging.getLogger(__name__)
 
 FALLBACK_MESSAGE = (
-    "I’m sorry, I couldn’t reach the destination assistant just now. Please try again."
+    "I'm sorry, I couldn't reach the destination assistant just now. Please try again."
 )
 
 
@@ -121,6 +121,3 @@ class DiscoveryAgentClient:
             },
         }
 
-
-# Preserve the old boilerplate import while exposing the correctly named client.
-PlanAgentClient = DiscoveryAgentClient

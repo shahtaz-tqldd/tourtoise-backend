@@ -6,14 +6,18 @@ from django.shortcuts import get_object_or_404
 
 from accounts.permissions import IsSuperAdmin
 from app.base.pagination import CustomPagination
+from app.services.vector_store import DestinationVectorService
 from app.utils.cloudinary import delete_image
 from app.utils.response import APIResponse
 from destinations.api.v1.admin.serializers import (
     AdminActivityBulkUploadSerializer,
+    AdminActivityListSerializer,
     AdminActivitySerializer,
     AdminAttractionBulkUploadSerializer,
+    AdminAttractionListSerializer,
     AdminAttractionSerializer,
     AdminCuisineBulkUploadSerializer,
+    AdminCuisineListSerializer,
     AdminCuisineSerializer,
     AdminDestinationBulkUploadSerializer,
     AdminDestinationDetailSerializer,
@@ -27,10 +31,13 @@ from destinations.api.v1.admin.serializers import (
 )
 from destinations.api.v1.query import apply_destination_filters
 from destinations.models import Activity, Attraction, Cuisine, Destination
+from destinations.tasks import process_vector_operations
+from vector_store.models import VectorDocument
 
 
 class DestinationPaginationMixin:
     pagination_class = CustomPagination
+    vector_source_type = None
 
     def paginate_with_meta(
         self,
@@ -41,7 +48,15 @@ class DestinationPaginationMixin:
     ):
         paginator = self.pagination_class()
         page = paginator.paginate_queryset(queryset, self.request, view=self)
-        serializer = serializer_class(page, many=True)
+        serializer_context = self.get_serializer_context()
+        if self.vector_source_type:
+            serializer_context["trained_source_ids"] = (
+                DestinationVectorService.get_indexed_source_ids(
+                    self.vector_source_type,
+                    (item.pk for item in page),
+                )
+            )
+        serializer = serializer_class(page, many=True, context=serializer_context)
         return APIResponse.success(
             data=serializer.data,
             meta={
@@ -61,6 +76,7 @@ class DestinationChildListCreateAPIView(DestinationPaginationMixin, GenericAPIVi
     parser_classes = [JSONParser, FormParser, MultiPartParser]
     model = None
     serializer_class = None
+    list_serializer_class = None
     related_name = ""
     resource_label = ""
     singular_label = ""
@@ -83,7 +99,7 @@ class DestinationChildListCreateAPIView(DestinationPaginationMixin, GenericAPIVi
     def get(self, request, *args, **kwargs):
         return self.paginate_with_meta(
             self.get_queryset(),
-            self.serializer_class,
+            self.list_serializer_class or self.serializer_class,
             message=f"{self.resource_label} fetched successfully.",
         )
 
@@ -195,6 +211,8 @@ class DestinationChildBulkUploadAPIView(GenericAPIView):
 class DestinationAttractionListCreateAPIView(DestinationChildListCreateAPIView):
     model = Attraction
     serializer_class = AdminAttractionSerializer
+    list_serializer_class = AdminAttractionListSerializer
+    vector_source_type = VectorDocument.SourceType.ATTRACTION
     resource_label = "Attractions"
     singular_label = "Attraction"
 
@@ -219,6 +237,8 @@ class DestinationAttractionBulkUploadAPIView(DestinationChildBulkUploadAPIView):
 class DestinationActivityListCreateAPIView(DestinationChildListCreateAPIView):
     model = Activity
     serializer_class = AdminActivitySerializer
+    list_serializer_class = AdminActivityListSerializer
+    vector_source_type = VectorDocument.SourceType.ACTIVITY
     resource_label = "Activities"
     singular_label = "Activity"
 
@@ -243,6 +263,8 @@ class DestinationActivityBulkUploadAPIView(DestinationChildBulkUploadAPIView):
 class DestinationCuisineListCreateAPIView(DestinationChildListCreateAPIView):
     model = Cuisine
     serializer_class = AdminCuisineSerializer
+    list_serializer_class = AdminCuisineListSerializer
+    vector_source_type = VectorDocument.SourceType.CUISINE
     resource_label = "Cuisines"
     singular_label = "Cuisine"
 
@@ -262,6 +284,75 @@ class DestinationCuisineBulkTemplateAPIView(DestinationChildBulkTemplateAPIView)
 class DestinationCuisineBulkUploadAPIView(DestinationChildBulkUploadAPIView):
     serializer_class = AdminCuisineBulkUploadSerializer
     resource_label = "Cuisines"
+
+
+class DestinationVectorRetrainAPIView(GenericAPIView):
+    """Queue an asynchronous rebuild of one resource's vector documents."""
+
+    permission_classes = [IsAuthenticated, IsSuperAdmin]
+    model = None
+    lookup_kwarg = ""
+    source_type = ""
+    resource_label = ""
+
+    def get_object(self):
+        filters = {"pk": self.kwargs[self.lookup_kwarg]}
+        if self.model is not Destination:
+            filters["destination_id"] = self.kwargs["destination_id"]
+        return get_object_or_404(self.model, **filters)
+
+    def post(self, request, *args, **kwargs):
+        instance = self.get_object()
+        destination_id = (
+            instance.id if self.model is Destination else instance.destination_id
+        )
+        process_vector_operations.delay(
+            [
+                {
+                    "action": "index",
+                    "source_type": self.source_type,
+                    "source_id": str(instance.id),
+                    "destination_id": str(destination_id),
+                }
+            ]
+        )
+        return APIResponse.success(
+            data={
+                "id": str(instance.id),
+                "source_type": self.source_type,
+                "retraining_queued": True,
+            },
+            message=f"{self.resource_label} re-training queued successfully.",
+            status=status.HTTP_202_ACCEPTED,
+        )
+
+
+class DestinationRetrainAPIView(DestinationVectorRetrainAPIView):
+    model = Destination
+    lookup_kwarg = "destination_id"
+    source_type = VectorDocument.SourceType.DESTINATION
+    resource_label = "Destination"
+
+
+class DestinationAttractionRetrainAPIView(DestinationVectorRetrainAPIView):
+    model = Attraction
+    lookup_kwarg = "attraction_id"
+    source_type = VectorDocument.SourceType.ATTRACTION
+    resource_label = "Attraction"
+
+
+class DestinationActivityRetrainAPIView(DestinationVectorRetrainAPIView):
+    model = Activity
+    lookup_kwarg = "activity_id"
+    source_type = VectorDocument.SourceType.ACTIVITY
+    resource_label = "Activity"
+
+
+class DestinationCuisineRetrainAPIView(DestinationVectorRetrainAPIView):
+    model = Cuisine
+    lookup_kwarg = "cuisine_id"
+    source_type = VectorDocument.SourceType.CUISINE
+    resource_label = "Cuisine"
 
 
 class DestinationCreateAPIView(GenericAPIView):
@@ -457,10 +548,12 @@ class DestinationListAPIView(DestinationPaginationMixin, GenericAPIView):
 
     Frontend response:
     - 200 success with paginated destination rows.
-    - Each row includes `id` so admin can call update/delete APIs.
+    - Each row includes `id` and `is_trained_completed` so admin can identify
+      resources that currently have vector documents.
     """
 
     permission_classes = [IsAuthenticated, IsSuperAdmin]
+    vector_source_type = VectorDocument.SourceType.DESTINATION
 
     def get_queryset(self):
         queryset = Destination.objects.prefetch_related("tags", "images").order_by("-created_at")

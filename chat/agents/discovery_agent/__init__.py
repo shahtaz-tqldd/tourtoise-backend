@@ -1,4 +1,4 @@
-from .agents import ADKAgent, DiscoveryADKAgent
+from .agents import DiscoveryADKAgent
 from .client import DiscoveryAgentClient
 
-__all__ = ["ADKAgent", "DiscoveryADKAgent", "DiscoveryAgentClient"]
+__all__ = ["DiscoveryADKAgent", "DiscoveryAgentClient"]

@@ -1,8 +1,7 @@
 import random
 
 from rest_framework.generics import GenericAPIView
-from django.db.models import BooleanField, Exists, F, OuterRef, Prefetch, Q, Value, Window
-from django.db.models.functions import RowNumber
+from django.db.models import BooleanField, Exists, OuterRef, Prefetch, Q, Value
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status
@@ -34,20 +33,6 @@ from destinations.models import (
     DestinationTag,
     SavedDestination,
 )
-
-
-def _limited_child_queryset(model, order_by):
-    return (
-        model.objects.prefetch_related("images")
-        .annotate(
-            detail_row_number=Window(
-                expression=RowNumber(),
-                partition_by=[F("destination_id")],
-                order_by=order_by,
-            )
-        )
-        .filter(detail_row_number__lte=3)
-    )
 
 
 class DestinationPaginationMixin:
@@ -292,25 +277,10 @@ class ClientDestinationDetailAPIView(DestinationPaginationMixin, GenericAPIView)
                 "images",
                 Prefetch(
                     "attractions",
-                    queryset=_limited_child_queryset(
-                        Attraction,
-                        [F("sort_order").asc(), F("name").asc()],
-                    ),
+                    queryset=Attraction.objects.prefetch_related("tags"),
                 ),
-                Prefetch(
-                    "activities",
-                    queryset=_limited_child_queryset(
-                        Activity,
-                        [F("name").asc()],
-                    ),
-                ),
-                Prefetch(
-                    "cuisines",
-                    queryset=_limited_child_queryset(
-                        Cuisine,
-                        [F("is_featured").desc(), F("name").asc()],
-                    ),
-                ),
+                "activities",
+                "cuisines",
             )
         )
         return get_object_or_404(
@@ -423,6 +393,63 @@ class ClientDestinationCuisineListAPIView(ClientDestinationChildListAPIView):
     serializer_class = ClientCuisineSerializer
     filter_queryset = staticmethod(apply_cuisine_filters)
     resource_label = "Cuisines"
+
+
+class ClientDestinationChildDetailAPIView(GenericAPIView):
+    """Base detail API for a child resource belonging to a published destination."""
+
+    model = None
+    serializer_class = None
+    child_slug_kwarg = ""
+    resource_label = ""
+    prefetch_fields = ("images",)
+
+    def get_object(self):
+        queryset = self.model.objects.filter(
+            destination__status="published",
+            destination__slug=self.kwargs["slug"],
+        ).prefetch_related(*self.prefetch_fields)
+        return get_object_or_404(
+            queryset,
+            slug=self.kwargs[self.child_slug_kwarg],
+        )
+
+    def get(self, request, *args, **kwargs):
+        return APIResponse.success(
+            data=self.serializer_class(
+                self.get_object(),
+                context={"request": request},
+            ).data,
+            message=f"{self.resource_label} fetched successfully.",
+        )
+
+
+class ClientDestinationAttractionDetailAPIView(ClientDestinationChildDetailAPIView):
+    """GET one attraction by destination slug and attraction slug."""
+
+    model = Attraction
+    serializer_class = ClientAttractionSerializer
+    child_slug_kwarg = "attraction_slug"
+    resource_label = "Attraction"
+    prefetch_fields = ("images", "tags")
+
+
+class ClientDestinationActivityDetailAPIView(ClientDestinationChildDetailAPIView):
+    """GET one activity by destination slug and activity slug."""
+
+    model = Activity
+    serializer_class = ClientActivitySerializer
+    child_slug_kwarg = "activity_slug"
+    resource_label = "Activity"
+
+
+class ClientDestinationCuisineDetailAPIView(ClientDestinationChildDetailAPIView):
+    """GET one cuisine by destination slug and cuisine slug."""
+
+    model = Cuisine
+    serializer_class = ClientCuisineSerializer
+    child_slug_kwarg = "cuisine_slug"
+    resource_label = "Cuisine"
 
 
 class ClientSavedDestinationListAPIView(DestinationPaginationMixin, GenericAPIView):

@@ -140,21 +140,49 @@ class ClientCuisineSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
-class ClientDestinationAttractionSerializer(ClientAttractionSerializer):
-    class Meta(ClientAttractionSerializer.Meta):
-        fields = tuple(field for field in ClientAttractionSerializer.Meta.fields if field != "id")
+class ClientDestinationAttractionSerializer(serializers.ModelSerializer):
+    tags = DestinationTagSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Attraction
+        fields = (
+            "name",
+            "slug",
+            "attraction_type",
+            "address",
+            "cover_image",
+            "tags",
+            "is_featured",
+        )
         read_only_fields = fields
 
 
-class ClientDestinationActivitySerializer(ClientActivitySerializer):
-    class Meta(ClientActivitySerializer.Meta):
-        fields = tuple(field for field in ClientActivitySerializer.Meta.fields if field != "id")
+class ClientDestinationActivitySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Activity
+        fields = (
+            "name",
+            "slug",
+            "activity_type",
+            "cover_image",
+            "booking_required",
+            "is_featured",
+        )
         read_only_fields = fields
 
 
-class ClientDestinationCuisineSerializer(ClientCuisineSerializer):
-    class Meta(ClientCuisineSerializer.Meta):
-        fields = tuple(field for field in ClientCuisineSerializer.Meta.fields if field != "id")
+class ClientDestinationCuisineSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Cuisine
+        fields = (
+            "name",
+            "slug",
+            "cuisine_type",
+            "meal_type",
+            "cover_image",
+            "is_vegetarian_friendly",
+            "is_featured",
+        )
         read_only_fields = fields
 
 

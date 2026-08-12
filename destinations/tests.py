@@ -378,7 +378,7 @@ class ClientDestinationTagListApiTests(TestCase):
 
 
 class ClientDestinationDetailSerializerTests(TestCase):
-    def test_returns_child_lists_with_images_without_ids(self):
+    def test_returns_child_lists_with_summary_fields(self):
         destination = Destination.objects.create(
             name="Pokhara",
             country="Nepal",
@@ -405,8 +405,9 @@ class ClientDestinationDetailSerializerTests(TestCase):
             attraction_type="natural_site",
             description="A scenic freshwater lake.",
             how_to_reach="Walk from Lakeside.",
-            picking_reason_list=["Boat rides", "Mountain views"],
-            tip_list=["Go near sunset"],
+            address="Lakeside Road",
+            cover_image="https://example.com/attraction-cover.jpg",
+            is_featured=True,
         )
         attraction_tag = DestinationTag.objects.create(name="Lake", category="experience")
         attraction.tags.add(attraction_tag)
@@ -416,11 +417,19 @@ class ClientDestinationDetailSerializerTests(TestCase):
             activity_type="adventure",
             description="Tandem paragliding over the valley.",
             budget_tier=BudgetTier.PREMIUM,
+            cover_image="https://example.com/activity-cover.jpg",
+            booking_required=True,
+            is_featured=True,
         )
         cuisine = Cuisine.objects.create(
             destination=destination,
             name="Newari Khaja",
             description="Traditional mixed platter.",
+            cuisine_type="Newari",
+            meal_type="lunch",
+            cover_image="https://example.com/cuisine-cover.jpg",
+            is_vegetarian_friendly=True,
+            is_featured=True,
         )
         AttractionImage.objects.create(
             attraction=attraction,
@@ -440,30 +449,25 @@ class ClientDestinationDetailSerializerTests(TestCase):
 
         data = ClientDestinationDetailSerializer(destination).data
 
-        self.assertEqual(data["attractions"][0]["name"], "Phewa Lake")
-        self.assertEqual(data["attractions"][0]["how_to_reach"], "Walk from Lakeside.")
-        self.assertEqual(data["attractions"][0]["picking_reason_list"], ["Boat rides", "Mountain views"])
-        self.assertEqual(data["attractions"][0]["tip_list"], ["Go near sunset"])
+        self.assertEqual(
+            set(data["attractions"][0]),
+            {"name", "slug", "attraction_type", "address", "cover_image", "tags", "is_featured"},
+        )
+        self.assertEqual(data["attractions"][0]["address"], "Lakeside Road")
         self.assertEqual(data["attractions"][0]["tags"][0]["name"], "Lake")
         self.assertEqual(
-            data["attractions"][0]["images"][0]["image_url"],
-            "https://example.com/attraction.jpg",
+            set(data["activities"][0]),
+            {"name", "slug", "activity_type", "cover_image", "booking_required", "is_featured"},
         )
-        self.assertEqual(data["activities"][0]["name"], "Paragliding")
+        self.assertTrue(data["activities"][0]["booking_required"])
         self.assertEqual(
-            data["activities"][0]["images"][0]["image_url"],
-            "https://example.com/activity.jpg",
+            set(data["cuisines"][0]),
+            {
+                "name", "slug", "cuisine_type", "meal_type", "cover_image",
+                "is_vegetarian_friendly", "is_featured",
+            },
         )
-        self.assertEqual(data["cuisines"][0]["name"], "Newari Khaja")
-        self.assertEqual(
-            data["cuisines"][0]["images"][0]["image_url"],
-            "https://example.com/cuisine.jpg",
-        )
-
-        for item in data["attractions"] + data["activities"] + data["cuisines"]:
-            self.assertNotIn("id", item)
-            for image in item["images"]:
-                self.assertNotIn("id", image)
+        self.assertTrue(data["cuisines"][0]["is_vegetarian_friendly"])
 
 
 class ClientDestinationChildListApiTests(TestCase):
@@ -553,6 +557,102 @@ class ClientDestinationChildListApiTests(TestCase):
 
         response = self.client.get(
             f"/api/v1/destinations/{self.destination.slug}/attractions/",
+        )
+
+        self.assertEqual(response.status_code, drf_status.HTTP_404_NOT_FOUND)
+
+
+class ClientDestinationChildDetailApiTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.destination = Destination.objects.create(
+            name="Pokhara Child Details",
+            country="Nepal",
+            country_code="NPL",
+            destination_type=DestinationType.CITY,
+            latitude=28.2096,
+            longitude=83.9856,
+            tagline="Lakeside city",
+            description="Gateway to the Annapurna region.",
+            cover_image="https://example.com/pokhara.jpg",
+            budget_tier=BudgetTier.MID,
+            currency="Nepalese Rupee",
+            currency_code="NPR",
+            status=Status.PUBLISHED,
+        )
+
+    def test_returns_attraction_detail_by_slug(self):
+        attraction = Attraction.objects.create(
+            destination=self.destination,
+            name="World Peace Pagoda",
+            attraction_type="temple",
+            description="A hilltop temple.",
+            address="Anadu Hill",
+        )
+        tag = DestinationTag.objects.create(name="Culture", category="experience")
+        attraction.tags.add(tag)
+        AttractionImage.objects.create(
+            attraction=attraction,
+            image_url="https://example.com/pagoda.jpg",
+            caption="Pagoda view",
+        )
+
+        response = self.client.get(
+            f"/api/v1/destinations/{self.destination.slug}/attractions/{attraction.slug}/",
+        )
+
+        self.assertEqual(response.status_code, drf_status.HTTP_200_OK)
+        self.assertEqual(response.data["data"]["slug"], attraction.slug)
+        self.assertEqual(response.data["data"]["description"], "A hilltop temple.")
+        self.assertEqual(response.data["data"]["tags"][0]["name"], "Culture")
+        self.assertEqual(
+            response.data["data"]["images"][0]["image_url"],
+            "https://example.com/pagoda.jpg",
+        )
+
+    def test_returns_activity_and_cuisine_details_by_slug(self):
+        activity = Activity.objects.create(
+            destination=self.destination,
+            name="Paragliding",
+            activity_type="adventure",
+            description="Tandem flight over the valley.",
+            budget_tier=BudgetTier.PREMIUM,
+            booking_required=True,
+        )
+        cuisine = Cuisine.objects.create(
+            destination=self.destination,
+            name="Thakali Set",
+            description="Traditional rice meal.",
+            cuisine_type="Nepali",
+            meal_type="lunch",
+        )
+
+        activity_response = self.client.get(
+            f"/api/v1/destinations/{self.destination.slug}/activities/{activity.slug}/",
+        )
+        cuisine_response = self.client.get(
+            f"/api/v1/destinations/{self.destination.slug}/cuisines/{cuisine.slug}/",
+        )
+
+        self.assertEqual(activity_response.status_code, drf_status.HTTP_200_OK)
+        self.assertEqual(activity_response.data["data"]["slug"], activity.slug)
+        self.assertTrue(activity_response.data["data"]["booking_required"])
+        self.assertEqual(cuisine_response.status_code, drf_status.HTTP_200_OK)
+        self.assertEqual(cuisine_response.data["data"]["slug"], cuisine.slug)
+        self.assertEqual(cuisine_response.data["data"]["cuisine_type"], "Nepali")
+
+    def test_child_detail_is_scoped_to_published_destination(self):
+        attraction = Attraction.objects.create(
+            destination=self.destination,
+            name="Hidden Attraction",
+            attraction_type="natural_site",
+            description="Not publicly visible.",
+        )
+        self.destination.status = Status.DRAFT
+        self.destination.save(update_fields=["status"])
+
+        response = self.client.get(
+            f"/api/v1/destinations/{self.destination.slug}/attractions/{attraction.slug}/",
         )
 
         self.assertEqual(response.status_code, drf_status.HTTP_404_NOT_FOUND)
@@ -842,7 +942,7 @@ class ClientSavedDestinationApiTests(TestCase):
         self.assertEqual(response.status_code, drf_status.HTTP_200_OK)
         self.assertTrue(response.data["data"]["is_saved"])
 
-    def test_destination_detail_limits_child_sections_to_three_items(self):
+    def test_destination_detail_returns_all_child_items(self):
         for index in range(4):
             Attraction.objects.create(
                 destination=self.bangkok,
@@ -866,9 +966,9 @@ class ClientSavedDestinationApiTests(TestCase):
         response = self.client.get(f"/api/v1/destinations/{self.bangkok.slug}/detail/")
 
         self.assertEqual(response.status_code, drf_status.HTTP_200_OK)
-        self.assertEqual(len(response.data["data"]["attractions"]), 3)
-        self.assertEqual(len(response.data["data"]["activities"]), 3)
-        self.assertEqual(len(response.data["data"]["cuisines"]), 3)
+        self.assertEqual(len(response.data["data"]["attractions"]), 4)
+        self.assertEqual(len(response.data["data"]["activities"]), 4)
+        self.assertEqual(len(response.data["data"]["cuisines"]), 4)
 
     def _create_destination(self, name, country_code):
         return Destination.objects.create(

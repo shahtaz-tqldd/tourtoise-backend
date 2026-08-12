@@ -50,6 +50,14 @@ class JournalListSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+class PublicJournalListSerializer(JournalListSerializer):
+    class Meta(JournalListSerializer.Meta):
+        fields = tuple(
+            field for field in JournalListSerializer.Meta.fields if field != "saves_count"
+        )
+        read_only_fields = fields
+
+
 class JournalWriteSerializer(serializers.ModelSerializer):
     tags = serializers.ListField(
         child=serializers.CharField(max_length=50, trim_whitespace=True),

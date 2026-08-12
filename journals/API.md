@@ -116,6 +116,7 @@ Authentication: optional.
 | `tags` | string | No | Comma-separated exact tag names, for example `Beach,Food`. Matches any supplied tag. |
 
 Response: `200 OK`, paginated journals. Only public journals are returned.
+The public journal list omits `saves_count`; `is_saved` is still returned for the current user.
 
 ### List a user's journals
 

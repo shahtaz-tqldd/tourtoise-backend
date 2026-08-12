@@ -1,5 +1,15 @@
 from django.db import IntegrityError, transaction
-from django.db.models import BooleanField, Count, Exists, OuterRef, Q, Value
+from django.db.models import (
+    BooleanField,
+    Count,
+    Exists,
+    IntegerField,
+    OuterRef,
+    Q,
+    Subquery,
+    Value,
+)
+from django.db.models.functions import Coalesce
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.generics import GenericAPIView
@@ -9,11 +19,12 @@ from accounts.services.user_profile import decrement_user_journal_count
 from app.base.pagination import CustomPagination
 from app.utils.response import APIResponse
 from journals.api.v1.client.serializers import (
+    ContentReportCreateSerializer,
     JournalCommentSerializer,
     JournalCommentWriteSerializer,
-    ContentReportCreateSerializer,
     JournalListSerializer,
     JournalWriteSerializer,
+    PublicJournalListSerializer,
 )
 from journals.models import (
     ContentReport,
@@ -22,6 +33,7 @@ from journals.models import (
     Journal,
     JournalComment,
     JournalReaction,
+    JournalTag,
     JournalVisibility,
     SavedJournal,
 )
@@ -39,6 +51,57 @@ class JournalQuerysetMixin:
             ),
             saves_count=Count("saved_by_users", distinct=True),
             reactions_count=Count("reactions", distinct=True),
+        )
+        user = self.request.user
+        if user.is_authenticated:
+            return queryset.annotate(
+                is_saved=Exists(
+                    SavedJournal.objects.filter(user=user, journal=OuterRef("pk"))
+                ),
+                is_reacted=Exists(
+                    JournalReaction.objects.filter(user=user, journal=OuterRef("pk"))
+                ),
+            )
+        return queryset.annotate(
+            is_saved=Value(False, output_field=BooleanField()),
+            is_reacted=Value(False, output_field=BooleanField()),
+        )
+
+    def get_public_list_queryset(self):
+        comments_count = (
+            JournalComment.objects.filter(
+                journal=OuterRef("pk"),
+                deleted_at__isnull=True,
+            )
+            .order_by()
+            .values("journal")
+            .annotate(total=Count("pk"))
+            .values("total")
+        )
+        reactions_count = (
+            JournalReaction.objects.filter(journal=OuterRef("pk"))
+            .order_by()
+            .values("journal")
+            .annotate(total=Count("pk"))
+            .values("total")
+        )
+        queryset = (
+            Journal.objects.filter(
+                deleted_at__isnull=True,
+                visibility=JournalVisibility.PUBLIC,
+            )
+            .select_related("author", "author__profile")
+            .prefetch_related("tags", "images")
+            .annotate(
+                comments_count=Coalesce(
+                    Subquery(comments_count, output_field=IntegerField()),
+                    0,
+                ),
+                reactions_count=Coalesce(
+                    Subquery(reactions_count, output_field=IntegerField()),
+                    0,
+                ),
+            )
         )
         user = self.request.user
         if user.is_authenticated:
@@ -77,10 +140,15 @@ class JournalQuerysetMixin:
 class PaginatedJournalMixin:
     pagination_class = CustomPagination
 
-    def paginate_journals(self, queryset, message="Journals fetched successfully."):
+    def paginate_journals(
+        self,
+        queryset,
+        message="Journals fetched successfully.",
+        serializer_class=JournalListSerializer,
+    ):
         paginator = self.pagination_class()
         page = paginator.paginate_queryset(queryset, self.request, view=self)
-        data = JournalListSerializer(page, many=True, context={"request": self.request}).data
+        data = serializer_class(page, many=True, context={"request": self.request}).data
         return APIResponse.success(
             data=data,
             meta={
@@ -99,17 +167,32 @@ class JournalListAPIView(PaginatedJournalMixin, JournalQuerysetMixin, GenericAPI
     permission_classes = [AllowAny]
 
     def get(self, request, *args, **kwargs):
-        queryset = self.get_base_queryset().filter(visibility=JournalVisibility.PUBLIC)
+        queryset = self.get_public_list_queryset()
         search = request.query_params.get("search", "").strip()
         if search:
-            queryset = queryset.filter(
-                Q(content__icontains=search)
-                | Q(tags__name__icontains=search)
+            matching_tag = JournalTag.objects.filter(
+                journals=OuterRef("pk"),
+                name__icontains=search,
             )
-        tags = [part.strip() for part in request.query_params.get("tags", "").split(",") if part.strip()]
+            queryset = queryset.filter(Q(content__icontains=search) | Exists(matching_tag))
+        tags = [
+            part.strip()
+            for part in request.query_params.get("tags", "").split(",")
+            if part.strip()
+        ]
         if tags:
-            queryset = queryset.filter(tags__name__in=tags)
-        return self.paginate_journals(queryset.distinct().order_by("-created_at"))
+            queryset = queryset.filter(
+                Exists(
+                    JournalTag.objects.filter(
+                        journals=OuterRef("pk"),
+                        name__in=tags,
+                    )
+                )
+            )
+        return self.paginate_journals(
+            queryset.order_by("-created_at"),
+            serializer_class=PublicJournalListSerializer,
+        )
 
 
 class UserJournalListAPIView(PaginatedJournalMixin, JournalQuerysetMixin, GenericAPIView):

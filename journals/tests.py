@@ -44,6 +44,35 @@ class JournalApiTests(TestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data["meta"]["count"], 1)
         self.assertEqual(response.data["data"][0]["content"], "Public journey content")
+        self.assertNotIn("saves_count", response.data["data"][0])
+
+    def test_public_feed_returns_comment_and_reaction_counts_without_saves_count(self):
+        JournalComment.objects.create(
+            journal=self.public_journal,
+            author=self.reader,
+            text="A comment",
+            created_by=self.reader,
+            updated_by=self.reader,
+        )
+        JournalReaction.objects.create(
+            journal=self.public_journal,
+            user=self.reader,
+            created_by=self.reader,
+            updated_by=self.reader,
+        )
+        SavedJournal.objects.create(
+            journal=self.public_journal,
+            user=self.reader,
+            created_by=self.reader,
+            updated_by=self.reader,
+        )
+
+        response = self.client.get("/api/v1/journals/list/")
+
+        journal = response.data["data"][0]
+        self.assertEqual(journal["comments_count"], 1)
+        self.assertEqual(journal["reactions_count"], 1)
+        self.assertNotIn("saves_count", journal)
 
     def test_user_list_only_includes_private_journals_for_owner(self):
         url = f"/api/v1/journals/users/{self.author.id}/list/"

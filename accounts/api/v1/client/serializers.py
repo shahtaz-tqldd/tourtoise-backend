@@ -193,6 +193,8 @@ class PublicUserProfileSerializer(serializers.ModelSerializer):
     gender = serializers.CharField(source="profile.gender", read_only=True)
     city = serializers.CharField(source="profile.city", read_only=True)
     country = serializers.CharField(source="profile.country_of_residence", read_only=True)
+    last_tracked_address = serializers.CharField(source="profile.last_tracked_address", read_only=True)
+    preferred_accommodation = serializers.CharField(source="profile.preferred_accommodation", read_only=True)
     preferred_language = serializers.CharField(source="profile.preferred_language", read_only=True)
     preferred_currency = serializers.CharField(source="profile.preferred_currency", read_only=True)
     travel_interests = serializers.ListField(source="profile.travel_interests", read_only=True)
@@ -219,6 +221,8 @@ class PublicUserProfileSerializer(serializers.ModelSerializer):
             "country",
             "preferred_language",
             "preferred_currency",
+            "preferred_accommodation",
+            "last_tracked_address",
             "travel_interests",
             "mobility_constraints",
             "dietary_preferences",

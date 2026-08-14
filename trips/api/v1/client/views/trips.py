@@ -1,3 +1,4 @@
+from django.db import transaction
 from django.db.models import (
     Case,
     CharField,
@@ -18,6 +19,7 @@ from rest_framework.generics import GenericAPIView
 from rest_framework.permissions import IsAuthenticated
 
 from app.utils.response import APIResponse
+from accounts.services.user_profile import ensure_user_profile
 from notification.models import Notification, NotificationType
 
 from trips.api.v1.client.serializers import (
@@ -42,6 +44,57 @@ from trips.models import (
 from trips.services.notifications import schedule_trip_notifications
 
 from .mixin import UserTripQuerysetMixin, TripPaginationMixin
+
+
+def update_user_profile_from_trip_data(user, validated_data):
+    profile_updates = {}
+    if "start_location_address" in validated_data:
+        profile_updates["last_tracked_address"] = validated_data["start_location_address"]
+    if "accommodation_preference" in validated_data:
+        profile_updates["preferred_accommodation"] = validated_data["accommodation_preference"]
+
+    if not profile_updates:
+        return
+
+    profile = ensure_user_profile(user)
+    for field, value in profile_updates.items():
+        setattr(profile, field, value)
+    profile.save(update_fields=list(profile_updates))
+
+
+def annotate_unread_counts(queryset, user):
+    unread_notifications = (
+        Notification.objects.filter(
+            trip_id=OuterRef("pk"),
+            recipient=user,
+            notification_type=NotificationType.TRIP,
+        )
+        .exclude(read_receipts__user=user)
+        .values("trip_id")
+        .annotate(total=Count("pk"))
+        .values("total")[:1]
+    )
+    unread_messages = (
+        TripConversationMessage.objects.filter(
+            session__trip_id=OuterRef("pk"),
+            session__user=user,
+            sender=AgentMessageSender.AGENT,
+            read_at__isnull=True,
+        )
+        .values("session__trip_id")
+        .annotate(total=Count("pk"))
+        .values("total")[:1]
+    )
+    return queryset.annotate(
+        unread_notification=Coalesce(
+            Subquery(unread_notifications, output_field=IntegerField()),
+            Value(0),
+        ),
+        unread_message=Coalesce(
+            Subquery(unread_messages, output_field=IntegerField()),
+            Value(0),
+        ),
+    )
 
 
 class TripCreateAPIView(UserTripQuerysetMixin, GenericAPIView):
@@ -71,7 +124,14 @@ class TripCreateAPIView(UserTripQuerysetMixin, GenericAPIView):
     def post(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
-        trip = serializer.save()
+        profile_data = {
+            field: serializer.validated_data[field]
+            for field in ("start_location_address", "accommodation_preference")
+            if field in serializer.validated_data
+        }
+        with transaction.atomic():
+            trip = serializer.save()
+            update_user_profile_from_trip_data(request.user, profile_data)
         if trip.status in {TripStatus.READY, TripStatus.IN_PROGRESS}:
             schedule_trip_notifications(trip, request.user)
         trip = self.get_trip_queryset().get(pk=trip.pk)
@@ -109,42 +169,15 @@ class TripListAPIView(TripPaginationMixin, UserTripQuerysetMixin, GenericAPIView
 
     def get_queryset(self):
         today = timezone.localdate()
-        unread_notifications = (
-            Notification.objects.filter(
-                trip_id=OuterRef("pk"),
-                recipient=self.request.user,
-                notification_type=NotificationType.TRIP,
-            )
-            .exclude(read_receipts__user=self.request.user)
-            .values("trip_id")
-            .annotate(total=Count("pk"))
-            .values("total")[:1]
-        )
-        unread_messages = (
-            TripConversationMessage.objects.filter(
-                session__trip_id=OuterRef("pk"),
-                session__user=self.request.user,
-                sender=AgentMessageSender.AGENT,
-                read_at__isnull=True,
-            )
-            .values("session__trip_id")
-            .annotate(total=Count("pk"))
-            .values("total")[:1]
-        )
-        queryset = self.get_trip_queryset().annotate(
+        queryset = annotate_unread_counts(
+            self.get_trip_queryset(),
+            self.request.user,
+        ).annotate(
             start_date_sort_group=Case(
                 When(start_date__gte=today, then=Value(0)),
                 When(start_date__isnull=True, then=Value(2)),
                 default=Value(1),
                 output_field=IntegerField(),
-            ),
-            unread_notification=Coalesce(
-                Subquery(unread_notifications, output_field=IntegerField()),
-                Value(0),
-            ),
-            unread_message=Coalesce(
-                Subquery(unread_messages, output_field=IntegerField()),
-                Value(0),
             ),
         ).order_by("start_date_sort_group", "start_date", "-updated_at")
         params = self.request.query_params
@@ -214,7 +247,10 @@ class TripDetailAPIView(UserTripQuerysetMixin, GenericAPIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, *args, **kwargs):
-        trip = self.get_trip_by_id()
+        trip = get_object_or_404(
+            annotate_unread_counts(self.get_trip_queryset(), request.user),
+            pk=self.kwargs["trip_id"],
+        )
         return APIResponse.success(
             data=TripDetailsSerializer(trip, context={"request": request}).data,
             message="Trip fetched successfully.",
@@ -265,7 +301,14 @@ class TripUpdateAPIView(UserTripQuerysetMixin, GenericAPIView):
         trip = self.get_trip_by_id()
         serializer = self.get_serializer(trip, data=request.data, partial=True, context={"request": request})
         serializer.is_valid(raise_exception=True)
-        trip = serializer.save()
+        profile_data = {
+            field: serializer.validated_data[field]
+            for field in ("start_location_address", "accommodation_preference")
+            if field in serializer.validated_data
+        }
+        with transaction.atomic():
+            trip = serializer.save()
+            update_user_profile_from_trip_data(request.user, profile_data)
         if trip.status in {TripStatus.READY, TripStatus.IN_PROGRESS}:
             schedule_trip_notifications(trip, request.user)
         trip = self.get_trip_queryset().get(pk=trip.pk)

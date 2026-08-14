@@ -152,29 +152,42 @@ class UserProfile(models.Model):
     gender = models.CharField(max_length=30, blank=True)
     country_of_residence = models.CharField(max_length=100, blank=True)
     city = models.CharField(max_length=100, blank=True)
-    preferred_language = models.CharField(max_length=20, blank=True, default="en")
-    preferred_currency = models.CharField(max_length=10, blank=True, default="USD")
     timezone = models.CharField(
         max_length=64,
         default="UTC",
         validators=[validate_timezone_name],
         help_text="IANA timezone used for trip reminders, for example Asia/Dhaka.",
     )
+    last_tracked_address = models.CharField(max_length=255, blank=True)
+
+    # preference
+    preferred_language = models.CharField(max_length=50, blank=True, default="en")
+    preferred_accommodation = models.CharField(max_length=50, blank=True, default="en")
+    preferred_currency = models.CharField(max_length=50, blank=True, default="USD")
+    is_public_profile = models.BooleanField(default=False)
+    
+    # travel style
     travel_interests = models.JSONField(default=list, blank=True)
-    dietary_preferences = models.JSONField(default=list, blank=True)
     travel_pace = models.CharField(max_length=40, blank=True)
+    dietary_preferences = models.JSONField(default=list, blank=True)
     mobility_constraints = models.JSONField(default=list, blank=True)
+
+    # emergency contact
     emergency_contact_name = models.CharField(max_length=100, blank=True)
     emergency_contact_phone = models.CharField(
         max_length=17,
         blank=True,
         validators=[phone_regex],
     )
-    is_public_profile = models.BooleanField(default=False)
+
+
+    # users stats
     total_country_visited = models.PositiveIntegerField(default=0)
     visited_country_list = models.JSONField(default=list, blank=True)
     total_trip_count = models.PositiveIntegerField(default=0)
     total_journal_count = models.PositiveIntegerField(default=0)
+
+    # tracking
     is_location_sharing_enabled = models.BooleanField(default=False)
     is_alert_notification_enabled = models.BooleanField(default=True)
 

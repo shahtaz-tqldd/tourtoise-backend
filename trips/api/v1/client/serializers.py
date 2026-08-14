@@ -595,6 +595,14 @@ class TripDetailsSerializer(serializers.ModelSerializer):
     planning_session_id = serializers.SerializerMethodField()
     conversation_session_id = serializers.SerializerMethodField()
     is_chat_available = serializers.SerializerMethodField()
+    unread_notification_count = serializers.IntegerField(
+        source="unread_notification",
+        read_only=True,
+    )
+    unread_message_count = serializers.IntegerField(
+        source="unread_message",
+        read_only=True,
+    )
 
     class Meta:
         model = Trip
@@ -621,6 +629,8 @@ class TripDetailsSerializer(serializers.ModelSerializer):
             "planning_session_id",
             "conversation_session_id",
             "is_chat_available",
+            "unread_notification_count",
+            "unread_message_count",
             "created_at",
             "updated_at",
         )

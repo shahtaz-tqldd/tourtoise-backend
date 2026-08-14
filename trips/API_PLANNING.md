@@ -172,7 +172,7 @@ Response:
     "accommodation_preference": "mid_range",
     "accommotation_preference": "mid_range"
   },
-  "agent_message": "What would make this trip feel successful?",
+  "agent_message": "For Paris, what would your ideal day include—places you want to see, activities you enjoy, and foods you want to try or avoid?",
   "is_step_complete": false,
   "is_qna_complete": false,
   "progress": {},
@@ -199,7 +199,7 @@ Response:
 ```json
 {
   "session_id": "uuid",
-  "agent_message": "short agent question or completed context",
+  "agent_message": "Relaxed traveler focused on local food, neighborhoods, and one scenic highlight per day.",
   "is_step_complete": true,
   "is_qna_complete": true,
   "progress": {},
@@ -207,7 +207,8 @@ Response:
 }
 ```
 
-When `is_qna_complete` becomes `true`, move the UI to `recommendation`.
+The initialization endpoint always asks exactly one preference question. The first valid
+reply completes Q&A (`is_qna_complete: true`), so the UI can move to `recommendation`.
 
 ## Get Planning Step
 

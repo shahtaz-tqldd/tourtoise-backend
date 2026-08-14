@@ -387,6 +387,12 @@ class TripCreateApiTests(TestCase):
         self.assertEqual(trip.start_location_address, payload["start_location_address"])
         self.assertEqual(trip.start_location_latitude, payload["start_location_latitude"])
         self.assertEqual(trip.start_location_longitude, payload["start_location_longitude"])
+        self.user.profile.refresh_from_db()
+        self.assertEqual(
+            self.user.profile.last_tracked_address,
+            payload["start_location_address"],
+        )
+        self.assertEqual(self.user.profile.preferred_accommodation, "luxury")
 
         trip_destinations = list(trip.trip_destinations.order_by("sort_order"))
         self.assertEqual([row.destination.slug for row in trip_destinations], [self.amalfi.slug, self.paris.slug])
@@ -520,6 +526,12 @@ class TripUpdateApiTests(TestCase):
         )
 
     def test_update_allows_current_trip_existing_date_range(self):
+        self.user.profile.last_tracked_address = "Existing address"
+        self.user.profile.preferred_accommodation = "hostel"
+        self.user.profile.save(
+            update_fields=["last_tracked_address", "preferred_accommodation"]
+        )
+
         response = self.client.patch(
             self.url,
             {
@@ -531,6 +543,27 @@ class TripUpdateApiTests(TestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.trip.refresh_from_db()
         self.assertEqual(self.trip.title, "Renamed Trip")
+        self.user.profile.refresh_from_db()
+        self.assertEqual(self.user.profile.last_tracked_address, "Existing address")
+        self.assertEqual(self.user.profile.preferred_accommodation, "hostel")
+
+    def test_update_updates_profile_fields_when_provided(self):
+        response = self.client.patch(
+            self.url,
+            {
+                "start_location_address": "Banani, Dhaka, Bangladesh",
+                "accommodation_preference": "boutique",
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.user.profile.refresh_from_db()
+        self.assertEqual(
+            self.user.profile.last_tracked_address,
+            "Banani, Dhaka, Bangladesh",
+        )
+        self.assertEqual(self.user.profile.preferred_accommodation, "boutique")
 
 
 class TripSharingApiTests(TestCase):
@@ -1322,6 +1355,53 @@ class TripDetailApiTests(TestCase):
             updated_by=self.user,
         )
         self.url = f"/api/v1/trips/{self.trip.id}/detail/"
+
+    def test_includes_unread_notification_and_message_counts(self):
+        unread_notification = Notification.objects.create(
+            recipient=self.user,
+            trip=self.trip,
+            notification_type=NotificationType.TRIP,
+            title="Unread trip notification",
+        )
+        read_notification = Notification.objects.create(
+            recipient=self.user,
+            trip=self.trip,
+            notification_type=NotificationType.TRIP,
+            title="Read trip notification",
+        )
+        NotificationRead.objects.create(
+            notification=read_notification,
+            user=self.user,
+            created_by=self.user,
+        )
+        session = TripConversationSession.objects.create(
+            trip=self.trip,
+            user=self.user,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        TripConversationMessage.objects.create(
+            session=session,
+            sender="agent",
+            content="Unread message",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        TripConversationMessage.objects.create(
+            session=session,
+            sender="agent",
+            content="Read message",
+            read_at=timezone.now(),
+            created_by=self.user,
+            updated_by=self.user,
+        )
+
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["data"]["unread_notification_count"], 1)
+        self.assertEqual(response.data["data"]["unread_message_count"], 1)
+        self.assertEqual(unread_notification.trip_id, self.trip.id)
 
     def test_includes_itinerary_budget_and_preparation_stats(self):
         itinerary = TripItinerary.objects.create(

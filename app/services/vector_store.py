@@ -5,6 +5,7 @@ from django.db import transaction
 from django.db.models import Q
 from pgvector.django import CosineDistance
 
+from app.base.models import TourtoiseConfig
 from destinations.models import Activity, Attraction, Cuisine, Destination
 from vector_store.models import VectorDocument
 
@@ -32,10 +33,21 @@ class DestinationVectorService:
             self.embedding_service = GeminiEmbeddingService()
         return self.embedding_service
 
+    @staticmethod
+    def _is_vectorization_enabled():
+        enabled = (
+            TourtoiseConfig.objects.order_by()
+            .values_list("is_vectorize_enabled", flat=True)
+            .first()
+        )
+        # Match the model's default on installations where the singleton has
+        # not been created yet.
+        return True if enabled is None else enabled
+
     @classmethod
     def get_indexed_source_ids(cls, source_type, source_ids):
         source_ids = list(source_ids)
-        if not source_ids:
+        if not source_ids or not cls._is_vectorization_enabled():
             return set()
 
         return set(
@@ -47,26 +59,36 @@ class DestinationVectorService:
         )
 
     def index_destination(self, destination):
+        if not self._is_vectorization_enabled():
+            return None
         destination = self._get_destination(destination)
         self._reindex_instance(destination, VectorDocument.SourceType.DESTINATION)
         return destination
 
     def index_attraction(self, attraction):
+        if not self._is_vectorization_enabled():
+            return None
         attraction = self._get_attraction(attraction)
         self._reindex_instance(attraction, VectorDocument.SourceType.ATTRACTION)
         return attraction
 
     def index_activity(self, activity):
+        if not self._is_vectorization_enabled():
+            return None
         activity = self._get_activity(activity)
         self._reindex_instance(activity, VectorDocument.SourceType.ACTIVITY)
         return activity
 
     def index_cuisine(self, cuisine):
+        if not self._is_vectorization_enabled():
+            return None
         cuisine = self._get_cuisine(cuisine)
         self._reindex_instance(cuisine, VectorDocument.SourceType.CUISINE)
         return cuisine
 
     def index_destination_tree(self, destination):
+        if not self._is_vectorization_enabled():
+            return None
         destination = self._get_destination(destination)
         self._reindex_instance(destination, VectorDocument.SourceType.DESTINATION)
         for attraction in destination.attractions.all():
@@ -78,6 +100,8 @@ class DestinationVectorService:
         return destination
 
     def index_all(self):
+        if not self._is_vectorization_enabled():
+            return None
         queryset = Destination.objects.prefetch_related("tags", "attractions__tags", "activities", "cuisines")
         for destination in queryset.iterator():
             self.index_destination_tree(destination)
@@ -104,6 +128,8 @@ class DestinationVectorService:
         )
 
     def search(self, query, *, limit=10, source_types=None, destination_id=None):
+        if not self._is_vectorization_enabled():
+            return []
         query_embedding = self._get_embedding_service().embed_query(query)
         queryset = VectorDocument.objects.using(self.db_alias).annotate(
             distance=CosineDistance("embedding", query_embedding)

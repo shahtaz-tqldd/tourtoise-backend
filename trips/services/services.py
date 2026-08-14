@@ -541,11 +541,118 @@ def run_guide_agent_for_session(session, user_query):
 
 def build_initial_agent_query(preferences, trip_snapshot):
     return (
-        "The traveler just submitted these initial trip preferences and trip snapshot. "
-        "Ask the single most useful follow-up question for step 2 preference intake.\n"
-        f"Preferences: {json.dumps(preferences, default=str)}\n"
-        f"Trip snapshot: {json.dumps(trip_snapshot, default=str)}"
+        "PREFERENCE_INTAKE_PHASE: ASK_ONE_QUESTION\n"
+        "The traveler just submitted their trip preferences. Ask exactly one concise, "
+        "destination-aware question that fills the most useful remaining gap for choosing "
+        "attractions, activities, and cuisines. Do not complete Q&A in this response."
     )
+
+
+def build_final_preference_agent_query(answer, preferences, trip_snapshot):
+    return (
+        "PREFERENCE_INTAKE_PHASE: FINALIZE_AFTER_ANSWER\n"
+        "This is the traveler's answer to the one and only follow-up question. "
+        "Do not ask another question. Set is_qna_complete to true and return a concise, "
+        "practical context that combines this answer with the existing preferences and "
+        "destination details for attraction, activity, and cuisine recommendations.\n"
+        f"Traveler answer: {answer}"
+    )
+
+
+def normalize_initial_preference_response(agent_response, preferences, trip_snapshot):
+    """Guarantee that preference initialization yields one question, never completion."""
+    if not isinstance(agent_response, dict):
+        agent_response = {}
+    response = agent_response.get("response")
+    if not isinstance(response, dict):
+        response = {}
+    question = str(response.get("question") or "").strip()
+    generic_fallbacks = {
+        "Could you tell me what kind of trip experience you prefer?",
+        "Could you share your travel preferences?",
+    }
+    if (
+        not question
+        or question in generic_fallbacks
+        or question.count("?") != 1
+    ):
+        question = _fallback_preference_question(preferences, trip_snapshot)
+
+    agent_response["response"] = {
+        "question": question,
+        "is_qna_complete": False,
+        "context": None,
+    }
+    return agent_response
+
+
+def finalize_preference_response(agent_response, answer, preferences, trip_snapshot):
+    """Guarantee that the first traveler answer closes preference Q&A."""
+    if not isinstance(agent_response, dict):
+        agent_response = {}
+    response = agent_response.get("response")
+    if not isinstance(response, dict):
+        response = {}
+    context = str(response.get("context") or "").strip()
+    if not context:
+        context = _fallback_preference_context(answer, preferences, trip_snapshot)
+
+    agent_response["response"] = {
+        "question": None,
+        "is_qna_complete": True,
+        "context": context,
+    }
+    return agent_response
+
+
+def _fallback_preference_question(preferences, trip_snapshot):
+    destinations = [
+        str(item.get("name")).strip()
+        for item in (trip_snapshot or {}).get("destinations", [])
+        if isinstance(item, dict) and item.get("name")
+    ]
+    destination = ", ".join(destinations) or "your destination"
+    interests = [
+        str(item).strip()
+        for item in (preferences or {}).get("interest_tags", [])
+        if item
+    ]
+    question_start = (
+        f"Keeping your interest in {' and '.join(interests[:2])} in mind, what"
+        if interests
+        else "What"
+    )
+    return (
+        f"{question_start} would your ideal day in {destination} include—"
+        "places you want to see, activities you enjoy, and foods you want to try or avoid?"
+    )
+
+
+def _fallback_preference_context(answer, preferences, trip_snapshot):
+    preferences = preferences or {}
+    parts = [f'Traveler answer: "{str(answer).strip()}".']
+    preference_labels = (
+        ("Travel pace", "travel_pace"),
+        ("Interests", "interest_tags"),
+        ("Dietary needs", "dietary_needs"),
+        ("Mobility constraints", "mobility_constraints"),
+        ("Accommodation preference", "accommodation_preference"),
+    )
+    for label, key in preference_labels:
+        value = preferences.get(key)
+        if isinstance(value, list):
+            value = ", ".join(str(item).strip() for item in value if item)
+        if value:
+            parts.append(f"{label}: {value}.")
+
+    destinations = [
+        str(item.get("name")).strip()
+        for item in (trip_snapshot or {}).get("destinations", [])
+        if isinstance(item, dict) and item.get("name")
+    ]
+    if destinations:
+        parts.append(f"Destinations: {', '.join(destinations)}.")
+    return " ".join(parts)
 
 
 def build_recommendations_agent_query(preferences, trip_snapshot, destination_id):

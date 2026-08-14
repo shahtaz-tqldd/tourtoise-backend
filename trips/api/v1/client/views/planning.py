@@ -31,10 +31,11 @@ from trips.models import (
 )
 from trips.services.notifications import schedule_trip_notifications
 from trips.services.services import (
-    build_planning_response_meta,
+    build_final_preference_agent_query,
     build_initial_agent_query,
     build_itinerary_agent_query,
     build_itinerary_planning_context,
+    build_planning_response_meta,
     build_preparation_agent_query,
     build_recommendations_agent_query,
     build_trip_snapshot,
@@ -43,9 +44,11 @@ from trips.services.services import (
     get_or_create_conversation_session,
     get_or_create_planning_session,
     get_or_create_planning_step_session,
+    finalize_preference_response,
     get_step_blocking_errors,
     get_trip_planning_flow,
     get_trip_planning_progress,
+    normalize_initial_preference_response,
     run_plan_agent_for_session as _run_plan_agent_for_session,
     update_trip_agent_context_from_qna,
     update_trip_agent_context_from_itinerary,
@@ -142,6 +145,11 @@ class TripAgentInitAPIView(UserTripQuerysetMixin, GenericAPIView):
                 )
         except InsufficientCreditsError as exc:
             return insufficient_credits_response(exc)
+        plan_agent_response = normalize_initial_preference_response(
+            plan_agent_response,
+            normalized_payload,
+            trip_snapshot,
+        )
         qna_response = plan_agent_response["response"]
         agent_message = qna_response.get("question") or qna_response.get("context") or ""
 
@@ -250,6 +258,9 @@ class TripAgentCreateMessageAPIView(UserTripQuerysetMixin, GenericAPIView):
             )
 
         try:
+            preferences = trip.preferences or {}
+            trip_snapshot = build_trip_snapshot(trip)
+            answer = serializer.validated_data["message"]
             with CreditService.charge_agent_generation(
                 user=request.user,
                 amount=CreditService.PREFERENCE_QUESTION_COST,
@@ -260,23 +271,35 @@ class TripAgentCreateMessageAPIView(UserTripQuerysetMixin, GenericAPIView):
                 create_agent_message(
                     session=session,
                     sender=AgentMessageSender.USER,
-                    content=serializer.validated_data["message"],
+                    content=answer,
                     user=request.user,
                 )
 
                 plan_agent_response = run_plan_agent_for_session(
                     session=session,
-                    user_query=serializer.validated_data["message"],
+                    user_query=build_final_preference_agent_query(
+                        answer,
+                        preferences,
+                        trip_snapshot,
+                    ),
+                    preferences=preferences,
+                    trip_snapshot=trip_snapshot,
                 )
         except InsufficientCreditsError as exc:
             return insufficient_credits_response(exc)
+        plan_agent_response = finalize_preference_response(
+            plan_agent_response,
+            answer,
+            preferences,
+            trip_snapshot,
+        )
         qna_response = plan_agent_response["response"]
-        agent_message = qna_response.get("question", None) 
+        agent_message = qna_response.get("question", None)
         system_message = qna_response.get("context", None)
-        
+
         content = agent_message or system_message or ""
         sender = AgentMessageSender.AGENT if agent_message else AgentMessageSender.SYSTEM
-        
+
         create_agent_message(
             session=session,
             sender=sender,
@@ -290,7 +313,12 @@ class TripAgentCreateMessageAPIView(UserTripQuerysetMixin, GenericAPIView):
 
         trip.updated_by = request.user
         trip.save(update_fields=["updated_by", "updated_at"])
-        is_step_complete = update_trip_agent_context_from_qna(trip, plan_agent_response, session, request.user)
+        is_step_complete = update_trip_agent_context_from_qna(
+            trip,
+            plan_agent_response,
+            session,
+            request.user,
+        )
 
         return APIResponse.success(
             data={

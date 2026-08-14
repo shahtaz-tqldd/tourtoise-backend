@@ -5,14 +5,14 @@ from pydantic import BaseModel, Field
 class TripPreferenceQNAResponse(BaseModel):
     question: Optional[str] = Field(
         default=None,
-        description="The next question to ask the user. Must be null when QNA is complete.",
+        description="The single preference question to ask. Must be null after the user answers it.",
     )
     is_qna_complete: bool = Field(
-        description="True when enough preference context has been collected.",
+        description="False for the initial question and true after the user's first answer.",
     )
     context: Optional[str] = Field(
         default=None,
-        description="Short summarized traveler preference context. Must be null until QNA is complete.",
+        description="Short recommendation-ready preference context. Must be null until QNA is complete.",
     )
 
 

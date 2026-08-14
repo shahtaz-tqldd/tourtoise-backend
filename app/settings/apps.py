@@ -20,6 +20,7 @@ THIRD_PARTY_APPS = [
 
 
 MODULER_APPS = [
+    "app.base.apps.BaseConfig",
     "accounts.apps.AccountsConfig",
     "destinations.apps.DestinationsConfig",
     "trips.apps.TripsConfig",

@@ -166,6 +166,31 @@ class ChildImageUploadMixin:
                 created_by_id=request.user.id,
             )
 
+    def _sync_child_cover_image(self, instance, image_file):
+        if image_file is serializers.empty:
+            return
+
+        previous_image_url = instance.cover_image
+
+        def enqueue():
+            storage_path = self._save_pending_upload(image_file)
+            base_name = slugify(instance.name) or uuid4().hex[:8]
+            upload_model_image.delay(
+                storage_path=storage_path,
+                app_label=instance._meta.app_label,
+                model_name=instance._meta.object_name,
+                object_id=str(instance.pk),
+                field_name="cover_image",
+                folder=(
+                    f"{settings.CLOUDINARY_FOLDER}/destinations/"
+                    f"{self.image_folder_name}/covers"
+                ),
+                public_id=f"{base_name}-{instance.id}-cover",
+                previous_image_url=previous_image_url,
+            )
+
+        transaction.on_commit(enqueue)
+
     def _delete_child_images(self, instance, image_urls):
         if not image_urls:
             return
@@ -224,6 +249,7 @@ class AdminAttractionSerializer(ChildImageUploadMixin, serializers.ModelSerializ
         write_only=True,
     )
     removed_images = FlexibleJSONField(required=False, write_only=True)
+    cover_image_file = serializers.ImageField(required=False, write_only=True)
     tags = DestinationTagSerializer(many=True, read_only=True)
     tag_ids = serializers.PrimaryKeyRelatedField(
         queryset=DestinationTag.objects.all(),
@@ -249,6 +275,7 @@ class AdminAttractionSerializer(ChildImageUploadMixin, serializers.ModelSerializ
             "longitude",
             "address",
             "cover_image",
+            "cover_image_file",
             "budget_tier",
             "avg_duration_hours",
             "best_time_of_day",
@@ -283,6 +310,7 @@ class AdminAttractionSerializer(ChildImageUploadMixin, serializers.ModelSerializ
         request = self.context["request"]
         tag_ids = validated_data.pop("tag_ids", [])
         image_files = validated_data.pop("images", [])
+        cover_image_file = validated_data.pop("cover_image_file", serializers.empty)
         validated_data.pop("removed_images", [])
         validated_data["destination"] = self.context["destination"]
         validated_data["created_by"] = request.user
@@ -290,17 +318,20 @@ class AdminAttractionSerializer(ChildImageUploadMixin, serializers.ModelSerializ
         attraction = super().create(validated_data)
         if tag_ids:
             attraction.tags.set(tag_ids)
+        self._sync_child_cover_image(attraction, cover_image_file)
         self._create_child_images(attraction, image_files)
         return attraction
 
     def update(self, instance, validated_data):
         tag_ids = validated_data.pop("tag_ids", None)
         image_files = validated_data.pop("images", [])
+        cover_image_file = validated_data.pop("cover_image_file", serializers.empty)
         removed_images = validated_data.pop("removed_images", [])
         validated_data["updated_by"] = self.context["request"].user
         attraction = super().update(instance, validated_data)
         if tag_ids is not None:
             attraction.tags.set(tag_ids)
+        self._sync_child_cover_image(attraction, cover_image_file)
         self._delete_child_images(attraction, removed_images)
         self._create_child_images(attraction, image_files)
         return attraction

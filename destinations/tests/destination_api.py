@@ -2,6 +2,7 @@ import csv
 import io
 from unittest.mock import patch
 
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import SimpleTestCase, TestCase
@@ -1131,6 +1132,47 @@ class AdminAttractionSerializerTests(TestCase):
         self.assertEqual(list(attraction.tags.all()), [tag])
         storage_save_mock.assert_called_once()
         upload_delay_mock.assert_called_once()
+
+    @patch("destinations.api.v1.admin.serializers.upload_model_image.delay")
+    @patch(
+        "destinations.api.v1.admin.serializers.default_storage.save",
+        return_value="pending_uploads/cloudinary/attraction-cover.gif",
+    )
+    def test_update_accepts_cover_image_file(self, storage_save_mock, upload_delay_mock):
+        attraction = Attraction.objects.create(
+            destination=self.destination,
+            name="Phewa Lake",
+            attraction_type="natural_site",
+            description="A scenic freshwater lake.",
+            cover_image="https://example.com/old-cover.jpg",
+        )
+        image = SimpleUploadedFile(
+            "new-cover.gif",
+            b"GIF87a\x01\x00\x01\x00\x80\x01\x00\x00\x00\x00ccc,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02D\x01\x00;",
+            content_type="image/gif",
+        )
+        serializer = AdminAttractionSerializer(
+            attraction,
+            data={"cover_image_file": image},
+            partial=True,
+            context={"request": self.request, "destination": self.destination},
+        )
+
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        with self.captureOnCommitCallbacks(execute=True):
+            serializer.save()
+
+        storage_save_mock.assert_called_once()
+        upload_delay_mock.assert_called_once_with(
+            storage_path="pending_uploads/cloudinary/attraction-cover.gif",
+            app_label="destinations",
+            model_name="Attraction",
+            object_id=str(attraction.id),
+            field_name="cover_image",
+            folder=f"{settings.CLOUDINARY_FOLDER}/destinations/attractions/covers",
+            public_id=f"phewa-lake-{attraction.id}-cover",
+            previous_image_url="https://example.com/old-cover.jpg",
+        )
 
 
 class AdminDestinationWriteSerializerTests(TestCase):

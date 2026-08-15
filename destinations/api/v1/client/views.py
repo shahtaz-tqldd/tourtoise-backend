@@ -501,7 +501,7 @@ class ClientDestinationSaveAPIView(GenericAPIView):
     def get_destination(self):
         return get_object_or_404(
             Destination.objects.filter(status="published"),
-            slug=self.kwargs["destination_slug"],
+            slug=self.kwargs["slug"],
         )
 
     def post(self, request, *args, **kwargs):

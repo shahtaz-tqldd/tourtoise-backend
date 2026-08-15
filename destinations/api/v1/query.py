@@ -122,7 +122,7 @@ def apply_activity_filters(queryset, query_params):
     queryset = _apply_search_filter(
         queryset,
         query_params.get("search", "").strip(),
-        ("name", "description", "best_season"),
+        ("name", "description"),
     )
     for parameter in ("activity_type", "budget_tier", "difficulty_level"):
         queryset = _apply_multi_value_filter(queryset, query_params, parameter)

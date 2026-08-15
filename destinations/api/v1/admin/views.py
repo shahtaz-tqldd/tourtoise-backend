@@ -1,8 +1,13 @@
+from uuid import UUID
+
 from rest_framework import status
+from rest_framework.exceptions import ValidationError
 from rest_framework.generics import GenericAPIView
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.renderers import JSONRenderer
 from django.shortcuts import get_object_or_404
+from django.db import transaction
 
 from accounts.permissions import IsSuperAdmin
 from app.base.pagination import CustomPagination
@@ -33,6 +38,65 @@ from destinations.api.v1.query import apply_destination_filters
 from destinations.models import Activity, Attraction, Cuisine, Destination
 from destinations.tasks import process_vector_operations
 from vector_store.models import VectorDocument
+
+from destinations.api.v1.admin.bulk_export import RESOURCE_ALIASES, build_bulk_download
+
+
+class BulkCSVRenderer(JSONRenderer):
+    media_type = "text/csv"
+    format = "csv"
+
+
+class BulkXLSXRenderer(JSONRenderer):
+    media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    format = "xlsx"
+
+
+class DestinationBulkParameterMixin:
+    id_parameters = (
+        "destination_ids",
+        "activity_ids",
+        "cuisine_ids",
+        "attraction_ids",
+    )
+    resource_id_parameters = {
+        "destinations": "destination_ids",
+        "activities": "activity_ids",
+        "cuisines": "cuisine_ids",
+        "attractions": "attraction_ids",
+    }
+
+    def get_bulk_resource(self, request):
+        resource_value = request.query_params.get("type", "destination").strip().lower()
+        resource = RESOURCE_ALIASES.get(resource_value)
+        if not resource:
+            raise ValidationError(
+                {"type": "Choose destination, activities, cuisines, or attractions."}
+            )
+        return resource
+
+    def get_selected_ids(self, request):
+        return {
+            parameter: self._parse_ids(request, parameter)
+            for parameter in self.id_parameters
+        }
+
+    def _parse_ids(self, request, parameter):
+        values = []
+        for raw_value in request.query_params.getlist(parameter):
+            values.extend(part.strip() for part in raw_value.split(",") if part.strip())
+
+        parsed = []
+        seen = set()
+        for value in values:
+            try:
+                item_id = UUID(value)
+            except (TypeError, ValueError, AttributeError) as exc:
+                raise ValidationError({parameter: f"'{value}' is not a valid UUID."}) from exc
+            if item_id not in seen:
+                parsed.append(item_id)
+                seen.add(item_id)
+        return parsed
 
 
 class DestinationPaginationMixin:
@@ -446,6 +510,171 @@ class DestinationBulkUploadAPIView(GenericAPIView):
             message="Bulk destinations created successfully.",
             status=status.HTTP_201_CREATED,
         )
+
+
+class DestinationBulkDownloadAPIView(DestinationBulkParameterMixin, GenericAPIView):
+    """Download existing destination data in round-trip-compatible CSV or XLSX files."""
+
+    permission_classes = [IsAuthenticated, IsSuperAdmin]
+    # DRF treats the `format` query parameter as renderer selection before `get()`.
+    # Register both download formats even though successful responses are HttpResponse.
+    renderer_classes = [JSONRenderer, BulkCSVRenderer, BulkXLSXRenderer]
+
+    def get(self, request, *args, **kwargs):
+        resource = self.get_bulk_resource(request)
+
+        file_format = request.query_params.get("format", "xlsx").strip().lower()
+        if file_format not in {"csv", "xlsx"}:
+            raise ValidationError({"format": "Choose csv or xlsx."})
+
+        return build_bulk_download(
+            resource=resource,
+            file_format=file_format,
+            selected_ids=self.get_selected_ids(request),
+        )
+
+
+class DestinationBatchTrainAPIView(DestinationBulkParameterMixin, GenericAPIView):
+    """Queue vector training for a selected resource type and optional IDs."""
+
+    permission_classes = [IsAuthenticated, IsSuperAdmin]
+    resource_models = {
+        "destinations": Destination,
+        "activities": Activity,
+        "cuisines": Cuisine,
+        "attractions": Attraction,
+    }
+    resource_source_types = {
+        "activities": "activity",
+        "cuisines": "cuisine",
+        "attractions": "attraction",
+    }
+
+    def post(self, request, *args, **kwargs):
+        resource = self.get_bulk_resource(request)
+        selected_ids = self.get_selected_ids(request)
+        requested_ids = selected_ids[self.resource_id_parameters[resource]]
+        model = self.resource_models[resource]
+        queryset = model.objects.all()
+        if requested_ids:
+            queryset = queryset.filter(id__in=requested_ids)
+
+        if resource == "destinations":
+            records = list(queryset.values_list("id", flat=True))
+            operations = [
+                {
+                    "action": "index_tree",
+                    "source_type": "destination",
+                    "source_id": str(item_id),
+                    "destination_id": str(item_id),
+                }
+                for item_id in records
+            ]
+        else:
+            records = list(queryset.values_list("id", "destination_id"))
+            source_type = self.resource_source_types[resource]
+            operations = [
+                {
+                    "action": "index",
+                    "source_type": source_type,
+                    "source_id": str(item_id),
+                    "destination_id": str(destination_id),
+                }
+                for item_id, destination_id in records
+            ]
+
+        if operations:
+            process_vector_operations.delay(operations)
+
+        queued_ids = [operation["source_id"] for operation in operations]
+        queued_id_set = set(queued_ids)
+        return APIResponse.success(
+            data={
+                "type": resource,
+                "requested_count": len(requested_ids) if requested_ids else len(operations),
+                "queued_count": len(operations),
+                "queued_ids": queued_ids,
+                "not_found_ids": [
+                    str(item_id)
+                    for item_id in requested_ids
+                    if str(item_id) not in queued_id_set
+                ],
+            },
+            message="Batch training queued successfully.",
+            status=status.HTTP_202_ACCEPTED,
+        )
+
+
+class DestinationBatchDeleteAPIView(DestinationBulkParameterMixin, GenericAPIView):
+    """Delete explicitly selected destination resources and their hosted images."""
+
+    permission_classes = [IsAuthenticated, IsSuperAdmin]
+    resource_models = DestinationBatchTrainAPIView.resource_models
+
+    def post(self, request, *args, **kwargs):
+        return self.delete(request, *args, **kwargs)
+
+    def delete(self, request, *args, **kwargs):
+        resource = self.get_bulk_resource(request)
+        selected_ids = self.get_selected_ids(request)
+        requested_ids = selected_ids[self.resource_id_parameters[resource]]
+        parameter = self.resource_id_parameters[resource]
+        if not requested_ids:
+            raise ValidationError(
+                {parameter: f"Provide at least one ID to batch delete {resource}."}
+            )
+
+        model = self.resource_models[resource]
+        queryset = self._delete_queryset(model, requested_ids)
+        with transaction.atomic():
+            items = list(queryset.select_for_update())
+            deleted_ids = [str(item.id) for item in items]
+            image_urls = self._image_urls(items)
+            model.objects.filter(id__in=[item.id for item in items]).delete()
+
+        for image_url in image_urls:
+            delete_image(image_url=image_url)
+
+        deleted_id_set = set(deleted_ids)
+        return APIResponse.success(
+            data={
+                "type": resource,
+                "requested_count": len(requested_ids),
+                "deleted_count": len(deleted_ids),
+                "deleted_ids": deleted_ids,
+                "not_found_ids": [
+                    str(item_id)
+                    for item_id in requested_ids
+                    if str(item_id) not in deleted_id_set
+                ],
+            },
+            message="Batch delete completed successfully.",
+        )
+
+    def _delete_queryset(self, model, requested_ids):
+        queryset = model.objects.filter(id__in=requested_ids).prefetch_related("images")
+        if model is Destination:
+            queryset = queryset.prefetch_related(
+                "attractions__images",
+                "activities__images",
+                "cuisines__images",
+            )
+        return queryset
+
+    def _image_urls(self, items):
+        urls = []
+        for item in items:
+            self._append_item_images(urls, item)
+            if isinstance(item, Destination):
+                for relation in ("attractions", "activities", "cuisines"):
+                    for child in getattr(item, relation).all():
+                        self._append_item_images(urls, child)
+        return list(dict.fromkeys(urls))
+
+    def _append_item_images(self, urls, item):
+        if item.cover_image:
+            urls.append(item.cover_image)
+        urls.extend(image.image_url for image in item.images.all() if image.image_url)
 
 
 class DestinationUpdateAPIView(GenericAPIView):

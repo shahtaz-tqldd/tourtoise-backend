@@ -87,7 +87,7 @@ def _fetch_destination_items(destination_id: str, search_query: str = "", limit_
             if activity.approx_cost is not None
             else None,
             "duration_hours": activity.duration_hours,
-            "best_season": activity.best_season,
+            "best_months": activity.best_months,
             "picking_reasons": activity.picking_reasons,
             "notes": activity.notes,
             "booking_required": activity.booking_required,

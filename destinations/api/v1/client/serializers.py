@@ -78,6 +78,7 @@ class ClientAttractionSerializer(serializers.ModelSerializer):
             "budget_tier",
             "avg_duration_hours",
             "best_time_of_day",
+            "best_months",
             "picking_reasons",
             "notes",
             "tags",
@@ -105,7 +106,7 @@ class ClientActivitySerializer(serializers.ModelSerializer):
             "budget_tier",
             "approx_cost",
             "duration_hours",
-            "best_season",
+            "best_months",
             "cover_image",
             "picking_reasons",
             "notes",
@@ -152,6 +153,7 @@ class ClientDestinationAttractionSerializer(serializers.ModelSerializer):
             "address",
             "cover_image",
             "tags",
+            "best_months",
             "is_featured",
         )
         read_only_fields = fields
@@ -165,6 +167,7 @@ class ClientDestinationActivitySerializer(serializers.ModelSerializer):
             "slug",
             "activity_type",
             "cover_image",
+            "best_months",
             "booking_required",
             "is_featured",
         )

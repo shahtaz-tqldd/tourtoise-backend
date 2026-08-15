@@ -9,6 +9,7 @@ from django.core.files.storage import default_storage
 from django.db import models, transaction
 from django.utils.text import slugify
 from rest_framework import serializers
+from rest_framework.fields import empty
 
 from app.utils.cloudinary import delete_image
 from destinations.tasks import (
@@ -50,6 +51,41 @@ class FlexibleJSONField(serializers.JSONField):
                 data = json.loads(data)
             except json.JSONDecodeError as exc:
                 raise serializers.ValidationError("Send a valid JSON value.") from exc
+        return super().to_internal_value(data)
+
+
+class FlexibleIntegerListField(serializers.ListField):
+    """Accept an integer list from JSON requests or a JSON string in form-data."""
+
+    def __init__(self, **kwargs):
+        kwargs.setdefault(
+            "child",
+            serializers.IntegerField(min_value=1, max_value=12),
+        )
+        super().__init__(**kwargs)
+
+    def get_value(self, dictionary):
+        value = super().get_value(dictionary)
+        if value is empty and self.field_name in dictionary:
+            return dictionary.get(self.field_name)
+        return value
+
+    def to_internal_value(self, data):
+        if data in (None, ""):
+            data = []
+        elif (
+            isinstance(data, list)
+            and len(data) == 1
+            and isinstance(data[0], str)
+            and data[0].lstrip().startswith("[")
+        ):
+            data = data[0]
+
+        if isinstance(data, str):
+            try:
+                data = json.loads(data)
+            except json.JSONDecodeError as exc:
+                raise serializers.ValidationError("Send a valid JSON array of month integers.") from exc
         return super().to_internal_value(data)
 
 
@@ -197,6 +233,7 @@ class AdminAttractionSerializer(ChildImageUploadMixin, serializers.ModelSerializ
     )
     picking_reasons = FlexibleJSONField(required=False)
     notes = FlexibleJSONField(required=False)
+    best_months = FlexibleIntegerListField(required=False)
 
     class Meta:
         model = Attraction
@@ -215,6 +252,7 @@ class AdminAttractionSerializer(ChildImageUploadMixin, serializers.ModelSerializ
             "budget_tier",
             "avg_duration_hours",
             "best_time_of_day",
+            "best_months",
             "picking_reasons",
             "notes",
             "tags",
@@ -296,6 +334,7 @@ class AdminActivitySerializer(ChildImageUploadMixin, serializers.ModelSerializer
     removed_images = FlexibleJSONField(required=False, write_only=True)
     picking_reasons = FlexibleJSONField(required=False)
     notes = FlexibleJSONField(required=False)
+    best_months = FlexibleIntegerListField(required=False)
 
     class Meta:
         model = Activity
@@ -310,7 +349,7 @@ class AdminActivitySerializer(ChildImageUploadMixin, serializers.ModelSerializer
             "budget_tier",
             "approx_cost",
             "duration_hours",
-            "best_season",
+            "best_months",
             "cover_image",
             "picking_reasons",
             "notes",
@@ -323,7 +362,6 @@ class AdminActivitySerializer(ChildImageUploadMixin, serializers.ModelSerializer
         )
         read_only_fields = ("id", "destination", "slug", "created_at", "updated_at")
         extra_kwargs = {
-            "best_season": {"required": False, "allow_blank": True},
             "cover_image": {"required": False, "allow_blank": True},
             "approx_cost": {"required": False, "allow_blank": True, "allow_null": True},
         }
@@ -1123,6 +1161,7 @@ BULK_DESTINATION_TEMPLATE = {
             "budget_tier",
             "avg_duration_hours",
             "best_time_of_day",
+            "best_months",
             "picking_reasons",
             "notes",
             "entrance_fee_required",
@@ -1139,7 +1178,7 @@ BULK_DESTINATION_TEMPLATE = {
             "budget_tier",
             "approx_cost",
             "duration_hours",
-            "best_season",
+            "best_months",
             "cover_image",
             "picking_reasons",
             "notes",
@@ -1199,6 +1238,7 @@ BULK_DESTINATION_TEMPLATE = {
         "address",
         "avg_duration_hours",
         "best_time_of_day",
+        "best_months",
         "picking_reasons",
         "notes",
         "entrance_fee_required",
@@ -1207,7 +1247,7 @@ BULK_DESTINATION_TEMPLATE = {
         "activity_type",
         "approx_cost",
         "duration_hours",
-        "best_season",
+        "best_months",
         "booking_required",
         "cuisine_type",
         "spice_level",
@@ -1326,6 +1366,7 @@ BULK_ATTRACTION_TEMPLATE = {
             "budget_tier",
             "avg_duration_hours",
             "best_time_of_day",
+            "best_months",
             "picking_reasons",
             "notes",
             "entrance_fee_required",
@@ -1349,6 +1390,7 @@ BULK_ATTRACTION_TEMPLATE = {
         "budget_tier",
         "avg_duration_hours",
         "best_time_of_day",
+        "best_months",
         "picking_reasons",
         "notes",
         "entrance_fee_required",
@@ -1368,6 +1410,7 @@ BULK_ATTRACTION_TEMPLATE = {
         "budget_tier": "mid",
         "avg_duration_hours": "2",
         "best_time_of_day": "evening",
+        "best_months": "10;11",
         "picking_reasons": "Boat rides;Mountain views",
         "notes": "Go near sunset;Carry cash",
         "entrance_fee_required": "false",
@@ -1394,7 +1437,7 @@ BULK_ACTIVITY_TEMPLATE = {
             "budget_tier",
             "approx_cost",
             "duration_hours",
-            "best_season",
+            "best_months",
             "cover_image",
             "image_urls",
             "image_captions",
@@ -1412,7 +1455,7 @@ BULK_ACTIVITY_TEMPLATE = {
         "budget_tier",
         "approx_cost",
         "duration_hours",
-        "best_season",
+        "best_months",
         "cover_image",
         "image_urls",
         "image_captions",
@@ -1429,7 +1472,7 @@ BULK_ACTIVITY_TEMPLATE = {
         "budget_tier": "premium",
         "approx_cost": "120 USD",
         "duration_hours": "3",
-        "best_season": "Autumn",
+        "best_months": "9;10;11",
         "cover_image": "https://example.com/paragliding-cover.jpg",
         "image_urls": "https://example.com/paragliding-1.jpg",
         "image_captions": "Takeoff view",
@@ -1776,6 +1819,7 @@ class AdminDestinationBulkUploadSerializer(serializers.Serializer):
                         "budget_tier": self._choice(row.get("budget_tier"), BudgetTier, "budget_tier", index, default=""),
                         "avg_duration_hours": self._optional_integer(row.get("avg_duration_hours"), "avg_duration_hours", index),
                         "best_time_of_day": self._choice(row.get("best_time_of_day"), BestTimeOfDay, "best_time_of_day", index, default=BestTimeOfDay.ANYTIME),
+                        "best_months": self._month_list(row.get("best_months"), index, "best_months"),
                         "picking_reasons": self._string_list(row.get("picking_reasons")),
                         "notes": self._string_list(row.get("notes")),
                         "entrance_fee_required": self._boolean(row.get("entrance_fee_required"), default=False),
@@ -1792,7 +1836,7 @@ class AdminDestinationBulkUploadSerializer(serializers.Serializer):
                         "budget_tier": self._choice(row["budget_tier"], BudgetTier, "budget_tier", index),
                         "approx_cost": row.get("approx_cost", ""),
                         "duration_hours": self._optional_integer(row.get("duration_hours"), "duration_hours", index),
-                        "best_season": row.get("best_season", ""),
+                        "best_months": self._month_list(row.get("best_months"), index, "best_months"),
                         "picking_reasons": self._string_list(row.get("picking_reasons")),
                         "notes": self._string_list(row.get("notes")),
                         "booking_required": self._boolean(row.get("booking_required"), default=False),
@@ -1912,12 +1956,12 @@ class AdminDestinationBulkUploadSerializer(serializers.Serializer):
             )
         return tags
 
-    def _month_list(self, value, index):
+    def _month_list(self, value, index, field_name="best_travel_months"):
         months = []
         for item in self._string_list(value):
-            month = self._integer(item, "best_travel_months", index)
+            month = self._integer(item, field_name, index)
             if month < 1 or month > 12:
-                raise serializers.ValidationError({"best_travel_months": f"Row {index} months must be from 1 to 12."})
+                raise serializers.ValidationError({field_name: f"Row {index} months must be from 1 to 12."})
             months.append(month)
         return sorted(set(months))
 
@@ -2138,6 +2182,7 @@ class AdminAttractionBulkUploadSerializer(AdminDestinationChildBulkUploadSeriali
             "budget_tier": self._choice(row.get("budget_tier"), BudgetTier, "budget_tier", index, default=""),
             "avg_duration_hours": self._optional_integer(row.get("avg_duration_hours"), "avg_duration_hours", index),
             "best_time_of_day": self._choice(row.get("best_time_of_day"), BestTimeOfDay, "best_time_of_day", index, default=BestTimeOfDay.ANYTIME),
+            "best_months": self._month_list(row.get("best_months"), index, "best_months"),
             "picking_reasons": self._string_list(row.get("picking_reasons")),
             "notes": self._string_list(row.get("notes")),
             "entrance_fee_required": self._boolean(row.get("entrance_fee_required"), default=False),
@@ -2167,7 +2212,7 @@ class AdminActivityBulkUploadSerializer(AdminDestinationChildBulkUploadSerialize
             "budget_tier": self._choice(row["budget_tier"], BudgetTier, "budget_tier", index),
             "approx_cost": row.get("approx_cost", ""),
             "duration_hours": self._optional_integer(row.get("duration_hours"), "duration_hours", index),
-            "best_season": row.get("best_season", ""),
+            "best_months": self._month_list(row.get("best_months"), index, "best_months"),
             "picking_reasons": self._string_list(row.get("picking_reasons")),
             "notes": self._string_list(row.get("notes")),
             "booking_required": self._boolean(row.get("booking_required"), default=False),

@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 from uuid import uuid4
 
@@ -75,3 +76,56 @@ class DestinationVectorFeatureFlagTests(SimpleTestCase):
         config_values.first.return_value = None
 
         self.assertTrue(self.service._is_vectorization_enabled())
+
+
+class DestinationVectorContentTests(SimpleTestCase):
+    def setUp(self):
+        self.service = DestinationVectorService(embedding_service=Mock())
+        self.destination = SimpleNamespace(name="Pokhara")
+
+    def test_activity_content_uses_best_months(self):
+        activity = SimpleNamespace(
+            destination=self.destination,
+            name="Paragliding",
+            description="Tandem flight.",
+            notes=[],
+            picking_reasons=[],
+            activity_type="adventure",
+            difficulty_level="easy",
+            budget_tier="premium",
+            approx_cost="120 USD",
+            best_months=[9, 10, 11],
+            is_featured=True,
+        )
+
+        content = self.service._build_content(
+            activity,
+            VectorDocument.SourceType.ACTIVITY,
+        )
+
+        self.assertIn("Best months: 9, 10, 11", content)
+        self.assertNotIn("Best season", content)
+
+    def test_attraction_content_uses_best_months(self):
+        attraction = SimpleNamespace(
+            destination=self.destination,
+            name="Phewa Lake",
+            description="A scenic lake.",
+            notes=[],
+            picking_reasons=[],
+            attraction_type="natural_site",
+            budget_tier="mid",
+            best_time_of_day="evening",
+            best_months=[10, 11],
+            how_to_reach="Walk from Lakeside.",
+            address="Lakeside",
+            is_featured=True,
+            tags=SimpleNamespace(all=lambda: []),
+        )
+
+        content = self.service._build_content(
+            attraction,
+            VectorDocument.SourceType.ATTRACTION,
+        )
+
+        self.assertIn("Best months: 10, 11", content)

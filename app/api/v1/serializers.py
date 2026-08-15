@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from uuid import uuid4
 
 from django.conf import settings
@@ -40,6 +41,27 @@ class TourtoiseConfigUpdateSerializer(serializers.ModelSerializer):
             if section != "audit"
             for field in section_fields
         )
+
+    def to_internal_value(self, data):
+        if not isinstance(data, Mapping):
+            return super().to_internal_value(data)
+
+        normalized_data = data.copy()
+        for section, fields in CONFIG_SECTIONS.items():
+            if section == "audit" or section not in data:
+                continue
+
+            section_data = data[section]
+            if not isinstance(section_data, Mapping):
+                raise serializers.ValidationError(
+                    {section: "Expected an object containing configuration fields."}
+                )
+
+            for field in fields:
+                if field in section_data:
+                    normalized_data[field] = section_data[field]
+
+        return super().to_internal_value(normalized_data)
 
     def validate(self, attrs):
         if not attrs:

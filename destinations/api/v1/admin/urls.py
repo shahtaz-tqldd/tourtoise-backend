@@ -38,6 +38,9 @@ cuisines_apis = [
 urlpatterns = [
     path("create/", views.DestinationCreateAPIView.as_view(), name="destination-create"),
     path("bulk-template/", views.DestinationBulkTemplateAPIView.as_view(), name="destination-bulk-template"),
+    path("bulk-download/", views.DestinationBulkDownloadAPIView.as_view(), name="destination-bulk-download"),
+    path("batch-train/", views.DestinationBatchTrainAPIView.as_view(), name="destination-batch-train"),
+    path("batch-delete/", views.DestinationBatchDeleteAPIView.as_view(), name="destination-batch-delete"),
     path("bulk-upload/", views.DestinationBulkUploadAPIView.as_view(), name="bulk-destination-upload"),
     path("list/", views.DestinationListAPIView.as_view(), name="destination-list"),
     path("<uuid:destination_id>/", include(destinations_apis)),

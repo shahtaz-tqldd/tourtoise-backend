@@ -247,6 +247,7 @@ class DestinationVectorService:
                     f"Attraction type: {instance.attraction_type}",
                     f"Budget tier: {instance.budget_tier}",
                     f"Best time of day: {instance.best_time_of_day}",
+                    f"Best months: {', '.join(str(month) for month in instance.best_months or [])}",
                     f"How to reach: {instance.how_to_reach}",
                     f"Address: {instance.address}",
                     f"Featured: {instance.is_featured}",
@@ -260,7 +261,7 @@ class DestinationVectorService:
                     f"Difficulty: {instance.difficulty_level}",
                     f"Budget tier: {instance.budget_tier}",
                     f"Approx cost: {instance.approx_cost}",
-                    f"Best season: {instance.best_season}",
+                    f"Best months: {', '.join(str(month) for month in instance.best_months or [])}",
                     f"Featured: {instance.is_featured}",
                 ]
             )

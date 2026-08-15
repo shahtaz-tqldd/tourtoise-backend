@@ -142,6 +142,15 @@ class Attraction(BaseModel):
     picking_reasons = models.JSONField(default=list,blank=True, help_text="List for picking this attractions.")
     notes = models.JSONField(default=list, blank=True, help_text="List of important notes")
     tags = models.ManyToManyField("DestinationTag", related_name="attractions", blank=True)
+
+    best_months = ArrayField(
+        base_field=models.PositiveSmallIntegerField(
+            validators=[MinValueValidator(1), MaxValueValidator(12)]
+        ),
+        default=list,
+        blank=True,
+        help_text="Best months to visit as integers from 1 (Jan) to 12 (Dec).",
+    )
     
     entrance_fee_required = models.BooleanField(default=False)
     is_featured = models.BooleanField(default=False, db_index=True)
@@ -181,7 +190,14 @@ class Activity(BaseModel):
     duration_hours = models.PositiveSmallIntegerField(null=True, blank=True)
     budget_tier = models.CharField(max_length=10, choices=BudgetTier.choices)
     approx_cost = models.CharField(max_length=100, null=True, blank=True)
-    best_season = models.CharField(max_length=100, blank=True)
+    best_months = ArrayField(
+        base_field=models.PositiveSmallIntegerField(
+            validators=[MinValueValidator(1), MaxValueValidator(12)]
+        ),
+        default=list,
+        blank=True,
+        help_text="Best months to visit as integers from 1 (Jan) to 12 (Dec).",
+    )
 
     picking_reasons = models.JSONField(default=list,blank=True, help_text="List for picking this attractions.")
     notes = models.JSONField(default=list, blank=True, help_text="List of important notes")

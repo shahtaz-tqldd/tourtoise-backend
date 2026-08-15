@@ -174,10 +174,11 @@ class AccountListSerializer(serializers.ModelSerializer):
 
 class CreditRequestUserSerializer(serializers.ModelSerializer):
     username = serializers.CharField(source="profile.username", read_only=True)
+    avatar_url = serializers.URLField(source="profile.avatar_url", read_only=True)
 
     class Meta:
         model = User
-        fields = ("id", "email", "name", "username")
+        fields = ("id", "email", "name", "username", "avatar_url")
         read_only_fields = fields
 
 

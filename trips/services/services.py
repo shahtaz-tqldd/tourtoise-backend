@@ -776,7 +776,7 @@ def _serialize_selected_activities(selected_ids):
             "budget_tier": item.budget_tier,
             "approx_cost": str(item.approx_cost) if item.approx_cost is not None else None,
             "duration_hours": item.duration_hours,
-            "best_season": item.best_season,
+            "best_months": item.best_months,
             "picking_reasons": item.picking_reasons,
             "notes": item.notes,
             "booking_required": item.booking_required,

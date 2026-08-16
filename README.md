@@ -29,4 +29,4 @@ CI/CD is configured with GitHub Actions for the `prod` branch. See [docs/ci-cd.m
 - Comment notification to the reciepent
 - Manage multiple comments from different user (instead of making a lot of comment notification, how about updating the single notification if the status is unread)
 - Implement multiple destination covering during single trip plan
-
+- New readme added to check ci-cd

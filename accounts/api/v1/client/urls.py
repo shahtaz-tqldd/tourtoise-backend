@@ -18,6 +18,7 @@ profile_apis = [
     path("profile-states/", views.UserProfileStatesView.as_view(), name="user-profile-states"),
     path("public/<slug:username>/", views.PublicUserDetailsView.as_view(), name="public-user-details"),
     path("update/", views.UserDetailsUpdateView.as_view(), name="update-user"),
+    path("<slug:username>/", views.PublicUserDetailsView.as_view(), name="public-user-details"),
 ]
 
 settings_apis = [

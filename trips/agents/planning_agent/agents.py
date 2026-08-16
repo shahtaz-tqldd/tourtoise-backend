@@ -6,8 +6,6 @@ from .tools import fetch_destination_items_tool
 from .schema import (
     TripPreferenceQNAResponse,
     TripDestinationRecommendationsResponse,
-    TripItineraryDesignResponse,
-    TripPreparationResponse,
 )
 
 from trips.choices import PlanningStep
@@ -50,7 +48,10 @@ class ADKAgent:
                     agent_instruction,
                     agent_tools,
                 ) = self.itenary_design_agent(trip)
-                output_schema = TripItineraryDesignResponse
+                # Vertex AI does not support controlled generation together
+                # with the Google Search tool. JSON is enforced by the prompt
+                # and parsed defensively after the agent finishes instead.
+                output_schema = None
             
             case PlanningStep.PREPARATION:
                 (
@@ -59,7 +60,9 @@ class ADKAgent:
                     agent_instruction,
                     agent_tools,
                 ) = self.trip_preparation_agent(trip)
-                output_schema = TripPreparationResponse
+                # This agent also uses Google Search, so an output schema would
+                # make Vertex AI reject the request with INVALID_ARGUMENT.
+                output_schema = None
 
 
             case _:

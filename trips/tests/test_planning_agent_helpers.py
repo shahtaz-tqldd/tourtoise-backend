@@ -1,24 +1,6 @@
 from django.test import SimpleTestCase
 
-from trips.agents.planning_agent.agents import ADKAgent
 from trips.agents.planning_agent.helpers import _parse_json_object
-from trips.agents.planning_agent.schema import (
-    TripItineraryDesignResponse,
-    TripPreparationResponse,
-)
-from trips.choices import PlanningStep
-
-
-class PlanningAgentSchemaTests(SimpleTestCase):
-    def test_itinerary_agent_enforces_its_output_schema(self):
-        agent = ADKAgent().root_agent(PlanningStep.ITINERARY, trip={})
-
-        self.assertIs(agent.output_schema, TripItineraryDesignResponse)
-
-    def test_preparation_agent_enforces_its_output_schema(self):
-        agent = ADKAgent().root_agent(PlanningStep.PREPARATION, trip={})
-
-        self.assertIs(agent.output_schema, TripPreparationResponse)
 
 
 class ParseAgentJsonObjectTests(SimpleTestCase):

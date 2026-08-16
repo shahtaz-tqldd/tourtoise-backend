@@ -11,7 +11,7 @@ from django.db import transaction
 
 from accounts.permissions import IsSuperAdmin
 from app.base.pagination import CustomPagination
-from app.services.vector_store import DestinationVectorService
+from vector_store.services.vectorize import DestinationVectorService
 from app.utils.cloudinary import delete_image
 from app.utils.response import APIResponse
 from destinations.api.v1.admin.serializers import (

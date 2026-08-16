@@ -5,7 +5,7 @@ from asgiref.sync import sync_to_async
 from django.db.models import Q
 from google.adk.tools import FunctionTool
 
-from app.services.vector_store import DestinationVectorService
+from vector_store.services.vectorize import DestinationVectorService
 from destinations.choices import Status
 from destinations.models import Destination
 
@@ -247,7 +247,11 @@ def _semantic_destination_search(*, query, destination_id=None, limit=8):
                 "source_type": item.source_type,
                 "source_id": item.source_id,
                 "content": item.content,
-                "distance": round(item.distance, 4),
+                "distance": (
+                    round(item.distance, 4) if item.distance is not None else None
+                ),
+                "text_rank": item.text_rank,
+                "rrf_score": item.rrf_score,
             }
             for item in results
         ],

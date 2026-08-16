@@ -5,7 +5,7 @@ from uuid import uuid4
 from django.db.models import Q
 from django.test import SimpleTestCase, TestCase
 
-from app.services.vector_store import DestinationVectorService
+from vector_store.services.vectorize import DestinationVectorService
 from destinations import signals as destination_signals
 from destinations.choices import ActivityType, AttractionType, BudgetTier, DestinationType
 from destinations.models import Activity, Attraction, Cuisine, Destination
@@ -212,8 +212,8 @@ class DestinationVectorDeletionTaskTests(SimpleTestCase):
         service.index_cuisine.assert_not_called()
         self.assertEqual(result, {"result": "processed", "count": 4})
 
-    @patch("app.services.vector_store.GeminiEmbeddingService")
-    @patch("app.services.vector_store.VectorDocument.objects")
+    @patch("vector_store.services.vectorize.GeminiEmbeddingService")
+    @patch("vector_store.services.vectorize.VectorDocument.objects")
     def test_real_delete_tree_task_does_not_initialize_embeddings(
         self,
         vector_document_objects,
@@ -244,7 +244,7 @@ class DestinationVectorDeletionTaskTests(SimpleTestCase):
 
 
 class DestinationVectorDeletionServiceTests(SimpleTestCase):
-    @patch("app.services.vector_store.VectorDocument.objects")
+    @patch("vector_store.services.vectorize.VectorDocument.objects")
     def test_remove_destination_tree_uses_metadata_and_exact_parent_fallback(
         self,
         vector_document_objects,

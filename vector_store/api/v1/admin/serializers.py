@@ -73,7 +73,7 @@ class VectorSemanticSearchQuerySerializer(serializers.Serializer):
     query = serializers.CharField(max_length=2000, allow_blank=False)
     source_type = SourceTypeFilterField(required=False)
     destination_id = serializers.UUIDField(required=False)
-    limit = serializers.IntegerField(min_value=1, max_value=100, default=20)
+    limit = serializers.IntegerField(min_value=1, max_value=100, default=10)
 
 
 class VectorSearchResultSerializer(serializers.Serializer):
@@ -85,7 +85,9 @@ class VectorSearchResultSerializer(serializers.Serializer):
     source_id = serializers.UUIDField(read_only=True)
     content = serializers.CharField(read_only=True)
     metadata = serializers.JSONField(read_only=True)
-    distance = serializers.FloatField(read_only=True)
+    distance = serializers.FloatField(read_only=True, allow_null=True)
+    text_rank = serializers.FloatField(read_only=True, allow_null=True)
+    rrf_score = serializers.FloatField(read_only=True)
 
 
 class VectorRecordBulkDeleteSerializer(serializers.Serializer):

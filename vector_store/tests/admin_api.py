@@ -7,7 +7,7 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIRequestFactory, force_authenticate
 
-from app.services.vector_store import VectorSearchResult
+from vector_store.services.vectorize import VectorSearchResult
 from vector_store.api.v1.admin.serializers import (
     VectorRecordListQuerySerializer,
     VectorRecordSerializer,

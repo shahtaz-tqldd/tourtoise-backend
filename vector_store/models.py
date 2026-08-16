@@ -1,6 +1,7 @@
 import uuid
 
 from django.contrib.postgres.indexes import GinIndex
+from django.contrib.postgres.search import SearchVector, SearchVectorField
 from django.db import models
 from pgvector.django import HnswIndex, VectorField
 
@@ -18,6 +19,11 @@ class VectorDocument(models.Model):
     content = models.TextField()
     metadata = models.JSONField(default=dict, blank=True)
     embedding = VectorField(dimensions=1536)
+    search_vector = models.GeneratedField(
+        expression=SearchVector("content", config="english"),
+        output_field=SearchVectorField(),
+        db_persist=True,
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -27,6 +33,10 @@ class VectorDocument(models.Model):
         indexes = [
             models.Index(fields=["source_type", "source_id"]),
             GinIndex(fields=["metadata"]),
+            GinIndex(
+                name="vector_docs_search_vector_gin",
+                fields=["search_vector"],
+            ),
             HnswIndex(
                 name="vector_docs_embedding_hnsw",
                 fields=["embedding"],

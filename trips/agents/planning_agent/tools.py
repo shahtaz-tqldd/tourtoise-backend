@@ -3,7 +3,7 @@ import logging
 from asgiref.sync import sync_to_async
 from google.adk.tools import FunctionTool
 
-from app.services.vector_store import DestinationVectorService
+from vector_store.services.vectorize import DestinationVectorService
 from destinations.models import Activity, Attraction, Cuisine
 from vector_store.models import VectorDocument
 
@@ -194,6 +194,8 @@ def _fetch_vector_candidates(destination_id: str, search_query: str, limit_per_t
                 "source_type": result.source_type,
                 "source_id": result.source_id,
                 "distance": result.distance,
+                "text_rank": result.text_rank,
+                "rrf_score": result.rrf_score,
                 "name": result.metadata.get("name"),
             }
         )

@@ -5,7 +5,7 @@ from rest_framework.permissions import IsAuthenticated
 
 from accounts.permissions import IsSuperAdmin
 from app.base.pagination import CustomPagination
-from app.services.vector_store import DestinationVectorService
+from vector_store.services.vectorize import DestinationVectorService
 from app.utils.response import APIResponse
 from vector_store.api.v1.admin.serializers import (
     VectorRecordBulkDeleteSerializer,
@@ -61,7 +61,7 @@ class VectorRecordListAPIView(GenericAPIView):
 
 
 class VectorSemanticSearchAPIView(GenericAPIView):
-    """Rank vector chunks by cosine distance from an embedded query."""
+    """Rank vector chunks with parallel semantic and full-text search."""
 
     permission_classes = [IsAuthenticated, IsSuperAdmin]
     serializer_class = VectorSemanticSearchQuerySerializer
@@ -85,7 +85,7 @@ class VectorSemanticSearchAPIView(GenericAPIView):
         return APIResponse.success(
             data=VectorSearchResultSerializer(results, many=True).data,
             meta={"count": len(results)},
-            message="Vector semantic search completed successfully.",
+            message="Hybrid search completed successfully.",
         )
 
 

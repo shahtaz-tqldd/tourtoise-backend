@@ -30,6 +30,6 @@ jobs:
             git checkout prod
             git pull origin prod
 
-            sudo bash startapp.sh
+            bash startapp.sh
 
             echo "Production deployment completed."

@@ -288,7 +288,26 @@ def _parse_json_object(raw_text: Optional[str]) -> Optional[dict[str, Any]]:
 
     try:
         data = json.loads(cleaned)
-    except json.JSONDecodeError:
+    except json.JSONDecodeError as exc:
+        # LLMs occasionally append an extra brace, commentary, or a repeated
+        # response after an otherwise complete JSON object. Preserve the first
+        # complete object instead of discarding the entire itinerary.
+        if exc.msg == "Extra data":
+            try:
+                data, parsed_end = json.JSONDecoder().raw_decode(cleaned)
+            except json.JSONDecodeError:
+                data = None
+            else:
+                trailing_text = cleaned[parsed_end:].strip()
+                logger.warning(
+                    "Agent returned trailing content after a valid JSON value; "
+                    "using the first value. trailing_preview=%r",
+                    trailing_text[:500],
+                )
+
+            if isinstance(data, dict):
+                return data
+
         if cleaned.startswith('"') and not cleaned.startswith("{"):
             try:
                 data = json.loads(f"{{{cleaned}}}")

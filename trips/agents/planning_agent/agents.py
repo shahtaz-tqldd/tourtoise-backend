@@ -6,6 +6,8 @@ from .tools import fetch_destination_items_tool
 from .schema import (
     TripPreferenceQNAResponse,
     TripDestinationRecommendationsResponse,
+    TripItineraryDesignResponse,
+    TripPreparationResponse,
 )
 
 from trips.choices import PlanningStep
@@ -48,7 +50,7 @@ class ADKAgent:
                     agent_instruction,
                     agent_tools,
                 ) = self.itenary_design_agent(trip)
-                output_schema = None
+                output_schema = TripItineraryDesignResponse
             
             case PlanningStep.PREPARATION:
                 (
@@ -57,7 +59,7 @@ class ADKAgent:
                     agent_instruction,
                     agent_tools,
                 ) = self.trip_preparation_agent(trip)
-                output_schema = None
+                output_schema = TripPreparationResponse
 
 
             case _:

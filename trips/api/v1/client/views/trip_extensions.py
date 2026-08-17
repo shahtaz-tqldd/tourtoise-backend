@@ -7,7 +7,8 @@ from rest_framework.generics import GenericAPIView
 from rest_framework.permissions import IsAuthenticated
 
 from app.utils.response import APIResponse
-from trips.choices import TripStatus
+from trips.choices import PlanningStep, TripStatus
+from trips.services.services import invalidate_trip_planning
 
 from trips.api.v1.client.serializers import (
     TripDaySerializer,
@@ -52,6 +53,11 @@ class TripDestinationCreateAPIView(UserTripQuerysetMixin, GenericAPIView):
         serializer = self.get_serializer(data=request.data, context={"request": request, "trip": trip})
         serializer.is_valid(raise_exception=True)
         trip_destination = serializer.save()
+        invalidate_trip_planning(
+            trip,
+            PlanningStep.RECOMMENDATION,
+            user=request.user,
+        )
         return APIResponse.success(
             data=TripDestinationSerializer(trip_destination).data,
             message="Destination added to trip successfully.",
@@ -90,7 +96,17 @@ class TripDestinationUpdateAPIView(UserTripQuerysetMixin, GenericAPIView):
             context={"request": request, "trip": trip_destination.trip},
         )
         serializer.is_valid(raise_exception=True)
+        planning_inputs_changed = any(
+            getattr(trip_destination, field) != value
+            for field, value in serializer.validated_data.items()
+        )
         trip_destination = serializer.save()
+        if planning_inputs_changed:
+            invalidate_trip_planning(
+                trip_destination.trip,
+                PlanningStep.RECOMMENDATION,
+                user=request.user,
+            )
         return APIResponse.success(
             data=TripDestinationSerializer(trip_destination).data,
             message="Trip destination updated successfully.",
@@ -117,6 +133,11 @@ class TripDestinationDeleteAPIView(UserTripQuerysetMixin, GenericAPIView):
         trip = self.get_trip_by_id()
         trip_destination = get_object_or_404(TripDestination, trip=trip, pk=self.kwargs["destination_id"])
         trip_destination.delete()
+        invalidate_trip_planning(
+            trip,
+            PlanningStep.RECOMMENDATION,
+            user=request.user,
+        )
         return APIResponse.success(message="Trip destination removed successfully.")
 
 
@@ -237,6 +258,11 @@ class TripDayCreateAPIView(UserTripQuerysetMixin, GenericAPIView):
         serializer = self.get_serializer(data=request.data, context={"request": request, "trip": trip})
         serializer.is_valid(raise_exception=True)
         day = serializer.save()
+        invalidate_trip_planning(
+            trip,
+            PlanningStep.PREPARATION,
+            user=request.user,
+        )
         return APIResponse.success(
             data=TripDaySerializer(day).data,
             message="Trip day created successfully.",
@@ -276,6 +302,11 @@ class TripDayUpdateAPIView(UserTripQuerysetMixin, GenericAPIView):
         )
         serializer.is_valid(raise_exception=True)
         day = serializer.save()
+        invalidate_trip_planning(
+            day.itinerary.trip,
+            PlanningStep.PREPARATION,
+            user=request.user,
+        )
         return APIResponse.success(
             data=TripDaySerializer(day).data,
             message="Trip day updated successfully.",
@@ -302,6 +333,11 @@ class TripDayDeleteAPIView(UserTripQuerysetMixin, GenericAPIView):
         trip = self.get_trip_by_id()
         day = get_object_or_404(TripItineraryDay, itinerary__trip=trip, pk=self.kwargs["day_id"])
         day.delete()
+        invalidate_trip_planning(
+            trip,
+            PlanningStep.PREPARATION,
+            user=request.user,
+        )
         return APIResponse.success(message="Trip day deleted successfully.")
 
 
@@ -339,6 +375,11 @@ class TripItineraryItemCreateAPIView(UserTripQuerysetMixin, GenericAPIView):
         )
         serializer.is_valid(raise_exception=True)
         item = serializer.save()
+        invalidate_trip_planning(
+            trip,
+            PlanningStep.PREPARATION,
+            user=request.user,
+        )
         return APIResponse.success(
             data=TripItineraryItemSerializer(item).data,
             message="Itinerary item created successfully.",
@@ -386,6 +427,11 @@ class TripItineraryItemUpdateAPIView(UserTripQuerysetMixin, GenericAPIView):
         )
         serializer.is_valid(raise_exception=True)
         item = serializer.save()
+        invalidate_trip_planning(
+            item.trip_itinerary_day.itinerary.trip,
+            PlanningStep.PREPARATION,
+            user=request.user,
+        )
         return APIResponse.success(
             data=TripItineraryItemSerializer(item).data,
             message="Itinerary item updated successfully.",
@@ -416,4 +462,9 @@ class TripItineraryItemDeleteAPIView(UserTripQuerysetMixin, GenericAPIView):
             pk=self.kwargs["item_id"],
         )
         item.delete()
+        invalidate_trip_planning(
+            trip,
+            PlanningStep.PREPARATION,
+            user=request.user,
+        )
         return APIResponse.success(message="Itinerary item deleted successfully.")

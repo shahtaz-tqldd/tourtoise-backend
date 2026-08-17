@@ -11,19 +11,24 @@ from vector_store.models import VectorDocument
 logger = logging.getLogger(__name__)
 
 
-def fetch_destination_items_tool():
-    async def fetch_destination_items(destination_id: str, search_query: str = "", limit_per_type: int = 8):
+def fetch_destination_items_tool(destination_ids: str | list[str]):
+    """Create a trip-scoped catalog tool that cannot query unrelated destinations."""
+
+    allowed_destination_ids = _unique_strings(
+        destination_ids if isinstance(destination_ids, list) else [destination_ids]
+    )
+
+    async def fetch_destination_items(search_query: str = "", limit_per_type: int = 6):
         """
-        Fetches personalized tour spots, activities, and food items for one destination.
+        Fetches personalized tour spots, activities, and food items for every trip destination.
         Uses vector search when search_query is provided, and falls back to destination item lists.
 
         Args:
-            destination_id: The ID of the destination for which to fetch items.
             search_query: Short preference/search query for vector matching.
             limit_per_type: Maximum items per item type.
         """
-        return await sync_to_async(_fetch_destination_items, thread_sensitive=True)(
-            destination_id,
+        return await sync_to_async(_fetch_all_destination_items, thread_sensitive=True)(
+            allowed_destination_ids,
             search_query,
             limit_per_type,
         )
@@ -31,29 +36,25 @@ def fetch_destination_items_tool():
     return FunctionTool(fetch_destination_items)
 
 
-def fetch_trip_planning_context_tool():
-    async def fetch_trip_planning_context(trip_id: str):
-        """
-        Fetches trip planning context for a trip.
-
-        Args:
-            trip_id: The ID of the trip for which to fetch context.
-        """
-        return await sync_to_async(_fetch_trip_planning_context, thread_sensitive=True)(trip_id)
-
-    return FunctionTool(fetch_trip_planning_context)
-
-
-def _fetch_trip_planning_context(trip_id: str):
-    from trips.models import Trip
-    from trips.services.services import build_itinerary_planning_context
-
-    trip = Trip.objects.get(pk=trip_id)
-    return build_itinerary_planning_context(trip)
+def _fetch_all_destination_items(destination_ids, search_query="", limit_per_type=6):
+    return {
+        "destinations": [
+            {
+                "destination_id": destination_id,
+                **_fetch_destination_items(
+                    destination_id,
+                    search_query=search_query,
+                    limit_per_type=limit_per_type,
+                ),
+            }
+            for destination_id in destination_ids
+        ]
+    }
 
 
-def _fetch_destination_items(destination_id: str, search_query: str = "", limit_per_type: int = 8):
+def _fetch_destination_items(destination_id: str, search_query: str = "", limit_per_type: int = 6):
     limit_per_type = _safe_limit(limit_per_type)
+    search_query = _compact_text(search_query, limit=500)
     vector_candidates = _fetch_vector_candidates(destination_id, search_query, limit_per_type)
 
     def serialize_attraction(attraction):
@@ -61,16 +62,14 @@ def _fetch_destination_items(destination_id: str, search_query: str = "", limit_
             "id": str(attraction.id),
             "name": attraction.name,
             "attraction_type": attraction.attraction_type,
-            "description": attraction.description,
-            "how_to_reach": attraction.how_to_reach,
+            "description": _compact_text(attraction.description),
             "address": attraction.address,
             "budget_tier": attraction.budget_tier,
             "avg_duration_hours": attraction.avg_duration_hours,
             "best_time_of_day": attraction.best_time_of_day,
-            "picking_reasons": attraction.picking_reasons,
-            "notes": attraction.notes,
+            "picking_reasons": _compact_list(attraction.picking_reasons),
+            "notes": _compact_list(attraction.notes),
             "tags": [tag.name for tag in attraction.tags.all()],
-            "images": [image.image_url for image in attraction.images.all()],
             "entrance_fee_required": attraction.entrance_fee_required,
             "approx_entrance_fee": attraction.approx_entrance_fee,
         }
@@ -80,7 +79,7 @@ def _fetch_destination_items(destination_id: str, search_query: str = "", limit_
             "id": str(activity.id),
             "name": activity.name,
             "activity_type": activity.activity_type,
-            "description": activity.description,
+            "description": _compact_text(activity.description),
             "difficulty_level": activity.difficulty_level,
             "budget_tier": activity.budget_tier,
             "approx_cost": str(activity.approx_cost)
@@ -88,8 +87,8 @@ def _fetch_destination_items(destination_id: str, search_query: str = "", limit_
             else None,
             "duration_hours": activity.duration_hours,
             "best_months": activity.best_months,
-            "picking_reasons": activity.picking_reasons,
-            "notes": activity.notes,
+            "picking_reasons": _compact_list(activity.picking_reasons),
+            "notes": _compact_list(activity.notes),
             "booking_required": activity.booking_required,
         }
 
@@ -98,14 +97,14 @@ def _fetch_destination_items(destination_id: str, search_query: str = "", limit_
             "id": str(cuisine.id),
             "name": cuisine.name,
             "cuisine_type": cuisine.cuisine_type,
-            "description": cuisine.description,
+            "description": _compact_text(cuisine.description),
             "spice_level": cuisine.spice_level,
             "meal_type": cuisine.meal_type,
             "is_vegetarian_friendly": cuisine.is_vegetarian_friendly,
             "is_featured": cuisine.is_featured,
             "approx_cost": cuisine.approx_cost,
-            "picking_reasons": cuisine.picking_reasons,
-            "notes": cuisine.notes,
+            "picking_reasons": _compact_list(cuisine.picking_reasons),
+            "notes": _compact_list(cuisine.notes),
         }
 
     attraction_ids = vector_candidates.get("attraction_ids") or []
@@ -113,15 +112,15 @@ def _fetch_destination_items(destination_id: str, search_query: str = "", limit_
     cuisine_ids = vector_candidates.get("cuisine_ids") or []
 
     attractions = _ordered_items(
-        Attraction.objects.filter(destination_id=destination_id).prefetch_related("tags", "images"),
+        Attraction.objects.filter(destination_id=destination_id).prefetch_related("tags"),
         attraction_ids,
-        fallback_order=("name",),
+        fallback_order=("-is_featured", "sort_order", "name"),
         limit=limit_per_type,
     )
     activities = _ordered_items(
         Activity.objects.filter(destination_id=destination_id),
         activity_ids,
-        fallback_order=("name",),
+        fallback_order=("-is_featured", "name"),
         limit=limit_per_type,
     )
     cuisines = _ordered_items(
@@ -135,10 +134,9 @@ def _fetch_destination_items(destination_id: str, search_query: str = "", limit_
         "attractions": [serialize_attraction(item) for item in attractions],
         "activities": [serialize_activity(item) for item in activities],
         "cuisines": [serialize_cuisine(item) for item in cuisines],
-        "vector_search": {
-            "used": bool(vector_candidates.get("used")),
-            "query": search_query or "",
-            "matches": vector_candidates.get("matches", []),
+        "retrieval": {
+            "semantic_ranking_used": bool(vector_candidates.get("used")),
+            "items_are_ranked": bool(vector_candidates.get("used")),
         },
     }
 
@@ -173,7 +171,7 @@ def _fetch_vector_candidates(destination_id: str, search_query: str, limit_per_t
         "activity_ids": [],
         "cuisine_ids": [],
     }
-    matches = []
+    has_matches = False
 
     for result in results:
         if result.source_type == VectorDocument.SourceType.ATTRACTION:
@@ -189,20 +187,10 @@ def _fetch_vector_candidates(destination_id: str, search_query: str, limit_per_t
             continue
 
         candidate_ids[key].append(result.source_id)
-        matches.append(
-            {
-                "source_type": result.source_type,
-                "source_id": result.source_id,
-                "distance": result.distance,
-                "text_rank": result.text_rank,
-                "rrf_score": result.rrf_score,
-                "name": result.metadata.get("name"),
-            }
-        )
+        has_matches = True
 
     return {
-        "used": bool(matches),
-        "matches": matches,
+        "used": has_matches,
         **candidate_ids,
     }
 
@@ -230,5 +218,22 @@ def _safe_limit(value):
     try:
         value = int(value)
     except (TypeError, ValueError):
-        return 8
-    return min(max(value, 1), 20)
+        return 6
+    return min(max(value, 1), 12)
+
+
+def _compact_text(value, *, limit=600):
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    return f"{text[: limit - 1].rstrip()}…"
+
+
+def _compact_list(value, *, limit=5):
+    if not isinstance(value, list):
+        return []
+    return [_compact_text(item, limit=240) for item in value[:limit] if item]
+
+
+def _unique_strings(values):
+    return list(dict.fromkeys(str(value) for value in values if value))

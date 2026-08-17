@@ -43,6 +43,7 @@ Every planning step response may include:
   "progress": {
     "current_step": "recommendation",
     "agent_active": true,
+    "stale_steps": [],
     "is_qna_complete": true,
     "is_recommendation_complete": false,
     "is_itinerary_design_complete": false,
@@ -64,6 +65,11 @@ Every planning step response may include:
   }
 }
 ```
+
+Changing dates, budget, traveler details, or destinations marks recommendation and
+downstream artifacts stale. Editing itinerary days/items marks preparation stale. The
+next planning request regenerates only the affected steps; stale records are retained
+until replacement succeeds.
 
 ## Trip List For Destination
 
@@ -254,7 +260,8 @@ Returns the latest preference session and messages.
 
 ### Recommendation
 
-Requires preference Q&A completion. The first call generates and saves recommendations; later calls return saved data.
+Requires preference Q&A completion. The first call generates and saves recommendations
+across every destination on the trip; later calls return saved data.
 
 ```json
 {
@@ -322,6 +329,7 @@ Requires recommendations. The first call generates and saves itinerary data.
     }
   ],
   "rough_budget": {
+    "accommodation": "320.00",
     "transport": "30.00",
     "food": "180.00",
     "activities": "120.00",
@@ -329,6 +337,13 @@ Requires recommendations. The first call generates and saves itinerary data.
     "miscellaneous": "50.00",
     "total_estimated_budget": "460.00",
     "budget_note": "Approximate estimate."
+  },
+  "budget_status": {
+    "target_total": "500.00",
+    "estimated_total": "780.00",
+    "currency": "USD",
+    "is_within_budget": false,
+    "difference": "280.00"
   },
   "progress": {},
   "flow": [],

@@ -84,6 +84,7 @@ class RoutePlanLeg(BaseModel):
 
 
 class TripBudgetBreakdown(BaseModel):
+    accommodation: Optional[str] = Field(default=None)
     transport: Optional[str] = Field(default=None)
     food: Optional[str] = Field(default=None)
     activities: Optional[str] = Field(default=None)

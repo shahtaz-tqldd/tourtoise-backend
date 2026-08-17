@@ -4,6 +4,7 @@ import re
 from typing import Optional, Any
 from dataclasses import dataclass
 
+from django.conf import settings
 from google.genai import types
 from trips.choices import PlanningStep
 
@@ -18,6 +19,8 @@ class AgentResponse:
     intention: str = "general"
     cost: float = 0.0
     total_tokens: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
 
 
 async def call_agent_async(
@@ -37,12 +40,14 @@ async def call_agent_async(
 
     total_prompt_tokens = 0
     total_output_tokens = 0
+    counted_usage_events = set()
 
     try:
         logger.info(
-            "Starting ADK agent call. user_id=%s session_id=%s query_chars=%s",
+            "Starting ADK agent call. user_id=%s session_id=%s planning_step=%s query_chars=%s",
             user_id,
             session_id,
+            planning_step,
             len(query),
         )
         async for event in runner.run_async(
@@ -50,15 +55,16 @@ async def call_agent_async(
             session_id=session_id,
             new_message=content,
         ):
-            if getattr(event, "usage_metadata", None):
-                total_prompt_tokens = max(
-                    total_prompt_tokens,
-                    _safe_int(event.usage_metadata.prompt_token_count),
+            usage_metadata = getattr(event, "usage_metadata", None)
+            usage_event_id = getattr(event, "id", None) or id(event)
+            if usage_metadata and usage_event_id not in counted_usage_events:
+                counted_usage_events.add(usage_event_id)
+                total_prompt_tokens += _safe_int(
+                    getattr(usage_metadata, "prompt_token_count", 0)
                 )
-                total_output_tokens = max(
-                    total_output_tokens,
-                    _safe_int(event.usage_metadata.candidates_token_count),
-                )
+                total_output_tokens += _safe_int(
+                    getattr(usage_metadata, "candidates_token_count", 0)
+                ) + _safe_int(getattr(usage_metadata, "thoughts_token_count", 0))
 
             agent_name = getattr(event, "author", None)
             if agent_name:
@@ -128,6 +134,8 @@ async def call_agent_async(
             intention=_define_intention(current_agent or ""),
             cost=cost,
             total_tokens=total_tokens,
+            input_tokens=total_prompt_tokens,
+            output_tokens=total_output_tokens,
         )
 
     except Exception:
@@ -372,12 +380,13 @@ def _calculate_token_price(
     output_token: int,
 ) -> tuple[float, int]:
     """
-    Gemini 2.5 Flash rough token price calculation.
-    Adjust if your actual model pricing/config changes.
+    Estimate model token cost from deploy-time pricing settings.
+
+    Tool-specific charges such as paid Google Search grounding are not included.
     """
 
-    input_token_cost = 0.3 / 1_000_000
-    output_token_cost = 0.6 / 1_000_000
+    input_token_cost = settings.PLANNING_AGENT_INPUT_COST_PER_MILLION / 1_000_000
+    output_token_cost = settings.PLANNING_AGENT_OUTPUT_COST_PER_MILLION / 1_000_000
 
     total_cost = input_token * input_token_cost + output_token * output_token_cost
     total_tokens = input_token + output_token

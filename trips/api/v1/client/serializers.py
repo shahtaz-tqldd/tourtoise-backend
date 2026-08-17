@@ -540,6 +540,7 @@ class TripDetailSerializer(serializers.ModelSerializer):
             "start_location_latitude",
             "start_location_longitude",
             "budget_tier",
+            "total_budget",
             "budget_currency",
             "preferences",
             "planning_summary",
@@ -683,6 +684,12 @@ class TripDetailsSerializer(serializers.ModelSerializer):
 
         return {
             "currency": obj.budget_currency,
+            "target_total": (
+                str(obj.total_budget) if obj.total_budget is not None else None
+            ),
+            "accommodation": (
+                str(budget.accommodation) if budget.accommodation is not None else None
+            ),
             "transport": str(budget.transport) if budget.transport is not None else None,
             "food": str(budget.food) if budget.food is not None else None,
             "activities": str(budget.activities) if budget.activities is not None else None,
@@ -756,6 +763,7 @@ class TripShortDetailsSerializer(serializers.ModelSerializer):
             "duration_days",
             "end_date",
             "budget_tier",
+            "total_budget",
             "budget_currency",
             "travelers_count",
             "traveler_type",
@@ -814,6 +822,7 @@ class PublicTripDetailSerializer(serializers.ModelSerializer):
             "start_location_latitude",
             "start_location_longitude",
             "budget_tier",
+            "total_budget",
             "budget_currency",
             "planning_summary",
             "agent_active",
@@ -874,6 +883,7 @@ class TripWriteSerializer(serializers.ModelSerializer):
             "start_location_latitude",
             "start_location_longitude",
             "budget_tier",
+            "total_budget",
             "budget_currency",
             "accommodation_preference",
             "destination_slugs",
@@ -881,6 +891,7 @@ class TripWriteSerializer(serializers.ModelSerializer):
             "planning_summary",
             "metadata",
         )
+        read_only_fields = ("current_step", "metadata")
 
     def validate(self, attrs):
         start_date = attrs.get("start_date", getattr(self.instance, "start_date", None))
@@ -964,11 +975,39 @@ class TripWriteSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         validated_data.pop("destination_slugs", None)
         self._merge_accommodation_preference(validated_data, instance)
+        planning_fields = {
+            "start_date",
+            "end_date",
+            "duration_days",
+            "travelers_count",
+            "traveler_type",
+            "origin_city",
+            "origin_country",
+            "start_location_address",
+            "start_location_latitude",
+            "start_location_longitude",
+            "budget_tier",
+            "total_budget",
+            "budget_currency",
+            "preferences",
+        }
+        planning_inputs_changed = any(
+            field in planning_fields and getattr(instance, field) != value
+            for field, value in validated_data.items()
+        )
         old_status = instance.status
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
         instance.updated_by = self.context["request"].user
         instance.save()
+        if planning_inputs_changed:
+            from trips.services.services import invalidate_trip_planning
+
+            invalidate_trip_planning(
+                instance,
+                PlanningStep.RECOMMENDATION,
+                user=self.context["request"].user,
+            )
         if old_status != TripStatus.COMPLETED and instance.status == TripStatus.COMPLETED:
             record_completed_trip_stats(instance)
         return instance

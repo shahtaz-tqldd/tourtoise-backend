@@ -1,4 +1,6 @@
 from django.shortcuts import get_object_or_404
+from django.core.exceptions import ObjectDoesNotExist
+from django.db.models import Count
 from uuid import UUID
 from rest_framework import status
 from rest_framework.generics import GenericAPIView
@@ -35,6 +37,7 @@ from trips.services.services import (
     build_initial_agent_query,
     build_itinerary_agent_query,
     build_itinerary_planning_context,
+    build_preparation_planning_context,
     build_planning_response_meta,
     build_preparation_agent_query,
     build_recommendations_agent_query,
@@ -46,9 +49,11 @@ from trips.services.services import (
     get_or_create_planning_step_session,
     finalize_preference_response,
     get_step_blocking_errors,
+    get_itinerary_budget_status,
     get_trip_planning_flow,
     get_trip_planning_progress,
     normalize_initial_preference_response,
+    restart_trip_preference_planning,
     run_plan_agent_for_session as _run_plan_agent_for_session,
     update_trip_agent_context_from_qna,
     update_trip_agent_context_from_itinerary,
@@ -85,7 +90,27 @@ def preflight_agent_credits(user, amount):
     return None
 
 
-class TripAgentInitAPIView(UserTripQuerysetMixin, GenericAPIView):
+def planning_ai_usage_metadata(agent_response):
+    return {
+        "model": agent_response.get("model") or "unknown",
+        "input_tokens": agent_response.get("input_tokens") or 0,
+        "output_tokens": agent_response.get("output_tokens") or 0,
+    }
+
+
+class PlanningTripQuerysetMixin(UserTripQuerysetMixin):
+    """Load only the one-to-one planning records needed by progress checks."""
+
+    def get_trip_queryset(self):
+        return super().get_trip_queryset().select_related(
+            "planning_session",
+            "trip_recommendations",
+            "trip_itinerary__rough_budget",
+            "structured_preparation",
+        )
+
+
+class TripAgentInitAPIView(PlanningTripQuerysetMixin, GenericAPIView):
     """
     Activate/update trip planning agent preferences for the current trip step.
     """
@@ -111,6 +136,9 @@ class TripAgentInitAPIView(UserTripQuerysetMixin, GenericAPIView):
 
         normalized_payload = serializer.normalized_preferences()
 
+        if get_trip_planning_progress(trip)["is_qna_complete"]:
+            restart_trip_preference_planning(trip, request.user)
+
         trip_snapshot = build_trip_snapshot(trip)
 
         try:
@@ -131,9 +159,7 @@ class TripAgentInitAPIView(UserTripQuerysetMixin, GenericAPIView):
                     session=session,
                     sender=AgentMessageSender.SYSTEM,
                     content="Trip planning",
-                    metadata={
-                        "trip_snapshot": trip_snapshot,
-                    },
+                    metadata={"context_version": 1},
                     user=request.user,
                 )
 
@@ -142,6 +168,14 @@ class TripAgentInitAPIView(UserTripQuerysetMixin, GenericAPIView):
                     user_query=build_initial_agent_query(normalized_payload, trip_snapshot),
                     preferences=normalized_payload,
                     trip_snapshot=trip_snapshot,
+                )
+                record_ai_usage(
+                    user=request.user,
+                    trip=trip,
+                    usage_type=AIUsageType.TRIP_PLANNING,
+                    cost=plan_agent_response.get("cost") or 0,
+                    tokens=plan_agent_response.get("total_tokens") or 0,
+                    metadata=planning_ai_usage_metadata(plan_agent_response),
                 )
         except InsufficientCreditsError as exc:
             return insufficient_credits_response(exc)
@@ -210,7 +244,7 @@ class TripAgentInitAPIView(UserTripQuerysetMixin, GenericAPIView):
         )
 
 
-class TripAgentCreateMessageAPIView(UserTripQuerysetMixin, GenericAPIView):
+class TripAgentCreateMessageAPIView(PlanningTripQuerysetMixin, GenericAPIView):
     """
     Save a trip agent message and advance the trip planning flow.
     """
@@ -285,6 +319,14 @@ class TripAgentCreateMessageAPIView(UserTripQuerysetMixin, GenericAPIView):
                     preferences=preferences,
                     trip_snapshot=trip_snapshot,
                 )
+                record_ai_usage(
+                    user=request.user,
+                    trip=trip,
+                    usage_type=AIUsageType.TRIP_PLANNING,
+                    cost=plan_agent_response.get("cost") or 0,
+                    tokens=plan_agent_response.get("total_tokens") or 0,
+                    metadata=planning_ai_usage_metadata(plan_agent_response),
+                )
         except InsufficientCreditsError as exc:
             return insufficient_credits_response(exc)
         plan_agent_response = finalize_preference_response(
@@ -334,7 +376,7 @@ class TripAgentCreateMessageAPIView(UserTripQuerysetMixin, GenericAPIView):
         )
 
 
-class TripPlanningRecommendationsAPIView(UserTripQuerysetMixin, GenericAPIView):
+class TripPlanningRecommendationsAPIView(PlanningTripQuerysetMixin, GenericAPIView):
     """
     Get trip recommendations
     Query params:
@@ -379,8 +421,8 @@ class TripPlanningRecommendationsAPIView(UserTripQuerysetMixin, GenericAPIView):
                     message="Trip recommendations fetched successfully.",
                 )
 
-        trip_destination = self._get_recommendation_destination(trip)
-        if not trip_destination:
+        trip_destinations = self._get_recommendation_destinations(trip)
+        if not trip_destinations:
             return APIResponse.error(
                 message="Add a destination to this trip before requesting recommendations.",
                 status=status.HTTP_400_BAD_REQUEST,
@@ -393,7 +435,7 @@ class TripPlanningRecommendationsAPIView(UserTripQuerysetMixin, GenericAPIView):
         if credit_error:
             return credit_error
 
-        destination_id = str(trip_destination.destination_id)
+        destination_ids = [str(item.destination_id) for item in trip_destinations]
         trip_snapshot = build_trip_snapshot(trip)
         preferences = {
             "trip_preferences": trip.preferences or {},
@@ -414,9 +456,8 @@ class TripPlanningRecommendationsAPIView(UserTripQuerysetMixin, GenericAPIView):
                     sender=AgentMessageSender.USER,
                     content="Generate trip recommendations.",
                     metadata={
-                        "destination_id": destination_id,
-                        "preferences": preferences,
-                        "trip_snapshot": trip_snapshot,
+                        "context_version": 1,
+                        "destination_ids": destination_ids,
                     },
                     user=request.user,
                 )
@@ -426,11 +467,11 @@ class TripPlanningRecommendationsAPIView(UserTripQuerysetMixin, GenericAPIView):
                     user_query=build_recommendations_agent_query(
                         preferences,
                         trip_snapshot,
-                        destination_id,
+                        destination_ids,
                     ),
                     preferences=preferences,
                     trip_snapshot=trip_snapshot,
-                    destination_id=destination_id,
+                    destination_id=destination_ids,
                 )
                 record_ai_usage(
                     user=request.user,
@@ -438,6 +479,7 @@ class TripPlanningRecommendationsAPIView(UserTripQuerysetMixin, GenericAPIView):
                     usage_type=AIUsageType.TRIP_PLANNING,
                     cost=plan_agent_response.get("cost") or 0,
                     tokens=plan_agent_response.get("total_tokens") or 0,
+                    metadata=planning_ai_usage_metadata(plan_agent_response),
                 )
             credit_spent = abs(credit_transaction.amount) if credit_transaction else 0
         except InsufficientCreditsError as exc:
@@ -454,7 +496,12 @@ class TripPlanningRecommendationsAPIView(UserTripQuerysetMixin, GenericAPIView):
             sender=AgentMessageSender.AGENT,
             content="Trip recommendations generated.",
             metadata={
-                "recommendations": recommendations,
+                "result": {
+                    "is_complete": recommendations.get("is_discovery_complete", False),
+                    "attractions_count": len(recommendations.get("attraction_ids", [])),
+                    "activities_count": len(recommendations.get("activity_ids", [])),
+                    "cuisines_count": len(recommendations.get("cuisine_ids", [])),
+                },
                 "cost": plan_agent_response.get("cost"),
                 "total_tokens": plan_agent_response.get("total_tokens"),
                 "intention": plan_agent_response.get("intention"),
@@ -464,7 +511,9 @@ class TripPlanningRecommendationsAPIView(UserTripQuerysetMixin, GenericAPIView):
 
         if not recommendations.get("is_discovery_complete"):
             return APIResponse.error(
-                errors=recommendations,
+                errors={
+                    "validation_errors": recommendations.get("validation_errors", [])
+                },
                 message="Trip agent recommendations could not be generated.",
                 status=status.HTTP_502_BAD_GATEWAY,
                 meta={"credit_spent": credit_spent},
@@ -479,12 +528,17 @@ class TripPlanningRecommendationsAPIView(UserTripQuerysetMixin, GenericAPIView):
             message="Trip recommendations created successfully.",
         )
 
-    def _get_recommendation_destination(self, trip):
+    def _get_recommendation_destinations(self, trip):
         trip_destinations = getattr(trip, "prefetched_trip_destinations", None)
         if trip_destinations is None:
             trip_destinations = trip.trip_destinations.select_related("destination").order_by("sort_order")
-        return next((item for item in trip_destinations if item.is_primary), None) or next(
-            iter(trip_destinations),
+        return list(trip_destinations)
+
+    def _get_recommendation_destination(self, trip):
+        """Compatibility helper for callers that still expect the primary destination."""
+        destinations = self._get_recommendation_destinations(trip)
+        return next((item for item in destinations if item.is_primary), None) or next(
+            iter(destinations),
             None,
         )
 
@@ -600,7 +654,7 @@ class TripPlanningRecommendationsAPIView(UserTripQuerysetMixin, GenericAPIView):
         return valid_ids
 
 
-class TripPlanningItinerariesAPIView(UserTripQuerysetMixin, GenericAPIView):
+class TripPlanningItinerariesAPIView(PlanningTripQuerysetMixin, GenericAPIView):
     """
     Get trip itinerary design
 
@@ -665,9 +719,7 @@ class TripPlanningItinerariesAPIView(UserTripQuerysetMixin, GenericAPIView):
                     session=session,
                     sender=AgentMessageSender.USER,
                     content="Generate trip itinerary.",
-                    metadata={
-                        "trip_context": trip_context,
-                    },
+                    metadata={"context_version": 1},
                     user=request.user,
                 )
 
@@ -684,6 +736,7 @@ class TripPlanningItinerariesAPIView(UserTripQuerysetMixin, GenericAPIView):
                     usage_type=AIUsageType.TRIP_PLANNING,
                     cost=plan_agent_response.get("cost") or 0,
                     tokens=plan_agent_response.get("total_tokens") or 0,
+                    metadata=planning_ai_usage_metadata(plan_agent_response),
                 )
             credit_spent = abs(credit_transaction.amount) if credit_transaction else 0
         except InsufficientCreditsError as exc:
@@ -700,7 +753,11 @@ class TripPlanningItinerariesAPIView(UserTripQuerysetMixin, GenericAPIView):
             sender=AgentMessageSender.AGENT,
             content=itinerary.get("message", ""),
             metadata={
-                "itinerary": itinerary,
+                "result": {
+                    "is_complete": itinerary.get("is_itinerary_complete", False),
+                    "days_count": len(itinerary.get("day_wise_plan", [])),
+                    "route_legs_count": len(itinerary.get("route_plan", [])),
+                },
                 "cost": plan_agent_response.get("cost"),
                 "total_tokens": plan_agent_response.get("total_tokens"),
                 "intention": plan_agent_response.get("intention"),
@@ -710,7 +767,7 @@ class TripPlanningItinerariesAPIView(UserTripQuerysetMixin, GenericAPIView):
 
         if not itinerary.get("is_itinerary_complete"):
             return APIResponse.error(
-                errors=itinerary,
+                errors={"validation_errors": itinerary.get("validation_errors", [])},
                 message="Trip agent itinerary could not be generated.",
                 status=status.HTTP_502_BAD_GATEWAY,
                 meta={"credit_spent": credit_spent},
@@ -733,13 +790,14 @@ class TripPlanningItinerariesAPIView(UserTripQuerysetMixin, GenericAPIView):
                     "route_plan_items",
                     "itinerary_days__day_items",
                 )
-                .select_related("rough_budget")
+                .select_related("rough_budget", "trip")
                 .get(trip=trip)
             )
         except TripItinerary.DoesNotExist:
             return None
 
     def _serialize_saved_itinerary(self, itinerary):
+        budget = getattr(itinerary, "rough_budget", None)
         return {
             "id": str(itinerary.id),
             "title": itinerary.title,
@@ -755,7 +813,8 @@ class TripPlanningItinerariesAPIView(UserTripQuerysetMixin, GenericAPIView):
                 self._serialize_itinerary_day(day)
                 for day in itinerary.itinerary_days.all()
             ],
-            "rough_budget": self._serialize_itinerary_budget(getattr(itinerary, "rough_budget", None)),
+            "rough_budget": self._serialize_itinerary_budget(budget),
+            "budget_status": get_itinerary_budget_status(itinerary.trip, budget),
             "metadata": itinerary.metadata or {},
         }
 
@@ -802,6 +861,9 @@ class TripPlanningItinerariesAPIView(UserTripQuerysetMixin, GenericAPIView):
             return None
         return {
             "id": str(budget.id),
+            "accommodation": (
+                str(budget.accommodation) if budget.accommodation is not None else None
+            ),
             "transport": str(budget.transport) if budget.transport is not None else None,
             "food": str(budget.food) if budget.food is not None else None,
             "activities": str(budget.activities) if budget.activities is not None else None,
@@ -817,7 +879,7 @@ class TripPlanningItinerariesAPIView(UserTripQuerysetMixin, GenericAPIView):
         }
 
 
-class TripPlanningPrepartionAPIView(UserTripQuerysetMixin, GenericAPIView):
+class TripPlanningPreparationAPIView(PlanningTripQuerysetMixin, GenericAPIView):
     """
     Get trip preparation guide
 
@@ -860,7 +922,7 @@ class TripPlanningPrepartionAPIView(UserTripQuerysetMixin, GenericAPIView):
         if credit_error:
             return credit_error
 
-        trip_context = build_itinerary_planning_context(trip)
+        trip_context = build_preparation_planning_context(trip)
 
         try:
             with CreditService.charge_agent_generation(
@@ -875,9 +937,7 @@ class TripPlanningPrepartionAPIView(UserTripQuerysetMixin, GenericAPIView):
                     session=session,
                     sender=AgentMessageSender.USER,
                     content="Generate trip preparation.",
-                    metadata={
-                        "trip_context": trip_context,
-                    },
+                    metadata={"context_version": 1},
                     user=request.user,
                 )
 
@@ -894,6 +954,7 @@ class TripPlanningPrepartionAPIView(UserTripQuerysetMixin, GenericAPIView):
                     usage_type=AIUsageType.TRIP_PLANNING,
                     cost=plan_agent_response.get("cost") or 0,
                     tokens=plan_agent_response.get("total_tokens") or 0,
+                    metadata=planning_ai_usage_metadata(plan_agent_response),
                 )
             credit_spent = abs(credit_transaction.amount) if credit_transaction else 0
         except InsufficientCreditsError as exc:
@@ -910,7 +971,12 @@ class TripPlanningPrepartionAPIView(UserTripQuerysetMixin, GenericAPIView):
             sender=AgentMessageSender.AGENT,
             content=preparation.get("message", ""),
             metadata={
-                "trip_preparation": preparation,
+                "result": {
+                    "is_complete": preparation.get("is_preparation_complete", False),
+                    "packing_items_count": len(preparation.get("packing_items", [])),
+                    "documents_count": len(preparation.get("required_documents", [])),
+                    "heads_up_count": len(preparation.get("heads_up", [])),
+                },
                 "cost": plan_agent_response.get("cost"),
                 "total_tokens": plan_agent_response.get("total_tokens"),
                 "intention": plan_agent_response.get("intention"),
@@ -920,7 +986,7 @@ class TripPlanningPrepartionAPIView(UserTripQuerysetMixin, GenericAPIView):
 
         if not preparation.get("is_preparation_complete"):
             return APIResponse.error(
-                errors=preparation,
+                errors={"validation_errors": preparation.get("validation_errors", [])},
                 message="Trip agent preparation could not be generated.",
                 status=status.HTTP_502_BAD_GATEWAY,
                 meta={"credit_spent": credit_spent},
@@ -1015,7 +1081,7 @@ class TripPlanningPrepartionAPIView(UserTripQuerysetMixin, GenericAPIView):
         }
 
 
-class TripPlanningOverviewAPIView(UserTripQuerysetMixin, GenericAPIView):
+class TripPlanningOverviewAPIView(PlanningTripQuerysetMixin, GenericAPIView):
     """
     Get a bird's-eye planning overview.
 
@@ -1040,20 +1106,48 @@ class TripPlanningOverviewAPIView(UserTripQuerysetMixin, GenericAPIView):
 
     def _build_overview(self, trip):
         agent_context = trip.metadata or {}
-        recommendations = (
+        fallback_recommendations = (
             agent_context.get("recommendations")
             if isinstance(agent_context.get("recommendations"), dict)
             else {}
         )
-        itinerary = (
+        fallback_itinerary = (
             agent_context.get("itinerary_design")
             if isinstance(agent_context.get("itinerary_design"), dict)
             else {}
         )
-        preparation = (
+        fallback_preparation = (
             agent_context.get("trip_preparation")
             if isinstance(agent_context.get("trip_preparation"), dict)
             else {}
+        )
+
+        saved_recommendations = (
+            TripRecommendations.objects.filter(trip=trip)
+            .annotate(
+                attractions_count=Count("attraction_items", distinct=True),
+                activities_count=Count("activity_items", distinct=True),
+                cuisines_count=Count("cuisine_items", distinct=True),
+            )
+            .first()
+        )
+        saved_itinerary = (
+            TripItinerary.objects.filter(trip=trip)
+            .select_related("rough_budget")
+            .annotate(
+                days_count=Count("itinerary_days", distinct=True),
+                route_legs_count=Count("route_plan_items", distinct=True),
+            )
+            .first()
+        )
+        saved_preparation = (
+            TripPreparation.objects.filter(trip=trip)
+            .annotate(
+                packing_items_count=Count("packing_items", distinct=True),
+                documents_count=Count("required_documents", distinct=True),
+                heads_up_count=Count("heads_up", distinct=True),
+            )
+            .first()
         )
 
         destinations = [
@@ -1066,13 +1160,30 @@ class TripPlanningOverviewAPIView(UserTripQuerysetMixin, GenericAPIView):
             for trip_destination in getattr(trip, "prefetched_trip_destinations", [])
         ]
 
-        day_wise_plan = itinerary.get("day_wise_plan") if isinstance(itinerary.get("day_wise_plan"), list) else []
-        route_plan = itinerary.get("route_plan") if isinstance(itinerary.get("route_plan"), list) else []
-        rough_budget = itinerary.get("rough_budget") if isinstance(itinerary.get("rough_budget"), dict) else {}
+        fallback_days = (
+            fallback_itinerary.get("day_wise_plan")
+            if isinstance(fallback_itinerary.get("day_wise_plan"), list)
+            else []
+        )
+        fallback_routes = (
+            fallback_itinerary.get("route_plan")
+            if isinstance(fallback_itinerary.get("route_plan"), list)
+            else []
+        )
+        fallback_budget = (
+            fallback_itinerary.get("rough_budget")
+            if isinstance(fallback_itinerary.get("rough_budget"), dict)
+            else {}
+        )
+        try:
+            saved_budget = saved_itinerary.rough_budget if saved_itinerary else None
+        except ObjectDoesNotExist:
+            saved_budget = None
         progress = get_trip_planning_progress(trip)
 
         planning_progress = {
             "current_step": trip.current_step,
+            "stale_steps": progress["stale_steps"],
             "is_qna_complete": progress["is_qna_complete"],
             "is_recommendation_complete": progress["is_recommendation_complete"],
             "is_itinerary_complete": progress["is_itinerary_design_complete"],
@@ -1098,35 +1209,91 @@ class TripPlanningOverviewAPIView(UserTripQuerysetMixin, GenericAPIView):
                 },
                 "budget": {
                     "tier": trip.budget_tier,
+                    "target_total": (
+                        str(trip.total_budget) if trip.total_budget is not None else None
+                    ),
                     "currency": trip.budget_currency,
                 },
             },
             "destinations": destinations,
             "planning_progress": planning_progress,
-            "flow": get_trip_planning_flow(trip),
+            "flow": get_trip_planning_flow(trip, progress=progress),
             "recommendations_overview": {
-                "attractions_count": len(
-                    recommendations.get("attraction_ids") or recommendations.get("tour_spot_ids") or []
+                "attractions_count": (
+                    saved_recommendations.attractions_count
+                    if saved_recommendations
+                    else len(
+                        fallback_recommendations.get("attraction_ids")
+                        or fallback_recommendations.get("tour_spot_ids")
+                        or []
+                    )
                 ),
-                "activities_count": len(recommendations.get("activity_ids") or []),
-                "cuisines_count": len(
-                    recommendations.get("cuisine_ids") or recommendations.get("food_item_ids") or []
+                "activities_count": (
+                    saved_recommendations.activities_count
+                    if saved_recommendations
+                    else len(fallback_recommendations.get("activity_ids") or [])
+                ),
+                "cuisines_count": (
+                    saved_recommendations.cuisines_count
+                    if saved_recommendations
+                    else len(
+                        fallback_recommendations.get("cuisine_ids")
+                        or fallback_recommendations.get("food_item_ids")
+                        or []
+                    )
                 ),
             },
             "itinerary_overview": {
-                "title": itinerary.get("title", ""),
-                "summary": itinerary.get("summary", ""),
-                "days_count": len(day_wise_plan),
-                "route_legs_count": len(route_plan),
-                "total_estimated_budget": rough_budget.get("total_estimated_budget"),
-                "budget_note": rough_budget.get("budget_note"),
+                "title": saved_itinerary.title if saved_itinerary else fallback_itinerary.get("title", ""),
+                "summary": (
+                    saved_itinerary.summary
+                    if saved_itinerary
+                    else fallback_itinerary.get("summary", "")
+                ),
+                "days_count": saved_itinerary.days_count if saved_itinerary else len(fallback_days),
+                "route_legs_count": (
+                    saved_itinerary.route_legs_count
+                    if saved_itinerary
+                    else len(fallback_routes)
+                ),
+                "total_estimated_budget": (
+                    str(saved_budget.total_estimated_budget)
+                    if saved_budget and saved_budget.total_estimated_budget is not None
+                    else fallback_budget.get("total_estimated_budget")
+                ),
+                "budget_note": (
+                    saved_budget.budget_note
+                    if saved_budget
+                    else fallback_budget.get("budget_note")
+                ),
+                "budget_status": get_itinerary_budget_status(trip, saved_budget),
             },
             "preparation_overview": {
-                "title": preparation.get("title", ""),
-                "summary": preparation.get("summary", ""),
-                "packing_items_count": len(preparation.get("packing_items") or []),
-                "documents_count": len(preparation.get("required_documents") or []),
-                "heads_up_count": len(preparation.get("heads_up") or []),
+                "title": (
+                    saved_preparation.title
+                    if saved_preparation
+                    else fallback_preparation.get("title", "")
+                ),
+                "summary": (
+                    saved_preparation.summary
+                    if saved_preparation
+                    else fallback_preparation.get("summary", "")
+                ),
+                "packing_items_count": (
+                    saved_preparation.packing_items_count
+                    if saved_preparation
+                    else len(fallback_preparation.get("packing_items") or [])
+                ),
+                "documents_count": (
+                    saved_preparation.documents_count
+                    if saved_preparation
+                    else len(fallback_preparation.get("required_documents") or [])
+                ),
+                "heads_up_count": (
+                    saved_preparation.heads_up_count
+                    if saved_preparation
+                    else len(fallback_preparation.get("heads_up") or [])
+                ),
             },
             "activation": {
                 "can_activate": can_activate,
@@ -1139,11 +1306,15 @@ class TripPlanningOverviewAPIView(UserTripQuerysetMixin, GenericAPIView):
         return get_activation_blocking_errors(trip)
 
 
+# Backwards-compatible alias for code importing the original misspelled class.
+TripPlanningPrepartionAPIView = TripPlanningPreparationAPIView
+
+
 class TripPlanningAPIView(
     TripPaginationMixin,
     TripPlanningRecommendationsAPIView,
     TripPlanningItinerariesAPIView,
-    TripPlanningPrepartionAPIView,
+    TripPlanningPreparationAPIView,
     TripPlanningOverviewAPIView,
 ):
     """
@@ -1184,7 +1355,7 @@ class TripPlanningAPIView(
         if step == PlanningStep.ITINERARY:
             return TripPlanningItinerariesAPIView.get(self, request, *args, **kwargs)
         if step == PlanningStep.PREPARATION:
-            return TripPlanningPrepartionAPIView.get(self, request, *args, **kwargs)
+            return TripPlanningPreparationAPIView.get(self, request, *args, **kwargs)
         return TripPlanningOverviewAPIView.get(self, request, *args, **kwargs)
 
     def _get_preference_messages(self, request):
@@ -1242,7 +1413,7 @@ class TripPlanningAPIView(
         )
 
 
-class ActivateTripPlanAPIView(UserTripQuerysetMixin, GenericAPIView):
+class ActivateTripPlanAPIView(PlanningTripQuerysetMixin, GenericAPIView):
     """
     Mark a completed draft/planning trip plan as ready.
 

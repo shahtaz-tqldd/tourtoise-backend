@@ -3,6 +3,9 @@ from django.test import SimpleTestCase
 from trips.services.services import (
     build_final_preference_agent_query,
     build_initial_agent_query,
+    build_itinerary_agent_query,
+    build_preparation_agent_query,
+    build_recommendations_agent_query,
     finalize_preference_response,
     normalize_initial_preference_response,
 )
@@ -91,3 +94,19 @@ class PreferenceQNAFlowTests(SimpleTestCase):
         self.assertIn("Do not complete Q&A", initial_query)
         self.assertIn("PREFERENCE_INTAKE_PHASE: FINALIZE_AFTER_ANSWER", final_query)
         self.assertIn("Do not ask another question", final_query)
+
+    def test_generation_queries_do_not_duplicate_serialized_context(self):
+        marker = "UNIQUE_CONTEXT_MARKER"
+        context = {"marker": marker}
+
+        recommendation_query = build_recommendations_agent_query(
+            context,
+            context,
+            ["destination-1", "destination-2"],
+        )
+        itinerary_query = build_itinerary_agent_query(context)
+        preparation_query = build_preparation_agent_query(context)
+
+        self.assertNotIn(marker, recommendation_query)
+        self.assertNotIn(marker, itinerary_query)
+        self.assertNotIn(marker, preparation_query)

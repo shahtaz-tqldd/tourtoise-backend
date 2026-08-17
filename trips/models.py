@@ -75,6 +75,13 @@ class Trip(BaseModel):
         choices=BudgetTier.choices,
         blank=True,
     )
+    total_budget = models.DecimalField(
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(0)],
+    )
     budget_currency = models.CharField(max_length=10, blank=True, default="USD")
 
     preferences = models.JSONField(
@@ -326,6 +333,7 @@ class TripItineraryBudget(BaseModel):
         on_delete=models.CASCADE,
         related_name="rough_budget",
     )
+    accommodation = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
     transport = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
     food = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
     activities = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)

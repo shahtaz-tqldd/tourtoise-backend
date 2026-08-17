@@ -17,6 +17,7 @@ from trips.models import (
     TripConversationMessage,
     TripConversationSession,
     TripItinerary,
+    TripItineraryBudget,
     TripItineraryDay,
     TripDestination,
     TripItineraryDayItem,
@@ -795,9 +796,121 @@ class TripShortDetailsSerializer(serializers.ModelSerializer):
 
 
 
+class PublicTripItineraryItemSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TripItineraryDayItem
+        fields = (
+            "item_type",
+            "title",
+            "description",
+            "time",
+            "notes",
+            "estimated_cost",
+        )
+        read_only_fields = fields
+
+
+class PublicTripDaySerializer(serializers.ModelSerializer):
+    items = PublicTripItineraryItemSerializer(
+        source="day_items",
+        many=True,
+        read_only=True,
+    )
+
+    class Meta:
+        model = TripItineraryDay
+        fields = ("day", "date", "title", "summary", "items")
+        read_only_fields = fields
+
+
+class PublicTripDestinationSerializer(serializers.ModelSerializer):
+    destination = TripDestinationSummarySerializer(read_only=True)
+
+    class Meta:
+        model = TripDestination
+        fields = (
+            "destination",
+            "arrival_date",
+            "departure_date",
+            "stay_nights",
+            "is_primary",
+            "transport_from_previous",
+            "notes",
+        )
+        read_only_fields = fields
+
+
+class PublicTripRouteSerializer(TripRoutePlanItemSerializer):
+    class Meta(TripRoutePlanItemSerializer.Meta):
+        fields = tuple(
+            field for field in TripRoutePlanItemSerializer.Meta.fields if field != "id"
+        )
+        read_only_fields = fields
+
+
+class PublicTripPackingItemSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TripPreparationPackingItem
+        fields = (
+            "item",
+            "quantity",
+            "category",
+            "priority",
+            "additional_notes",
+        )
+        read_only_fields = fields
+
+
+class PublicTripRequiredDocumentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TripRequiredDocumentItem
+        fields = (
+            "document_name",
+            "required_level",
+            "additional_note",
+        )
+        read_only_fields = fields
+
+
+class PublicTripHeadsUpSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TripHeadsUpInfoItem
+        fields = ("title", "category", "severity", "additional_note")
+        read_only_fields = fields
+
+
+class PublicTripBudgetSerializer(serializers.ModelSerializer):
+    total_estimated = serializers.DecimalField(
+        source="total_estimated_budget",
+        max_digits=12,
+        decimal_places=2,
+        read_only=True,
+    )
+    note = serializers.CharField(source="budget_note", read_only=True)
+
+    class Meta:
+        model = TripItineraryBudget
+        fields = (
+            "accommodation",
+            "transport",
+            "food",
+            "activities",
+            "tickets_or_entry",
+            "miscellaneous",
+            "total_estimated",
+            "note",
+        )
+        read_only_fields = fields
+
+
 class PublicTripDetailSerializer(serializers.ModelSerializer):
-    trip_destinations = TripDestinationSerializer(many=True, read_only=True)
+    trip_destinations = PublicTripDestinationSerializer(many=True, read_only=True)
     days = serializers.SerializerMethodField()
+    routes = serializers.SerializerMethodField()
+    packing_items = serializers.SerializerMethodField()
+    required_documents = serializers.SerializerMethodField()
+    heads_up = serializers.SerializerMethodField()
+    budget = serializers.SerializerMethodField()
     share_url = serializers.SerializerMethodField()
 
     class Meta:
@@ -805,11 +918,6 @@ class PublicTripDetailSerializer(serializers.ModelSerializer):
         fields = (
             "id",
             "title",
-            "share_token",
-            "status",
-            "visibility",
-            "planning_source",
-            "current_step",
             "start_date",
             "end_date",
             "nights",
@@ -818,16 +926,17 @@ class PublicTripDetailSerializer(serializers.ModelSerializer):
             "traveler_type",
             "origin_city",
             "origin_country",
-            "start_location_address",
-            "start_location_latitude",
-            "start_location_longitude",
             "budget_tier",
             "total_budget",
             "budget_currency",
+            "budget",
             "planning_summary",
-            "agent_active",
             "trip_destinations",
             "days",
+            "routes",
+            "packing_items",
+            "required_documents",
+            "heads_up",
             "share_url",
         )
         read_only_fields = fields
@@ -839,11 +948,74 @@ class PublicTripDetailSerializer(serializers.ModelSerializer):
         return f"{settings.USER_FRONTEND_URL}/trip/public/{obj.share_token}"
 
     def get_days(self, obj):
-        try:
-            days = obj.trip_itinerary.itinerary_days.all()
-        except TripItinerary.DoesNotExist:
+        itinerary = self._get_itinerary(obj)
+        if not itinerary:
             return []
-        return TripDaySerializer(days, many=True).data
+        return PublicTripDaySerializer(itinerary.itinerary_days.all(), many=True).data
+
+    def get_routes(self, obj):
+        itinerary = self._get_itinerary(obj)
+        if not itinerary:
+            return []
+        return PublicTripRouteSerializer(
+            itinerary.route_plan_items.all(),
+            many=True,
+        ).data
+
+    def get_packing_items(self, obj):
+        preparation = self._get_preparation(obj)
+        if not preparation:
+            return []
+        return PublicTripPackingItemSerializer(
+            preparation.packing_items.all(),
+            many=True,
+        ).data
+
+    def get_required_documents(self, obj):
+        preparation = self._get_preparation(obj)
+        if not preparation:
+            return []
+        return PublicTripRequiredDocumentSerializer(
+            preparation.required_documents.all(),
+            many=True,
+        ).data
+
+    def get_heads_up(self, obj):
+        preparation = self._get_preparation(obj)
+        if not preparation:
+            return []
+        return PublicTripHeadsUpSerializer(
+            preparation.heads_up.all(),
+            many=True,
+        ).data
+
+    def get_budget(self, obj):
+        itinerary = self._get_itinerary(obj)
+        if not itinerary:
+            return None
+
+        budget = getattr(itinerary, "rough_budget", None)
+        if not budget:
+            return None
+
+        data = PublicTripBudgetSerializer(budget).data
+        data["currency"] = obj.budget_currency
+        data["target_total"] = (
+            str(obj.total_budget) if obj.total_budget is not None else None
+        )
+        return data
+
+    def _get_itinerary(self, obj):
+        try:
+            return obj.trip_itinerary
+        except TripItinerary.DoesNotExist:
+            return None
+
+    def _get_preparation(self, obj):
+        try:
+            return obj.structured_preparation
+        except TripPreparation.DoesNotExist:
+            return None
 
 
 class TripWriteSerializer(serializers.ModelSerializer):
@@ -1008,6 +1180,14 @@ class TripWriteSerializer(serializers.ModelSerializer):
                 PlanningStep.RECOMMENDATION,
                 user=self.context["request"].user,
             )
+        if old_status != instance.status:
+            from trips.services.trip_chat import (
+                close_conversation_session,
+                is_trip_chat_open,
+            )
+
+            if not is_trip_chat_open(instance):
+                close_conversation_session(instance, user=self.context["request"].user)
         if old_status != TripStatus.COMPLETED and instance.status == TripStatus.COMPLETED:
             record_completed_trip_stats(instance)
         return instance

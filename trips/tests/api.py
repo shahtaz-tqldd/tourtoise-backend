@@ -25,6 +25,7 @@ from trips.models import (
     TripConversationMessage,
     TripConversationSession,
     TripDestination,
+    TripHeadsUpInfoItem,
     TripItinerary,
     TripItineraryBudget,
     TripItineraryDay,
@@ -622,6 +623,92 @@ class TripSharingApiTests(TestCase):
         self.assertEqual(public_response.status_code, status.HTTP_200_OK)
         self.assertEqual(public_response.data["data"]["id"], str(self.trip.id))
 
+    def test_public_detail_includes_share_safe_itinerary_and_preparation(self):
+        self.client.force_authenticate(user=None)
+        self.trip.visibility = "public"
+        self.trip.save(update_fields=["visibility"])
+        itinerary = TripItinerary.objects.create(
+            trip=self.trip,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        TripItineraryBudget.objects.create(
+            itinerary=itinerary,
+            accommodation=Decimal("350.00"),
+            transport=Decimal("100.00"),
+            food=Decimal("150.00"),
+            total_estimated_budget=Decimal("600.00"),
+            budget_note="Estimates may vary.",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        day = TripItineraryDay.objects.create(
+            itinerary=itinerary,
+            day=1,
+            title="Arrival day",
+        )
+        TripItineraryDayItem.objects.create(
+            trip_itinerary_day=day,
+            title="Explore old town",
+            item_type="activity",
+        )
+        TripRoutePlanItem.objects.create(
+            itinerary=itinerary,
+            from_point="Airport",
+            to_point="Old town",
+            transport_mode="taxi",
+        )
+        preparation = TripPreparation.objects.create(
+            trip=self.trip,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        TripPreparationPackingItem.objects.create(
+            preparation=preparation,
+            item="Walking shoes",
+            is_packed=True,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        TripRequiredDocumentItem.objects.create(
+            preparation=preparation,
+            document_name="Passport",
+            document_file_name="passport.pdf",
+            document_url="https://example.com/private/passport.pdf",
+            document_url_public_id="private/passport",
+            is_packed=True,
+            created_by=self.user,
+            updated_by=self.user,
+        )
+        TripHeadsUpInfoItem.objects.create(
+            preparation=preparation,
+            title="Carry cash",
+            created_by=self.user,
+            updated_by=self.user,
+        )
+
+        response = self.client.get(
+            f"/api/v1/trips/public/{self.trip.share_token}/detail/"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        data = response.data["data"]
+        self.assertEqual(data["days"][0]["title"], "Arrival day")
+        self.assertEqual(data["routes"][0]["from_point"], "Airport")
+        self.assertEqual(data["packing_items"][0]["item"], "Walking shoes")
+        self.assertEqual(data["required_documents"][0]["document_name"], "Passport")
+        self.assertEqual(data["heads_up"][0]["title"], "Carry cash")
+        self.assertEqual(data["budget"]["accommodation"], "350.00")
+        self.assertEqual(data["budget"]["total_estimated"], "600.00")
+        self.assertEqual(data["budget"]["currency"], self.trip.budget_currency)
+        self.assertEqual(data["budget"]["note"], "Estimates may vary.")
+        self.assertNotIn("is_packed", data["packing_items"][0])
+        self.assertNotIn("is_packed", data["required_documents"][0])
+        self.assertNotIn("document_url", data["required_documents"][0])
+        self.assertNotIn("document_file_name", data["required_documents"][0])
+        self.assertNotIn("share_token", data)
+        self.assertNotIn("start_location_address", data)
+
     def test_visibility_endpoint_can_make_trip_private(self):
         self.trip.visibility = "public"
         self.trip.save(update_fields=["visibility"])
@@ -908,6 +995,28 @@ class TripChatApiTests(TestCase):
         self.assertEqual(response.data["message"], "Insufficient credits.")
         self.assertFalse(TripConversationMessage.objects.filter(session__trip=self.trip).exists())
         self.assertFalse(AIUsage.objects.filter(user=self.user, trip=self.trip).exists())
+        run_guide_agent.assert_not_called()
+
+    @patch("trips.api.v1.client.views.trip_chat.run_guide_agent_for_session")
+    def test_trip_chat_rejects_messages_after_trip_completion(self, run_guide_agent):
+        self.trip.status = TripStatus.COMPLETED
+        self.trip.save(update_fields=["status"])
+        starting_balance = self.user.credit.balance
+
+        response = self.client.post(
+            f"{self.url}create-message/",
+            {"message": "One last question"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("completed", response.data["message"])
+        self.assertFalse(
+            TripConversationMessage.objects.filter(session__trip=self.trip).exists()
+        )
+        self.assertFalse(TripConversationSession.objects.filter(trip=self.trip).exists())
+        self.user.credit.refresh_from_db()
+        self.assertEqual(self.user.credit.balance, starting_balance)
         run_guide_agent.assert_not_called()
 
     def test_lists_trip_chat_messages_for_session(self):

@@ -32,6 +32,7 @@ from trips.models import (
     TripRecommendations,
 )
 from trips.services.notifications import schedule_trip_notifications
+from trips.services.trip_chat import get_or_create_conversation_session
 from trips.services.services import (
     build_final_preference_agent_query,
     build_initial_agent_query,
@@ -44,7 +45,6 @@ from trips.services.services import (
     build_trip_snapshot,
     create_agent_message,
     get_activation_blocking_errors,
-    get_or_create_conversation_session,
     get_or_create_planning_session,
     get_or_create_planning_step_session,
     finalize_preference_response,

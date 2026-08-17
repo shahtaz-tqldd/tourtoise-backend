@@ -16,7 +16,7 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.generics import GenericAPIView
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 
 from app.utils.response import APIResponse
 from accounts.services.user_profile import ensure_user_profile
@@ -40,6 +40,10 @@ from trips.models import (
     TripDestination,
     TripItineraryDayItem,
     TripConversationMessage,
+    TripHeadsUpInfoItem,
+    TripPreparationPackingItem,
+    TripRequiredDocumentItem,
+    TripRoutePlanItem,
 )
 from trips.services.notifications import schedule_trip_notifications
 
@@ -417,12 +421,19 @@ class PublicTripDetailAPIView(GenericAPIView):
     - If the token does not exist or the trip is not shareable, the API returns 404.
     """
 
+    permission_classes = [AllowAny]
+    serializer_class = PublicTripDetailSerializer
+
     def get_object(self):
         return get_object_or_404(
-            Trip.objects.filter(visibility=TripVisibility.PUBLIC).prefetch_related(
+            Trip.objects.filter(visibility=TripVisibility.PUBLIC).select_related(
+                "trip_itinerary__rough_budget"
+            ).prefetch_related(
                 Prefetch(
                     "trip_destinations",
-                    queryset=TripDestination.objects.select_related("destination").order_by("sort_order"),
+                    queryset=TripDestination.objects.select_related(
+                        "destination"
+                    ).prefetch_related("destination__tags").order_by("sort_order"),
                 ),
                 Prefetch(
                     "trip_itinerary__itinerary_days",
@@ -433,6 +444,22 @@ class PublicTripDetailAPIView(GenericAPIView):
                         )
                     ).order_by("day"),
                 ),
+                Prefetch(
+                    "trip_itinerary__route_plan_items",
+                    queryset=TripRoutePlanItem.objects.order_by("date", "start_time"),
+                ),
+                Prefetch(
+                    "structured_preparation__packing_items",
+                    queryset=TripPreparationPackingItem.objects.order_by("sort_order"),
+                ),
+                Prefetch(
+                    "structured_preparation__required_documents",
+                    queryset=TripRequiredDocumentItem.objects.order_by("sort_order"),
+                ),
+                Prefetch(
+                    "structured_preparation__heads_up",
+                    queryset=TripHeadsUpInfoItem.objects.order_by("sort_order"),
+                ),
             ),
             share_token=self.kwargs["share_token"],
         )
@@ -440,6 +467,6 @@ class PublicTripDetailAPIView(GenericAPIView):
     def get(self, request, *args, **kwargs):
         trip = self.get_object()
         return APIResponse.success(
-            data=PublicTripDetailSerializer(trip, context={"request": request}).data,
+            data=self.get_serializer(trip).data,
             message="Shared trip fetched successfully.",
         )

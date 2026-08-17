@@ -15,12 +15,13 @@ from trips.api.v1.client.serializers import (
     TripChatMessageSerializer,
     TripChatSessionSerializer,
 )
-from trips.choices import AgentMessageSender
-from trips.models import TripConversationMessage, TripConversationSession
-from trips.services.services import (
+from trips.choices import AgentMessageSender, TripStatus
+from trips.models import TripConversationMessage
+from trips.services.services import is_trip_plan_ready
+from trips.services.trip_chat import (
     create_conversation_message,
     get_or_create_conversation_session,
-    is_trip_plan_ready,
+    is_trip_chat_open,
     run_guide_agent_for_session,
 )
 
@@ -30,12 +31,6 @@ from .mixin import UserTripQuerysetMixin
 class TripChatSessionMixin(UserTripQuerysetMixin):
     def get_trip(self):
         return get_object_or_404(self.get_trip_queryset(), pk=self.kwargs["trip_id"])
-
-    def get_session_queryset(self):
-        return TripConversationSession.objects.filter(
-            trip__user=self.request.user,
-            trip_id=self.kwargs["trip_id"],
-        )
 
     def get_session(self, trip):
         session = get_or_create_conversation_session(
@@ -57,6 +52,21 @@ class TripChatSessionMixin(UserTripQuerysetMixin):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
+    def chat_closed_response(self, trip):
+        if trip.status == TripStatus.COMPLETED:
+            message = "Trip chat is closed because this trip has been completed."
+        else:
+            message = "Trip chat is closed for this trip."
+        return APIResponse.error(
+            message=message,
+            errors={
+                "trip_status": [
+                    "Messages cannot be sent after a trip is completed or closed."
+                ]
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
 
 class TripChatMessageListAPIView(TripChatSessionMixin, GenericAPIView):
     permission_classes = [IsAuthenticated]
@@ -65,18 +75,6 @@ class TripChatMessageListAPIView(TripChatSessionMixin, GenericAPIView):
         trip = self.get_trip()
         if not is_trip_plan_ready(trip):
             return self.plan_not_ready_response()
-
-        try:
-            CreditService.ensure_credits(
-                user=request.user,
-                amount=CreditService.TRIP_CHAT_COST,
-            )
-        except InsufficientCreditsError as exc:
-            return APIResponse.error(
-                errors={"credit": [str(exc)]},
-                message="Insufficient credits.",
-                status=status.HTTP_402_PAYMENT_REQUIRED,
-            )
 
         session = self.get_session(trip)
         if session is None:
@@ -130,6 +128,8 @@ class TripChatCreateMessageAPIView(TripChatSessionMixin, GenericAPIView):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         trip = self.get_trip()
+        if not is_trip_chat_open(trip):
+            return self.chat_closed_response(trip)
         if not is_trip_plan_ready(trip):
             return self.plan_not_ready_response()
         session = self.get_session(trip)
@@ -187,8 +187,6 @@ class TripChatCreateMessageAPIView(TripChatSessionMixin, GenericAPIView):
 
         session.updated_by = request.user
         session.save(update_fields=["updated_by", "updated_at"])
-        trip.updated_by = request.user
-        trip.save(update_fields=["updated_by", "updated_at"])
 
         session.messages_count = session.messages.count()
 

@@ -1,5 +1,7 @@
 import logging
+import random
 from datetime import datetime, time, timedelta, timezone as datetime_timezone
+from functools import partial
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from asgiref.sync import async_to_sync
@@ -16,7 +18,7 @@ from trips.choices import (
     TripStatus,
 )
 from trips.models import ScheduledTripNotification
-from trips.services.services import (
+from trips.services.trip_chat import (
     create_conversation_message,
     get_or_create_conversation_session,
 )
@@ -37,6 +39,15 @@ PLANNED_TRIP_EVENT_TYPES = {
     ScheduledTripEventType.DAILY_SUMMARY,
     ScheduledTripEventType.DAILY_CHECK_IN,
 }
+DAILY_CHECK_IN_MESSAGES = (
+    "Hey, quite a day! How was your overall experience of the {ordinal} day in {destination}?",
+    "You’ve wrapped up your {ordinal} day in {destination}—how was the experience overall?",
+    "How did your {ordinal} day in {destination} feel overall? I’d love to hear the highlights.",
+    "Your {ordinal} day in {destination} is in the books. How did everything go?",
+    "Looking back on your {ordinal} day in {destination}, how was your overall experience?",
+    "What a day in {destination}! How would you sum up your {ordinal} day there?",
+    "Now that your {ordinal} day in {destination} is winding down, how was it overall?",
+)
 
 
 def get_trip_local_date(trip, at=None):
@@ -249,8 +260,16 @@ def execute_scheduled_trip_notification(schedule_id):
             .select_related("trip", "user")
             .get(pk=schedule_id)
         )
+        if schedule.status == ScheduledNotificationStatusType.SENT:
+            if (
+                schedule.delivery_type == ScheduledTripDeliveryType.MESSAGE
+                and schedule.message_id
+                and schedule.agent_context_synced_at is None
+            ):
+                _register_agent_context_sync(schedule)
+            return schedule.status
+
         if schedule.status in {
-            ScheduledNotificationStatusType.SENT,
             ScheduledNotificationStatusType.SKIPPED,
             ScheduledNotificationStatusType.CANCELLED,
         }:
@@ -258,6 +277,11 @@ def execute_scheduled_trip_notification(schedule_id):
 
         if schedule.trip.status not in ACTIVE_NOTIFICATION_TRIP_STATUSES:
             return _mark_skipped(schedule, "Trip is no longer active.")
+        if (
+            schedule.trip.status == TripStatus.COMPLETED
+            and schedule.event_type != ScheduledTripEventType.TRIP_COMPLETED
+        ):
+            return _mark_skipped(schedule, "Trip was completed before this event ran.")
 
         if schedule.delivery_type == ScheduledTripDeliveryType.ALERT:
             if not schedule.user.profile.is_alert_notification_enabled:
@@ -311,8 +335,17 @@ def _send_scheduled_alert(schedule):
     return alert
 
 
-def send_trip_message(*, trip, user, content, metadata=None):
-    """Persist a system/agent message and emit it after the DB commit."""
+def send_trip_message(
+    *,
+    trip,
+    user,
+    content,
+    metadata=None,
+    copy_to_agent_context=True,
+    agent_event_id=None,
+    scheduled_event_id=None,
+):
+    """Persist an outbound message, then emit and copy it to ADK after commit."""
     session = get_or_create_conversation_session(trip, user, plan_ready=True)
     message = create_conversation_message(
         session=session,
@@ -322,7 +355,51 @@ def send_trip_message(*, trip, user, content, metadata=None):
         user=user,
     )
     transaction.on_commit(lambda message_id=message.id: emit_trip_message(message_id))
+    if copy_to_agent_context:
+        transaction.on_commit(
+            partial(
+                _sync_trip_message_agent_context,
+                message.id,
+                event_id=agent_event_id,
+                schedule_id=scheduled_event_id,
+            )
+        )
     return message
+
+
+def _sync_trip_message_agent_context(message_id, *, event_id=None, schedule_id=None):
+    """Idempotently finish the ADK side of scheduled-message delivery."""
+    from trips.models import TripConversationMessage
+    from trips.services.trip_chat import push_trip_message_to_agent_context
+
+    message = TripConversationMessage.objects.select_related(
+        "session",
+        "session__trip",
+    ).get(pk=message_id)
+    result = push_trip_message_to_agent_context(message, event_id=event_id)
+    if schedule_id:
+        synced_at = timezone.now()
+        ScheduledTripNotification.objects.filter(
+            pk=schedule_id,
+            agent_context_synced_at__isnull=True,
+        ).update(
+            agent_context_synced_at=synced_at,
+            last_error="",
+            updated_at=synced_at,
+        )
+    return result
+
+
+def _register_agent_context_sync(schedule):
+    event_id = f"scheduled-trip-event-{schedule.id}"
+    transaction.on_commit(
+        partial(
+            _sync_trip_message_agent_context,
+            schedule.message_id,
+            event_id=event_id,
+            schedule_id=schedule.id,
+        )
+    )
 
 
 def emit_trip_message(message_id):
@@ -367,6 +444,8 @@ def _send_scheduled_message(schedule):
             "event_type": schedule.event_type,
             "generated_by_agent": False,
         },
+        agent_event_id=f"scheduled-trip-event-{schedule.id}",
+        scheduled_event_id=schedule.id,
     )
     schedule.message = message
     schedule.save(update_fields=["message", "updated_at"])
@@ -374,7 +453,7 @@ def _send_scheduled_message(schedule):
 
 
 def build_scheduled_trip_message(schedule):
-    """Agent-generation seam for nightly messages; deterministic until wired later."""
+    """Build a varied, destination-aware nightly check-in."""
     if schedule.event_type == ScheduledTripEventType.TRIP_COMPLETED:
         return (
             f"Your {schedule.trip.title} trip is complete. "
@@ -382,8 +461,52 @@ def build_scheduled_trip_message(schedule):
         )
     day_number = schedule.metadata.get("trip_day")
     if day_number:
-        return f"How was day {day_number} of your trip?"
+        destination = (
+            _destination_name_for_date(schedule.trip, schedule.local_date)
+            or "your destination"
+        )
+        return random.choice(DAILY_CHECK_IN_MESSAGES).format(
+            ordinal=_ordinal_day(day_number),
+            destination=destination,
+        )
     return "How was your day?"
+
+
+def _ordinal_day(value):
+    names = {
+        1: "first",
+        2: "second",
+        3: "third",
+        4: "fourth",
+        5: "fifth",
+        6: "sixth",
+        7: "seventh",
+        8: "eighth",
+        9: "ninth",
+        10: "tenth",
+        11: "eleventh",
+        12: "twelfth",
+        13: "thirteenth",
+        14: "fourteenth",
+        15: "fifteenth",
+        16: "sixteenth",
+        17: "seventeenth",
+        18: "eighteenth",
+        19: "nineteenth",
+        20: "twentieth",
+    }
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if number in names:
+        return names[number]
+    suffix = (
+        "th"
+        if 10 <= number % 100 <= 20
+        else {1: "st", 2: "nd", 3: "rd"}.get(number % 10, "th")
+    )
+    return f"{number}{suffix}"
 
 
 def _packing_alert_content(schedule):

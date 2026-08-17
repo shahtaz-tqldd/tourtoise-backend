@@ -8,7 +8,7 @@ from rest_framework.permissions import IsAuthenticated
 from app.base.pagination import CustomPagination
 from app.utils.response import APIResponse
 from notification.models import Notification, NotificationRead, NotificationType
-from notification.serializers import NotificationSerializer
+from notification.api.v1.client.serializers import NotificationSerializer
 from trips.models import Trip
 
 

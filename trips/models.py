@@ -656,13 +656,20 @@ class TripConversationMessage(BaseModel):
     sender = models.CharField(max_length=10, choices=AgentMessageSender.choices)
     content = models.TextField(blank=True)
     metadata = models.JSONField(default=dict, blank=True)
-    read_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    read_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ["created_at"]
         indexes = [
-            models.Index(fields=["session", "sender"]),
-            models.Index(fields=["session", "sender", "read_at"]),
+            models.Index(
+                fields=["session", "created_at"],
+                name="trip_chat_timeline_idx",
+            ),
+            models.Index(
+                fields=["session", "read_at"],
+                condition=Q(sender=AgentMessageSender.AGENT),
+                name="trip_chat_unread_idx",
+            ),
         ]
 
     def __str__(self):
@@ -741,6 +748,10 @@ class ScheduledTripNotification(BaseModel):
         blank=True,
     )
     sent_at = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
+    agent_context_synced_at = models.DateTimeField(
         null=True,
         blank=True,
     )

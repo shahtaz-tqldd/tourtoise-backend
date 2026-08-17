@@ -210,6 +210,7 @@ class ScheduledTripNotificationAdmin(admin.ModelAdmin):
         "timezone",
         "status",
         "attempt_count",
+        "agent_context_synced_at",
     )
     list_filter = ("event_type", "delivery_type", "status", "timezone")
     search_fields = ("trip__title", "user__email", "idempotency_key")
@@ -221,6 +222,7 @@ class ScheduledTripNotificationAdmin(admin.ModelAdmin):
         "attempt_count",
         "processing_started_at",
         "sent_at",
+        "agent_context_synced_at",
         "failed_at",
         "created_at",
         "updated_at",

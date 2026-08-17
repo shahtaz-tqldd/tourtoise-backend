@@ -20,6 +20,7 @@ from trips.services.notifications import (
     get_trip_local_date,
     schedule_trip_notifications,
 )
+from trips.services.trip_chat import close_conversation_session
 
 
 logger = logging.getLogger(__name__)
@@ -145,6 +146,7 @@ def _transition_trip_if_due(
         trip.save(update_fields=["status", "updated_by", "updated_at"])
         create_trip_lifecycle_event(trip, event_type, occurred_at=now)
         if target_status == TripStatus.COMPLETED:
+            close_conversation_session(trip, user=trip.user, at=now)
             # Keep status, lifecycle outbox, and profile stats atomic. A
             # failure rolls the trip back to IN_PROGRESS for the next run.
             record_completed_trip_stats(trip)

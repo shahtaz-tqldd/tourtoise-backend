@@ -82,22 +82,10 @@ def get_or_create_planning_session(trip, user):
 
 
 def get_or_create_conversation_session(trip, user, plan_ready=None):
-    if plan_ready is None:
-        plan_ready = is_trip_plan_ready(trip)
-    conversation_session, _ = TripConversationSession.objects.get_or_create(
-        trip=trip,
-        defaults={
-            "user": user,
-            "is_active": plan_ready,
-            "created_by": user,
-            "updated_by": user,
-        },
-    )
-    if plan_ready and not conversation_session.is_active:
-        conversation_session.is_active = True
-        conversation_session.updated_by = user
-        conversation_session.save(update_fields=["is_active", "updated_by", "updated_at"])
-    return conversation_session
+    """Compatibility wrapper for the dedicated trip-chat service."""
+    from trips.services.trip_chat import get_or_create_conversation_session as get_session
+
+    return get_session(trip, user, plan_ready=plan_ready)
 
 
 def get_or_create_planning_step_session(trip, user, step=None, current_step=None):
@@ -161,15 +149,16 @@ def create_conversation_message(
     user=None,
     read_at=None,
 ):
-    actor = user or session.user
-    return TripConversationMessage.objects.create(
+    """Compatibility wrapper for the dedicated trip-chat service."""
+    from trips.services.trip_chat import create_conversation_message as create_message
+
+    return create_message(
         session=session,
         sender=sender,
-        content=content or "",
-        metadata=metadata or {},
+        content=content,
+        metadata=metadata,
+        user=user,
         read_at=read_at,
-        created_by=actor,
-        updated_by=actor,
     )
 
 
@@ -677,24 +666,10 @@ def build_trip_guide_context(trip):
 
 
 def run_guide_agent_for_session(session, user_query):
-    from trips.agents.guide_agent import GuideAgentClient
+    """Compatibility wrapper for the dedicated trip-chat service."""
+    from trips.services.trip_chat import run_guide_agent_for_session as run_agent
 
-    client = GuideAgentClient(
-        session.trip,
-        trip_context=build_trip_guide_context(session.trip),
-    )
-    result = async_to_sync(client.run_agent)(
-        user_query=user_query,
-        user_id=str(session.user_id),
-        session_id=session.external_session_id or None,
-    )
-
-    external_session_id = result.get("session_id") or ""
-    if external_session_id and session.external_session_id != external_session_id:
-        session.external_session_id = external_session_id
-        session.save(update_fields=["external_session_id", "updated_at"])
-
-    return result
+    return run_agent(session, user_query)
 
 
 def build_initial_agent_query(preferences, trip_snapshot):

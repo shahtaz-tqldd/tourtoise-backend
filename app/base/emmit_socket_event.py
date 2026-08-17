@@ -5,7 +5,7 @@ from channels.layers import get_channel_layer
 from django.core.exceptions import ValidationError
 
 from notification.models import Notification, NotificationType
-from notification.serializers import NotificationSerializer
+from notification.api.v1.client.serializers import NotificationSerializer
 
 logger = logging.getLogger(__name__)
 

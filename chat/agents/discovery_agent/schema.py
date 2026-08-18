@@ -1,7 +1,8 @@
+from datetime import date
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class DiscoveryIntent(str, Enum):
@@ -15,7 +16,7 @@ class DiscoveryIntent(str, Enum):
 
 
 class DestinationRecommendation(BaseModel):
-    destination_id: str
+    destination_slug: str
     name: str
     country: str
     why_it_matches: str
@@ -28,11 +29,12 @@ class DestinationRecommendation(BaseModel):
 
 
 class TripPlanningHandoff(BaseModel):
-    destination_id: str
+    destination_slug: str
     departure_location: Optional[str] = None
-    start_date: Optional[str] = None
+    start_date: date
+    end_date: Optional[date] = None
     preferred_month: Optional[str] = None
-    duration_days: Optional[int] = None
+    duration_days: Optional[int] = Field(default=None, ge=1)
     traveller_type: Optional[str] = None
     traveller_count: Optional[int] = None
     budget_tier: Optional[str] = None
@@ -41,6 +43,14 @@ class TripPlanningHandoff(BaseModel):
     mobility_constraints: list[str] = Field(default_factory=list)
     source: str = "turtle_chat"
     source_session_id: str
+
+    @model_validator(mode="after")
+    def validate_trip_dates(self):
+        if self.duration_days is None and self.end_date is None:
+            raise ValueError("Either duration_days or end_date is required.")
+        if self.end_date is not None and self.end_date < self.start_date:
+            raise ValueError("end_date must be on or after start_date.")
+        return self
 
 
 class DiscoveryAgentResponse(BaseModel):

@@ -45,6 +45,7 @@ class ChatSessionCreateSerializer(serializers.Serializer):
 
 class ChatMessageSerializer(serializers.ModelSerializer):
     session_id = serializers.UUIDField(read_only=True)
+    metadata = serializers.SerializerMethodField()
 
     class Meta:
         model = ChatMessage
@@ -57,6 +58,14 @@ class ChatMessageSerializer(serializers.ModelSerializer):
             "created_at",
         )
         read_only_fields = fields
+
+    def get_metadata(self, obj):
+        metadata = obj.metadata or {}
+        return {
+            key: value
+            for key, value in metadata.items()
+            if key not in {"cost", "token_usage"}
+        }
 
 
 class ChatQuestionSerializer(serializers.Serializer):

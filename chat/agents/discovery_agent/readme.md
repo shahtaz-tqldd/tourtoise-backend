@@ -27,4 +27,10 @@ trip-history access cannot be redirected to a different user by model-provided a
 The response is validated by `DiscoveryAgentResponse`. Its user-facing message is saved as
 the agent chat message; recommendation cards, intent, usage data, and an optional planning
 handoff are saved in message metadata. The handoff is also copied into session metadata for
-the trip-planning module to consume.
+the trip-planning module to consume. Before creating it, the agent collects an exact start
+date and either a duration in days or an exact end date; incomplete scheduling details keep
+the handoff pending while the agent asks one concise follow-up question. Conversational
+dates are resolved using the traveller's current local date. For a duration range, the agent
+chooses the shortest offered stay that meets the destination's minimum recommended stay,
+or the upper bound when neither option does. Recommendation cards and the planning handoff
+identify destinations by their public slugs rather than internal IDs.

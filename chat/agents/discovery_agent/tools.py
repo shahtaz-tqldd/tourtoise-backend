@@ -216,6 +216,7 @@ def _get_destination_details(user_id, destination_ids):
 def _serialize_destination(destination):
     return {
         "id": str(destination.id),
+        "slug": destination.slug,
         "name": destination.name,
         "country": destination.country,
         "region": destination.region or None,

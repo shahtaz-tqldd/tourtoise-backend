@@ -1,4 +1,5 @@
 import json
+from datetime import date
 from decimal import Decimal
 from unittest.mock import patch
 
@@ -8,8 +9,10 @@ from rest_framework.test import APIRequestFactory, force_authenticate
 from accounts.models import User
 from analytics.choices import AIUsageType
 from analytics.models import AIUsage
+from chat.agents.discovery_agent.agents import DiscoveryADKAgent
 from chat.agents.discovery_agent.client import DiscoveryAgentClient
 from chat.agents.discovery_agent.helpers import _parse_response
+from chat.api.v1.client.serializers import ChatMessageSerializer
 from chat.api.v1.client.views import ChatQuestionAPIView
 from chat.choices import ChatMessageSender
 from chat.models import ChatMessage, ChatSession
@@ -23,7 +26,7 @@ class DiscoveryResponseParsingTests(SimpleTestCase):
                 "intention": "destination_recommendation",
                 "destinations": [
                     {
-                        "destination_id": "destination-1",
+                        "destination_slug": "bali-indonesia",
                         "name": "Bali",
                         "country": "Indonesia",
                         "why_it_matches": "It combines beaches and food.",
@@ -37,6 +40,11 @@ class DiscoveryResponseParsingTests(SimpleTestCase):
 
         self.assertEqual(parsed["intention"], "destination_recommendation")
         self.assertEqual(parsed["destinations"][0]["name"], "Bali")
+        self.assertEqual(
+            parsed["destinations"][0]["destination_slug"],
+            "bali-indonesia",
+        )
+        self.assertNotIn("destination_id", parsed["destinations"][0])
 
     def test_rejects_unknown_intention(self):
         raw = json.dumps(
@@ -49,6 +57,85 @@ class DiscoveryResponseParsingTests(SimpleTestCase):
         )
 
         self.assertIsNone(_parse_response(raw))
+
+    def test_parses_handoff_with_start_and_end_dates(self):
+        raw = json.dumps(
+            {
+                "message": "Let's start planning Kyoto.",
+                "intention": "start_trip_planning",
+                "destinations": [],
+                "handoff": {
+                    "destination_slug": "kyoto-japan",
+                    "start_date": "2026-10-05",
+                    "end_date": "2026-10-09",
+                    "source_session_id": "chat-session-1",
+                },
+            }
+        )
+
+        parsed = _parse_response(raw)
+
+        self.assertEqual(parsed["handoff"]["start_date"], "2026-10-05")
+        self.assertEqual(parsed["handoff"]["end_date"], "2026-10-09")
+        self.assertEqual(parsed["handoff"]["destination_slug"], "kyoto-japan")
+        self.assertNotIn("destination_id", parsed["handoff"])
+
+    def test_parses_handoff_with_start_date_and_duration(self):
+        raw = json.dumps(
+            {
+                "message": "Let's start planning Kyoto.",
+                "intention": "start_trip_planning",
+                "destinations": [],
+                "handoff": {
+                    "destination_slug": "kyoto-japan",
+                    "start_date": "2026-10-05",
+                    "duration_days": 5,
+                    "source_session_id": "chat-session-1",
+                },
+            }
+        )
+
+        parsed = _parse_response(raw)
+
+        self.assertEqual(parsed["handoff"]["start_date"], "2026-10-05")
+        self.assertEqual(parsed["handoff"]["duration_days"], 5)
+
+    def test_rejects_handoff_without_duration_or_end_date(self):
+        raw = json.dumps(
+            {
+                "message": "Let's start planning Kyoto.",
+                "intention": "start_trip_planning",
+                "destinations": [],
+                "handoff": {
+                    "destination_slug": "kyoto-japan",
+                    "start_date": "2026-10-05",
+                    "source_session_id": "chat-session-1",
+                },
+            }
+        )
+
+        self.assertIsNone(_parse_response(raw))
+
+
+class DiscoveryAgentInstructionTests(SimpleTestCase):
+    def test_planning_handoff_resolves_casual_schedule(self):
+        instruction = DiscoveryADKAgent(
+            user=None,
+            source_session_id="chat-session-1",
+            current_date=date(2026, 8, 18),
+        )._instruction()
+
+        self.assertIn("2026-08-18", instruction)
+        self.assertIn("Tuesday", instruction)
+        self.assertIn('casual scheduling language such as "next Sunday"', instruction)
+        self.assertIn("first occurrence", instruction)
+        self.assertIn("Never ask the traveller to convert", instruction)
+        self.assertIn("min_stay_days", instruction)
+        self.assertIn("Never ask the traveller to choose between the bounds", instruction)
+        self.assertIn("recommendation's destination_slug", instruction)
+        self.assertIn("Do not put destination IDs in recommendation output", instruction)
+        self.assertIn("handoff.destination_slug", instruction)
+        self.assertIn("Do not put the destination ID in the handoff", instruction)
 
 
 class DiscoveryAgentClientTests(SimpleTestCase):
@@ -72,6 +159,32 @@ class DiscoveryAgentClientTests(SimpleTestCase):
         )
 
 
+class ChatMessageSerializerTests(SimpleTestCase):
+    def test_hides_cost_and_token_usage_from_metadata(self):
+        message = ChatMessage(
+            sender=ChatMessageSender.AGENT,
+            content="Try Kyoto.",
+            metadata={
+                "query_intention": "destination_recommendation",
+                "cost": 0.001,
+                "token_usage": 12,
+                "time": 0.2,
+            },
+        )
+
+        data = ChatMessageSerializer(message).data
+
+        self.assertEqual(
+            data["metadata"],
+            {
+                "query_intention": "destination_recommendation",
+                "time": 0.2,
+            },
+        )
+        self.assertIn("cost", message.metadata)
+        self.assertIn("token_usage", message.metadata)
+
+
 class ChatQuestionAPIViewTests(TestCase):
     def setUp(self):
         self.user = User.objects.create_user(email="traveller@example.com", password="pass")
@@ -85,7 +198,7 @@ class ChatQuestionAPIViewTests(TestCase):
                 "response": {
                     "message": "Try Kyoto for food and culture.",
                     "intention": "destination_recommendation",
-                    "destinations": [{"destination_id": "destination-1"}],
+                    "destinations": [{"destination_slug": "kyoto-japan"}],
                     "handoff": None,
                 },
                 "meta": {

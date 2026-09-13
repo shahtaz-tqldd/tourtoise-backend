@@ -4,16 +4,24 @@ from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.db.models import Q
 
-from app.base.models import BaseModel
+from app.base.models import BaseModel, BaseImage
 from destinations.models import Activity, Attraction, Cuisine, Destination
 from trips.choices import (
-    AccommodationPreference,
     AgentMessageSender,
     PlanningSource,
     TripStatus,
     BudgetTier,
     TripVisibility,
     TravelerType,
+    PackingItemsType,
+    PriorityType,
+    RequiredType,
+    HeadsUpType,
+    SeverityType,
+    PlanningStep,
+    ScheduledNotificationStatusType,
+    ScheduledTripDeliveryType,
+    ScheduledTripEventType,
 )
 
 
@@ -67,45 +75,43 @@ class Trip(BaseModel):
         choices=BudgetTier.choices,
         blank=True,
     )
-    budget_currency = models.CharField(max_length=10, blank=True, default="USD")
     total_budget = models.DecimalField(
         max_digits=12,
         decimal_places=2,
         null=True,
         blank=True,
+        validators=[MinValueValidator(0)],
     )
+    budget_currency = models.CharField(max_length=10, blank=True, default="USD")
 
-    accommodation_preference = models.CharField(
-        max_length=20,
-        choices=AccommodationPreference.choices,
-        blank=True,
-    )
     preferences = models.JSONField(
         default=dict,
         blank=True,
         help_text="Flexible trip preferences collected from the user or AI agent.",
     )
 
-    current_step = models.PositiveSmallIntegerField(
-        default=1,
-        validators=[MinValueValidator(1), MaxValueValidator(6)],
+    current_step = models.CharField(
+        max_length=32,
+        choices=PlanningStep.choices,
         db_index=True,
+        default=PlanningStep.PREFERENCE
     )
 
     # Agent Specific Parameter
     agent_active = models.BooleanField(default=False)
-    agent_active_failed_message = models.TextField(blank=True)
     is_qna_complete = models.BooleanField(default=False)
     is_recommendation_complete = models.BooleanField(default=False)
     is_itinerary_design_complete = models.BooleanField(default=False)
     is_trip_preparation_complete = models.BooleanField(default=False)
     
     planning_summary = models.TextField(blank=True)
-    agent_context = models.JSONField(
+    metadata = models.JSONField(
         default=dict,
         blank=True,
         help_text="Agent-specific structured state, prompts, or planning notes.",
     )
+
+    completed_stats_recorded = models.BooleanField(default=False, db_index=True)
     
     class Meta:
         ordering = ["-updated_at"]
@@ -185,7 +191,7 @@ class TripDestination(BaseModel):
 
 
 # recommendation
-class TripRecommendations(models.Model):
+class TripRecommendations(BaseModel):
     trip = models.OneToOneField(
         Trip,
         on_delete=models.CASCADE,
@@ -196,14 +202,10 @@ class TripRecommendations(models.Model):
     cusine_recommendation_message = models.TextField(blank=True)
     activity_recommendation_message = models.TextField(blank=True)
 
-    session_id = models.CharField(max_length=120, blank=True, db_index=True)
-    is_finalized = models.BooleanField(default=False)
+    external_session_id = models.CharField(max_length=120, blank=True, db_index=True)
     metadata = models.JSONField(default=dict, blank=True)
 
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-class TripAttractionRecommendationItem(models.Model):
+class TripAttractionRecommendationItem(BaseModel):
     recommendation = models.ForeignKey(
         TripRecommendations,
         on_delete=models.CASCADE,
@@ -217,7 +219,7 @@ class TripAttractionRecommendationItem(models.Model):
         related_name="trip_recommendation_items",
     )
 
-class TripCuisineRecommendationItem(models.Model):
+class TripCuisineRecommendationItem(BaseModel):
     recommendation = models.ForeignKey(
         TripRecommendations,
         on_delete=models.CASCADE,
@@ -229,7 +231,7 @@ class TripCuisineRecommendationItem(models.Model):
         related_name="trip_recommendation_items",
     )
 
-class TripActivityRecommendationItem(models.Model):
+class TripActivityRecommendationItem(BaseModel):
     recommendation = models.ForeignKey(
         TripRecommendations,
         on_delete=models.CASCADE,
@@ -243,7 +245,7 @@ class TripActivityRecommendationItem(models.Model):
 
 
 # itenary
-class TripItinerary(models.Model):
+class TripItinerary(BaseModel):
     trip = models.OneToOneField(
         Trip,
         on_delete=models.CASCADE,
@@ -254,12 +256,8 @@ class TripItinerary(models.Model):
     summary = models.TextField(blank=True)
     message = models.TextField(blank=True)
     
-    session_id = models.CharField(max_length=120, blank=True, db_index=True)
-    is_finalized = models.BooleanField(default=False)
+    external_session_id = models.CharField(max_length=120, blank=True, db_index=True)
     metadata = models.JSONField(default=dict, blank=True)
-
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
 
 class TripRoutePlanItem(models.Model):
     itinerary = models.ForeignKey(
@@ -315,11 +313,11 @@ class TripItineraryDayItem(models.Model):
     )
 
     time = models.TimeField(null=True, blank=True)
-    notes = models.TextField(blank=True)
     title = models.CharField(max_length=180)
-    item_id = models.UUIDField(null=True, blank=True) # cusine/activity/spot
-    item_type = models.CharField(max_length=20)
     description = models.TextField(blank=True)
+    notes = models.TextField(blank=True)
+    item_type = models.CharField(max_length=20)
+    item_id = models.UUIDField(null=True, blank=True) # cusine/activity/spot
     estimated_cost = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
 
     class Meta:
@@ -335,6 +333,7 @@ class TripItineraryBudget(BaseModel):
         on_delete=models.CASCADE,
         related_name="rough_budget",
     )
+    accommodation = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
     transport = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
     food = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
     activities = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
@@ -353,7 +352,7 @@ class TripItineraryBudget(BaseModel):
 
 
 # trip preparation
-class TripPreparation(models.Model):
+class TripPreparation(BaseModel):
     trip = models.OneToOneField(
         Trip,
         on_delete=models.CASCADE,
@@ -364,50 +363,14 @@ class TripPreparation(models.Model):
     summary = models.TextField(blank=True)
     message = models.TextField(blank=True)
     
-    is_finalized = models.BooleanField(default=False)
-    session_id = models.CharField(max_length=120, blank=True, db_index=True)
+    external_session_id = models.CharField(max_length=120, blank=True, db_index=True)
     metadata = models.JSONField(default=dict, blank=True)
-
-    class Meta:
-        indexes = [
-            models.Index(fields=["trip", "is_finalized"]),
-        ]
 
     def __str__(self):
         return self.title or f"{self.trip.title} preparation"
 
 
-class TripPreparationPackingItem(models.Model):
-    CLOTHING = "clothing"
-    TOILETRIES = "toiletries"
-    ELECTRONICS = "electronics"
-    MEDICINE = "medicine"
-    TRAVEL_GEAR = "travel_gear"
-    SAFETY = "safety"
-    WEATHER = "weather"
-    OTHER = "other"
-
-    CATEGORY_CHOICES = (
-        (CLOTHING, "Clothing"),
-        (TOILETRIES, "Toiletries"),
-        (ELECTRONICS, "Electronics"),
-        (MEDICINE, "Medicine"),
-        (TRAVEL_GEAR, "Travel Gear"),
-        (SAFETY, "Safety"),
-        (WEATHER, "Weather"),
-        (OTHER, "Other"),
-    )
-
-    ESSENTIAL = "essential"
-    RECOMMENDED = "recommended"
-    OPTIONAL = "optional"
-
-    PRIORITY_CHOICES = (
-        (ESSENTIAL, "Essential"),
-        (RECOMMENDED, "Recommended"),
-        (OPTIONAL, "Optional"),
-    )
-
+class TripPreparationPackingItem(BaseModel):
     preparation = models.ForeignKey(
         TripPreparation,
         on_delete=models.CASCADE,
@@ -418,18 +381,19 @@ class TripPreparationPackingItem(models.Model):
     
     category = models.CharField(
         max_length=20,
-        choices=CATEGORY_CHOICES,
-        default=OTHER,
+        choices=PackingItemsType.choices,
+        default=PackingItemsType.OTHER,
         db_index=True,
     )
     
     priority = models.CharField(
         max_length=20,
-        choices=PRIORITY_CHOICES,
-        default=RECOMMENDED,
+        choices=PriorityType.choices,
+        default=PriorityType.RECOMMENDED,
         db_index=True,
     )
-
+    
+    is_packed = models.BooleanField(default=False, db_index=True)
     sort_order = models.PositiveSmallIntegerField(default=1)
     additional_notes = models.TextField(blank=True, null=True)
     class Meta:
@@ -450,30 +414,22 @@ class TripPreparationPackingItem(models.Model):
         return self.item
 
 
-class TripRequiredDocumentItem(models.Model):
-    REQUIRED = "required"
-    RECOMMENDED = "recommended"
-    CONDITIONAL = "conditional"
-
-    REQUIRED_LEVEL_CHOICES = (
-        (REQUIRED, "Required"),
-        (RECOMMENDED, "Recommended"),
-        (CONDITIONAL, "Conditional"),
-    )
-
+class TripRequiredDocumentItem(BaseModel):
     preparation = models.ForeignKey(
         TripPreparation,
         on_delete=models.CASCADE,
         related_name="required_documents",
     )
     document_name = models.CharField(max_length=180)
-    document_url = models.URLField(blank=True)
+    document_file_name = models.CharField(max_length=180, blank=True)
+    document_url = models.URLField(blank=True, null=True)
     document_url_public_id = models.CharField(max_length=255, blank=True)
+    is_packed = models.BooleanField(default=False, db_index=True)
     
     required_level = models.CharField(
         max_length=20,
-        choices=REQUIRED_LEVEL_CHOICES,
-        default=RECOMMENDED,
+        choices=RequiredType.choices,
+        default=RequiredType.RECOMMENDED,
         db_index=True,
     )
     
@@ -496,41 +452,7 @@ class TripRequiredDocumentItem(models.Model):
         return self.document_name
 
 
-class TripHeadsUpInfoItem(models.Model):
-    SAFETY = "safety"
-    WEATHER = "weather"
-    CULTURE = "culture"
-    TRANSPORT = "transport"
-    MONEY = "money"
-    HEALTH = "health"
-    CONNECTIVITY = "connectivity"
-    TIMING = "timing"
-    RULES = "rules"
-    OTHER = "other"
-
-    CATEGORY_CHOICES = (
-        (SAFETY, "Safety"),
-        (WEATHER, "Weather"),
-        (CULTURE, "Culture"),
-        (TRANSPORT, "Transport"),
-        (MONEY, "Money"),
-        (HEALTH, "Health"),
-        (CONNECTIVITY, "Connectivity"),
-        (TIMING, "Timing"),
-        (RULES, "Rules"),
-        (OTHER, "Other"),
-    )
-
-    LOW = "low"
-    MEDIUM = "medium"
-    HIGH = "high"
-
-    SEVERITY_CHOICES = (
-        (LOW, "Low"),
-        (MEDIUM, "Medium"),
-        (HIGH, "High"),
-    )
-
+class TripHeadsUpInfoItem(BaseModel):
     preparation = models.ForeignKey(
         TripPreparation,
         on_delete=models.CASCADE,
@@ -539,14 +461,14 @@ class TripHeadsUpInfoItem(models.Model):
     title = models.CharField(max_length=180)
     category = models.CharField(
         max_length=20,
-        choices=CATEGORY_CHOICES,
-        default=OTHER,
+        choices=HeadsUpType.choices,
+        default=HeadsUpType.OTHER,
         db_index=True,
     )
     severity = models.CharField(
         max_length=10,
-        choices=SEVERITY_CHOICES,
-        default=LOW,
+        choices=SeverityType.choices,
+        default=SeverityType.LOW,
         db_index=True,
     )
 
@@ -571,8 +493,50 @@ class TripHeadsUpInfoItem(models.Model):
         return self.title
 
 
-# agent conversation
+# Planning sessions
+class TripPlanningSession(BaseModel):
+    """
+    The single planning workspace for a trip.
+
+    Agent sessions are kept per planning step below so that external agent context
+    cannot leak from preference Q&A into recommendation, itinerary, or preparation.
+    """
+
+    trip = models.OneToOneField(
+        Trip,
+        on_delete=models.CASCADE,
+        related_name="planning_session",
+    )
+    user = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.CASCADE,
+        related_name="trip_planning_sessions",
+        db_index=True,
+    )
+    is_active = models.BooleanField(default=True, db_index=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ["-updated_at"]
+        indexes = [models.Index(fields=["user", "is_active"])]
+
+    def __str__(self):
+        return f"{self.trip.title} planning session"
+
+    def save(self, *args, **kwargs):
+        if self.trip.user_id != self.user_id:
+            raise ValueError("Planning session must belong to the trip owner.")
+        super().save(*args, **kwargs)
+
+
 class TripAgentConversationSession(BaseModel):
+    """A step-specific agent session within a trip's planning session."""
+
+    planning_session = models.ForeignKey(
+        TripPlanningSession,
+        on_delete=models.CASCADE,
+        related_name="step_sessions",
+    )
     trip = models.ForeignKey(
         Trip,
         on_delete=models.CASCADE,
@@ -584,25 +548,51 @@ class TripAgentConversationSession(BaseModel):
         related_name="trip_agent_conversation_sessions",
         db_index=True,
     )
-    current_step = models.PositiveSmallIntegerField(
-        default=2,
-        validators=[MinValueValidator(1), MaxValueValidator(6)],
+    step = models.CharField(
+        max_length=32,
+        choices=PlanningStep.choices,
         db_index=True,
     )
     external_session_id = models.CharField(max_length=120, blank=True, db_index=True)
     is_active = models.BooleanField(default=True, db_index=True)
-    qna_count = models.PositiveSmallIntegerField(default=0)
     metadata = models.JSONField(default=dict, blank=True)
 
     class Meta:
         ordering = ["-updated_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["planning_session", "step"],
+                name="unique_trip_planning_step_session",
+            ),
+        ]
         indexes = [
-            models.Index(fields=["trip", "current_step", "is_active"]),
+            models.Index(fields=["trip", "step", "is_active"]),
             models.Index(fields=["user", "is_active"]),
         ]
 
     def __str__(self):
-        return f"{self.trip.title} agent session step {self.current_step}"
+        return f"{self.trip.title} planning step {self.step}"
+
+    def save(self, *args, **kwargs):
+        if not self.planning_session_id:
+            self.planning_session, _ = TripPlanningSession.objects.get_or_create(
+                trip=self.trip,
+                defaults={
+                    "user": self.user,
+                    "created_by": self.created_by or self.user,
+                    "updated_by": self.updated_by or self.user,
+                },
+            )
+        if self.planning_session.trip_id != self.trip_id:
+            raise ValueError("Planning step session must belong to the same trip as its planning session.")
+        if self.planning_session.user_id != self.user_id:
+            raise ValueError("Planning step session must belong to the same user as its planning session.")
+        super().save(*args, **kwargs)
+
+
+# Clear domain name for new code while retaining the original model name and
+# database table for backwards compatibility.
+TripPlanningStepSession = TripAgentConversationSession
 
 
 class TripAgentMessage(BaseModel):
@@ -611,30 +601,196 @@ class TripAgentMessage(BaseModel):
         on_delete=models.CASCADE,
         related_name="messages",
     )
-    trip = models.ForeignKey(
-        Trip,
-        on_delete=models.CASCADE,
-        related_name="agent_messages",
-    )
     sender = models.CharField(max_length=10, choices=AgentMessageSender.choices)
-    step = models.PositiveSmallIntegerField(
-        default=2,
-        validators=[MinValueValidator(1), MaxValueValidator(6)],
-        db_index=True,
-    )
-    sequence = models.PositiveIntegerField()
     content = models.TextField(blank=True)
-    payload = models.JSONField(default=dict, blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
 
     class Meta:
-        ordering = ["sequence", "created_at"]
-        constraints = [
-            models.UniqueConstraint(fields=["session", "sequence"], name="unique_trip_agent_message_sequence"),
-        ]
+        ordering = ["created_at"]
         indexes = [
-            models.Index(fields=["trip", "step"]),
             models.Index(fields=["session", "sender"]),
         ]
 
     def __str__(self):
-        return f"{self.sender} message {self.sequence} for {self.session_id}"
+        return f"{self.sender} message for {self.session_id}"
+
+
+# Post-planning trip chat
+class TripConversationSession(BaseModel):
+    """The single post-planning conversation for a trip."""
+
+    trip = models.OneToOneField(
+        Trip,
+        on_delete=models.CASCADE,
+        related_name="conversation_session",
+    )
+    user = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.CASCADE,
+        related_name="trip_conversation_sessions",
+        db_index=True,
+    )
+    external_session_id = models.CharField(max_length=120, blank=True, db_index=True)
+    is_active = models.BooleanField(default=False, db_index=True)
+    metadata = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ["-updated_at"]
+        indexes = [models.Index(fields=["user", "is_active"])]
+
+    def __str__(self):
+        return f"{self.trip.title} conversation"
+
+    def save(self, *args, **kwargs):
+        if self.trip.user_id != self.user_id:
+            raise ValueError("Conversation session must belong to the trip owner.")
+        super().save(*args, **kwargs)
+
+
+class TripConversationMessage(BaseModel):
+    session = models.ForeignKey(
+        TripConversationSession,
+        on_delete=models.CASCADE,
+        related_name="messages",
+    )
+    sender = models.CharField(max_length=10, choices=AgentMessageSender.choices)
+    content = models.TextField(blank=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    read_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["created_at"]
+        indexes = [
+            models.Index(
+                fields=["session", "created_at"],
+                name="trip_chat_timeline_idx",
+            ),
+            models.Index(
+                fields=["session", "read_at"],
+                condition=Q(sender=AgentMessageSender.AGENT),
+                name="trip_chat_unread_idx",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.sender} chat message for {self.session_id}"
+
+
+# trip notes
+class TripNote(BaseModel):
+    trip = models.ForeignKey(
+        Trip,
+        on_delete=models.CASCADE,
+        related_name="trip_notes",
+    )
+    content = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["trip", "created_at"]),
+        ]
+
+    def __str__(self):
+        return f"Note for {self.trip.title}"
+
+
+class TripNoteImage(BaseImage):
+    note = models.ForeignKey(TripNote, on_delete=models.CASCADE, related_name="trip_note_images")
+
+
+# trip notifications
+class ScheduledTripNotification(BaseModel):
+    trip = models.ForeignKey(
+        Trip,
+        on_delete=models.CASCADE,
+        related_name="scheduled_notifications",
+    )
+
+    user = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.CASCADE,
+    )
+
+    event_type = models.CharField(max_length=32, choices=ScheduledTripEventType.choices)
+    delivery_type = models.CharField(max_length=10, choices=ScheduledTripDeliveryType.choices)
+
+    scheduled_for = models.DateTimeField()  # Always UTC
+    local_date = models.DateField()
+    local_time = models.TimeField()
+    timezone = models.CharField(max_length=64)
+
+    status = models.CharField(
+        max_length=20,
+        choices=ScheduledNotificationStatusType.choices,
+        default=ScheduledNotificationStatusType.PENDING,
+    )
+
+    metadata = models.JSONField(default=dict, blank=True)
+
+    alert = models.ForeignKey(
+        "notification.Notification",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="scheduled_trip_events",
+    )
+    message = models.ForeignKey(
+        TripConversationMessage,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="scheduled_trip_events",
+    )
+
+    processing_started_at = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
+    sent_at = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
+    agent_context_synced_at = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
+    failed_at = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
+
+    attempt_count = models.PositiveSmallIntegerField(default=0)
+    last_error = models.TextField(blank=True)
+
+    idempotency_key = models.CharField(
+        max_length=255,
+        unique=True,
+    )
+
+    class Meta:
+        indexes = [
+            models.Index(
+                fields=["status", "scheduled_for"],
+                name="scheduled_due_idx",
+            ),
+            models.Index(
+                fields=["trip", "delivery_type", "status"],
+                name="scheduled_trip_delivery_idx",
+            ),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    Q(
+                        delivery_type=ScheduledTripDeliveryType.ALERT,
+                        message__isnull=True,
+                    )
+                    | Q(
+                        delivery_type=ScheduledTripDeliveryType.MESSAGE,
+                        alert__isnull=True,
+                    )
+                ),
+                name="scheduled_event_matches_delivery",
+            ),
+        ]

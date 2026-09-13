@@ -5,8 +5,8 @@ from app.base.pagination import CustomPagination
 from app.utils.response import APIResponse
 
 from trips.models import (
-    Trip, TripDestination, TripItineraryDayItem, 
-    TripItineraryDay
+    Trip,
+    TripDestination,
   )
 
 
@@ -38,15 +38,6 @@ class UserTripQuerysetMixin:
                 "trip_destinations",
                 queryset=TripDestination.objects.select_related("destination").order_by("sort_order"),
                 to_attr="prefetched_trip_destinations",
-            ),
-            Prefetch(
-                "trip_itinerary__itinerary_days",
-                queryset=TripItineraryDay.objects.prefetch_related(
-                    Prefetch(
-                        "day_items",
-                        queryset=TripItineraryDayItem.objects.order_by("time"),
-                    )
-                ).order_by("day"),
             ),
         )
 

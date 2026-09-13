@@ -1,17 +1,21 @@
 from datetime import timedelta
 
-from app.settings.env import BASE_DIR, PROJECT_DIR, env, env_bool, env_int, env_list
+from celery.schedules import crontab
+
+from app.settings.env import BASE_DIR, PROJECT_DIR, env, env_bool, env_float, env_int, env_list
 
 APP_ENV = env("APP_ENV", "dev")
 SECRET_KEY = env("APP_SECRET", "django-insecure-change-me")
 DEBUG = APP_ENV == "dev" or env_bool("DEBUG", False)
-ALLOWED_HOSTS = env_list("ALLOWED_HOSTS", "127.0.0.1,localhost")
+ALLOWED_HOSTS = env_list("ALLOWED_HOSTS")
 CSRF_TRUSTED_ORIGINS = env_list("CSRF_TRUSTED_ORIGINS")
-CORS_ALLOWED_ORIGINS = env_list(
-    "CORS_ALLOWED_ORIGINS",
-    "http://localhost:5173,http://127.0.0.1:5173",
-)
+CORS_ALLOWED_ORIGINS = env_list("CORS_ALLOWED_ORIGINS")
 CORS_ALLOW_CREDENTIALS = True
+SECURE_PROXY_SSL_HEADER = (
+    ("HTTP_X_FORWARDED_PROTO", "https")
+    if env_bool("SECURE_PROXY_SSL_HEADER_ENABLED", APP_ENV == "prod")
+    else None
+)
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 LOG_LEVEL = env("LOG_LEVEL", "INFO")
@@ -62,6 +66,7 @@ EMAIL_PORT = env_int("EMAIL_PORT", 587)
 EMAIL_HOST_USER = env("EMAIL_HOST_USER", "")
 EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD", "")
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", EMAIL_HOST_USER or "no-reply@tourtoise.local")
+EMAIL_VERIFICATION_OTP_TTL_MINUTES = env_int("EMAIL_VERIFICATION_OTP_TTL_MINUTES", 10)
 
 # STATIC AND MEDIA
 STATIC_URL = "/static/"
@@ -79,10 +84,64 @@ CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = env("CELERY_TIMEZONE", "UTC")
 CELERY_RESULT_EXTENDED = True
-CELERY_IMPORTS = ("accounts.tasks",)
+CELERY_IMPORTS = ("accounts.tasks", "destinations.tasks", "trips.tasks")
+CELERY_BEAT_SCHEDULE = {
+    "add-monthly-user-credits": {
+        "task": "accounts.tasks.add_monthly_credits",
+        "schedule": crontab(minute=0, hour=0, day_of_month=1),
+    },
+    "permanently-delete-expired-accounts-daily": {
+        "task": "accounts.tasks.permanently_delete_expired_accounts",
+        "schedule": 60 * 60 * 24,
+    },
+    "dispatch-due-trip-notifications-every-five-minutes": {
+        "task": "trips.tasks.dispatch_due_trip_notifications",
+        "schedule": 5 * 60,
+    },
+    "update-trip-lifecycle-statuses-every-five-minutes": {
+        "task": "trips.tasks.update_trip_lifecycle_statuses",
+        "schedule": 5 * 60,
+    },
+}
+
+# CHANNELS
+CHANNEL_LAYER_BACKEND = env("CHANNEL_LAYER_BACKEND", "redis")
+CHANNEL_REDIS_URL = env("CHANNEL_REDIS_URL", CELERY_BROKER_URL)
+if CHANNEL_LAYER_BACKEND == "redis":
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels_redis.core.RedisChannelLayer",
+            "CONFIG": {
+                "hosts": [CHANNEL_REDIS_URL],
+            },
+        },
+    }
+else:
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels.layers.InMemoryChannelLayer",
+        },
+    }
 
 # ADK
 ADK_DB_URL = env("ADK_DB_URL")
+PLANNING_AGENT_MODEL = env("PLANNING_AGENT_MODEL", "gemini-2.5-flash")
+PLANNING_AGENT_INPUT_COST_PER_MILLION = env_float(
+    "PLANNING_AGENT_INPUT_COST_PER_MILLION",
+    0.30,
+)
+PLANNING_AGENT_OUTPUT_COST_PER_MILLION = env_float(
+    "PLANNING_AGENT_OUTPUT_COST_PER_MILLION",
+    2.50,
+)
+VECTOR_DB_URL = env("VECTOR_DB_URL")
+
+# GEMINI EMBEDDINGS
+GOOGLE_CLOUD_PROJECT_ID = env("GOOGLE_CLOUD_PROJECT_ID", "")
+GOOGLE_CLOUD_LOCATION = env("GOOGLE_CLOUD_LOCATION", "")
+GEMINI_EMBEDDING_MODEL = env("GEMINI_EMBEDDING_MODEL", "gemini-embedding-2")
+GEMINI_EMBEDDING_DIMENSIONS = env_int("GEMINI_EMBEDDING_DIMENSIONS", 1536)
+GEMINI_EMBEDDING_REQUEST_DELAY_SECONDS = env_float("GEMINI_EMBEDDING_REQUEST_DELAY_SECONDS", 13.0)
 
 
 # CLOUDINARY

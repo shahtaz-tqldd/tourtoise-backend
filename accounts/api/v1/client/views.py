@@ -1,4 +1,7 @@
 from django.contrib.auth import get_user_model
+from django.db import IntegrityError, transaction
+from django.db.models import Count, IntegerField, OuterRef, Q, Subquery, Value
+from django.db.models.functions import Coalesce
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework import serializers as drf_serializers
@@ -8,9 +11,13 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.views import APIView
 from rest_framework_simplejwt.views import TokenRefreshView
 
+from app.base.pagination import CustomPagination
 from app.utils.response import APIResponse
+from notification.models import Notification, NotificationType
 from accounts.api.v1.client.serializers import (
     ChangePasswordSerializer,
+    CreditTransactionSerializer,
+    CreditRequestSerializer,
     GoogleLoginSerializer,
     LoginSerializer,
     PublicUserProfileSerializer,
@@ -19,9 +26,31 @@ from accounts.api.v1.client.serializers import (
     ResetPasswordSerializer,
     UserSerializer,
     UserUpdateSerializer,
+    VerifyOTPSerializer,
 )
+from accounts.choices import CreditRequestStatus
+from accounts.models import CreditRequest
+from trips.choices import AgentMessageSender, TripStatus
+from trips.models import Trip, TripConversationMessage
 
 User = get_user_model()
+
+
+def first_error_message(errors, fallback="Request failed."):
+    """Return the first human-readable message from nested serializer errors."""
+    if isinstance(errors, dict):
+        for value in errors.values():
+            message = first_error_message(value, fallback="")
+            if message:
+                return message
+        return fallback
+    if isinstance(errors, (list, tuple)):
+        for value in errors:
+            message = first_error_message(value, fallback="")
+            if message:
+                return message
+        return fallback
+    return str(errors) if errors else fallback
 
 
 class CreateNewUserView(CreateAPIView):
@@ -47,7 +76,10 @@ class CreateNewUserView(CreateAPIView):
         if not serializer.is_valid():
             return APIResponse.error(
                 errors=serializer.errors,
-                message="Registration failed.",
+                message=first_error_message(
+                    serializer.errors,
+                    fallback="Registration failed.",
+                ),
                 status=status.HTTP_400_BAD_REQUEST,
             )
         try:
@@ -55,12 +87,15 @@ class CreateNewUserView(CreateAPIView):
         except drf_serializers.ValidationError as exc:
             return APIResponse.error(
                 errors=exc.detail,
-                message="Registration failed.",
+                message=first_error_message(
+                    exc.detail,
+                    fallback="Registration failed.",
+                ),
                 status=status.HTTP_400_BAD_REQUEST,
             )
         return APIResponse.success(
             data=UserSerializer(user).data,
-            message="User created successfully.",
+            message="User created successfully. A verification OTP was sent to the email address.",
             status=status.HTTP_201_CREATED,
         )
 
@@ -84,10 +119,37 @@ class LoginView(GenericAPIView):
 
     def post(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data, context={"request": request})
-        serializer.is_valid(raise_exception=True)
+        if not serializer.is_valid():
+            return APIResponse.error(
+                errors=serializer.errors,
+                message=first_error_message(
+                    serializer.errors,
+                    fallback="Login failed.",
+                ),
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         return APIResponse.success(
             data=serializer.validated_data,
             message="User logged in.",
+        )
+
+
+class VerifyOTPView(GenericAPIView):
+    """Verify a registration OTP and return an access/refresh token pair."""
+
+    serializer_class = VerifyOTPSerializer
+
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        if not serializer.is_valid():
+            return APIResponse.error(
+                errors=serializer.errors,
+                message="OTP verification failed.",
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return APIResponse.success(
+            data=serializer.save(),
+            message="Email verified successfully.",
         )
 
 
@@ -162,6 +224,141 @@ class UserDetailsView(APIView):
         return APIResponse.success(data=UserSerializer(request.user).data)
 
 
+class CreditHistoryView(GenericAPIView):
+    """Return the authenticated user's paginated credit transaction history."""
+
+    permission_classes = [IsAuthenticated]
+    serializer_class = CreditTransactionSerializer
+    pagination_class = CustomPagination
+
+    def get(self, request, *args, **kwargs):
+        queryset = request.user.credit.transactions.all()
+        paginator = self.pagination_class()
+        page = paginator.paginate_queryset(queryset, request, view=self)
+
+        return APIResponse.success(
+            data=self.get_serializer(page, many=True).data,
+            meta={
+                "count": paginator.page.paginator.count,
+                "page": paginator.page.number,
+                "page_size": paginator.get_page_size(request),
+                "num_pages": paginator.page.paginator.num_pages,
+                "next": paginator.get_next_link(),
+                "previous": paginator.get_previous_link(),
+            },
+            message="Credit history fetched successfully.",
+        )
+
+
+class CreditRequestCreateView(CreateAPIView):
+    """Create a credit request when the user has no pending request."""
+
+    permission_classes = [IsAuthenticated]
+    serializer_class = CreditRequestSerializer
+
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        if not serializer.is_valid():
+            return APIResponse.error(
+                errors=serializer.errors,
+                message=first_error_message(serializer.errors),
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            with transaction.atomic():
+                credit_request = serializer.save()
+        except IntegrityError:
+            return APIResponse.error(
+                errors={"detail": ["You already have a pending credit request."]},
+                message="You already have a pending credit request.",
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return APIResponse.success(
+            data=self.get_serializer(credit_request).data,
+            message="Credit request submitted successfully.",
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class UserProfileStatesView(APIView):
+    """Return the authenticated user's unread counts and active trip summary."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, *args, **kwargs):
+        unread_notifications = Notification.objects.filter(
+            Q(recipient=request.user)
+            | Q(notification_type=NotificationType.GLOBAL, recipient__isnull=True)
+        ).exclude(read_receipts__user=request.user)
+        unread_messages = TripConversationMessage.objects.filter(
+            session__user=request.user,
+            sender=AgentMessageSender.AGENT,
+            read_at__isnull=True,
+        )
+
+        trip_unread_notifications = (
+            Notification.objects.filter(
+                trip_id=OuterRef("pk"),
+                recipient=request.user,
+                notification_type=NotificationType.TRIP,
+            )
+            .exclude(read_receipts__user=request.user)
+            .values("trip_id")
+            .annotate(total=Count("pk"))
+            .values("total")[:1]
+        )
+        trip_unread_messages = (
+            TripConversationMessage.objects.filter(
+                session__trip_id=OuterRef("pk"),
+                session__user=request.user,
+                sender=AgentMessageSender.AGENT,
+                read_at__isnull=True,
+            )
+            .values("session__trip_id")
+            .annotate(total=Count("pk"))
+            .values("total")[:1]
+        )
+        in_progress_trip = (
+            Trip.objects.filter(user=request.user, status=TripStatus.IN_PROGRESS)
+            .annotate(
+                unread_notification=Coalesce(
+                    Subquery(trip_unread_notifications, output_field=IntegerField()),
+                    Value(0),
+                ),
+                unread_message=Coalesce(
+                    Subquery(trip_unread_messages, output_field=IntegerField()),
+                    Value(0),
+                ),
+            )
+            .order_by("-updated_at")
+            .first()
+        )
+
+        trip_data = None
+        if in_progress_trip:
+            trip_data = {
+                "name": in_progress_trip.title,
+                "start_date": in_progress_trip.start_date,
+                "end_date": in_progress_trip.end_date,
+                "trip_id": str(in_progress_trip.id),
+                "unread_notification": in_progress_trip.unread_notification,
+                "unread_message": in_progress_trip.unread_message,
+            }
+
+        return APIResponse.success(
+            data={
+                "unread_message": unread_messages.count(),
+                "unread_notification": unread_notifications.count(),
+                "in_progress_trip": trip_data,
+                "has_pending_credit_request": CreditRequest.objects.filter(
+                    user=request.user,
+                    status=CreditRequestStatus.PENDING,
+                ).exists(),
+            },
+            message="User profile states fetched successfully.",
+        )
+
+
 class PublicUserDetailsView(GenericAPIView):
     """
     Public user profile API.
@@ -181,8 +378,10 @@ class PublicUserDetailsView(GenericAPIView):
 
     def get_object(self):
         return get_object_or_404(
-            User.objects.select_related("profile").filter(profile__is_public_profile=True),
+            User.objects.select_related("profile"),
             profile__username=self.kwargs["username"],
+            is_active=True,
+            deleted_at__isnull=True,
         )
 
     def get(self, request, *args, **kwargs):
@@ -263,6 +462,30 @@ class ChangePasswordView(GenericAPIView):
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return APIResponse.success(message="Password changed successfully.")
+
+
+class DeleteAccountView(APIView):
+    """
+    Temporarily disable the authenticated account and mark it for permanent deletion.
+
+    Frontend request:
+    - Method: DELETE
+    - Headers: authenticated bearer token
+    - No request body is required.
+
+    Frontend response:
+    - 200 success with the deletion timestamp.
+    - A scheduled cleanup task permanently deletes accounts after 14 days.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request, *args, **kwargs):
+        request.user.mark_deleted()
+        return APIResponse.success(
+            data={"deleted_at": request.user.deleted_at},
+            message="Account disabled and scheduled for deletion.",
+        )
 
 
 class RequestPasswordResetView(GenericAPIView):

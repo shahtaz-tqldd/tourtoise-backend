@@ -1,27 +1,33 @@
-from django.urls import path
+from django.urls import path, include
+from accounts.api.v1.client import views
 
-from accounts.api.v1.client.views import (
-    ChangePasswordView,
-    CreateNewUserView,
-    GoogleLoginView,
-    LoginView,
-    PublicUserDetailsView,
-    RefreshTokenView,
-    RequestPasswordResetView,
-    ResetPasswordView,
-    UserDetailsUpdateView,
-    UserDetailsView,
-)
+auth_apis = [
+    path("register/", views.CreateNewUserView.as_view(), name="register"),
+    path("verify-otp/", views.VerifyOTPView.as_view(), name="verify-otp"),
+    path("login/", views.LoginView.as_view(), name="login"),
+    path("google/", views.GoogleLoginView.as_view(), name="google-login"),
+    path("refresh/", views.RefreshTokenView.as_view(), name="refresh-token"),
+    path("request-reset-password/", views.RequestPasswordResetView.as_view(), name="request-reset-password"),
+    path("reset-password/", views.ResetPasswordView.as_view(), name="reset-password"),
+]
+
+profile_apis = [
+    path("self-details/", views.UserDetailsView.as_view(), name="user-details"),
+    path("credit-history/", views.CreditHistoryView.as_view(), name="credit-history"),
+    path("credit-requests/", views.CreditRequestCreateView.as_view(), name="credit-request-create"),
+    path("profile-states/", views.UserProfileStatesView.as_view(), name="user-profile-states"),
+    path("public/<slug:username>/", views.PublicUserDetailsView.as_view(), name="public-user-details"),
+    path("update/", views.UserDetailsUpdateView.as_view(), name="update-user"),
+    path("<slug:username>/", views.PublicUserDetailsView.as_view(), name="public-user-details"),
+]
+
+settings_apis = [
+    path("change-password/", views.ChangePasswordView.as_view(), name="change-password"),
+    path("delete-account/", views.DeleteAccountView.as_view(), name="delete-account"),
+]
 
 urlpatterns = [
-    path("register/", CreateNewUserView.as_view(), name="register"),
-    path("login/", LoginView.as_view(), name="login"),
-    path("google/", GoogleLoginView.as_view(), name="google-login"),
-    path("refresh/", RefreshTokenView.as_view(), name="refresh-token"),
-    path("public/<slug:username>/", PublicUserDetailsView.as_view(), name="public-user-details"),
-    path("self-details/", UserDetailsView.as_view(), name="user-details"),
-    path("update/", UserDetailsUpdateView.as_view(), name="update-user"),
-    path("change-password/", ChangePasswordView.as_view(), name="change-password"),
-    path("request-reset-password/", RequestPasswordResetView.as_view(), name="request-reset-password"),
-    path("reset-password/", ResetPasswordView.as_view(), name="reset-password"),
+    path("", include(auth_apis)),
+    path("", include(profile_apis)),
+    path("settings/", include(settings_apis + profile_apis)),
 ]

@@ -5,6 +5,8 @@ from trips.models import (
     TripActivityRecommendationItem,
     TripAgentConversationSession,
     TripAgentMessage,
+    TripConversationMessage,
+    TripConversationSession,
     TripAttractionRecommendationItem,
     TripCuisineRecommendationItem,
     TripDestination,
@@ -14,10 +16,12 @@ from trips.models import (
     TripItineraryDay,
     TripItineraryDayItem,
     TripPreparation,
+    TripPlanningSession,
     TripPreparationPackingItem,
     TripRecommendations,
     TripRequiredDocumentItem,
     TripRoutePlanItem,
+    ScheduledTripNotification,
 )
 
 
@@ -57,9 +61,8 @@ class TripDestinationAdmin(admin.ModelAdmin):
 
 @admin.register(TripRecommendations)
 class TripRecommendationsAdmin(admin.ModelAdmin):
-    list_display = ("trip", "is_finalized", "session_id", "updated_at")
-    list_filter = ("is_finalized",)
-    search_fields = ("trip__title", "session_id")
+    list_display = ("trip", "external_session_id", "updated_at")
+    search_fields = ("trip__title", "external_session_id")
     readonly_fields = ("created_at", "updated_at")
     autocomplete_fields = ("trip",)
 
@@ -84,9 +87,8 @@ class TripActivityRecommendationItemAdmin(admin.ModelAdmin):
 
 @admin.register(TripItinerary)
 class TripItineraryAdmin(admin.ModelAdmin):
-    list_display = ("trip", "title", "is_finalized", "session_id", "updated_at")
-    list_filter = ("is_finalized",)
-    search_fields = ("trip__title", "title", "session_id")
+    list_display = ("trip", "title", "external_session_id", "updated_at")
+    search_fields = ("trip__title", "title", "external_session_id")
     readonly_fields = ("created_at", "updated_at")
     autocomplete_fields = ("trip",)
 
@@ -124,9 +126,8 @@ class TripItineraryBudgetAdmin(admin.ModelAdmin):
 
 @admin.register(TripPreparation)
 class TripPreparationAdmin(admin.ModelAdmin):
-    list_display = ("trip", "title", "is_finalized", "session_id")
-    list_filter = ("is_finalized",)
-    search_fields = ("trip__title", "title", "session_id")
+    list_display = ("trip", "title", "external_session_id")
+    search_fields = ("trip__title", "title", "external_session_id")
     autocomplete_fields = ("trip",)
 
 
@@ -140,8 +141,8 @@ class TripPreparationPackingItemAdmin(admin.ModelAdmin):
 
 @admin.register(TripRequiredDocumentItem)
 class TripRequiredDocumentItemAdmin(admin.ModelAdmin):
-    list_display = ("preparation", "document_name", "required_level", "sort_order")
-    list_filter = ("required_level",)
+    list_display = ("preparation", "document_name", "required_level", "is_packed", "sort_order")
+    list_filter = ("required_level", "is_packed")
     search_fields = ("preparation__trip__title", "document_name")
     autocomplete_fields = ("preparation",)
 
@@ -156,17 +157,74 @@ class TripHeadsUpInfoItemAdmin(admin.ModelAdmin):
 
 @admin.register(TripAgentConversationSession)
 class TripAgentConversationSessionAdmin(admin.ModelAdmin):
-    list_display = ("trip", "user", "current_step", "created_at")
-    list_filter = ("current_step",)
+    list_display = ("planning_session", "trip", "user", "step", "is_active", "created_at")
+    list_filter = ("step", "is_active")
+    search_fields = ("trip__title", "user__email")
+    readonly_fields = ("id", "created_at", "updated_at", "created_by", "updated_by")
+    autocomplete_fields = ("planning_session", "trip", "user")
+
+
+@admin.register(TripAgentMessage)
+class TripAgentMessageAdmin(admin.ModelAdmin):
+    list_display = ("session", "sender", "content", "created_at")
+    list_filter = ("sender",)
+    search_fields = ("content", "session__trip__title")
+    readonly_fields = ("id", "created_at", "updated_at", "created_by", "updated_by")
+    autocomplete_fields = ("session",)
+
+
+@admin.register(TripPlanningSession)
+class TripPlanningSessionAdmin(admin.ModelAdmin):
+    list_display = ("trip", "user", "is_active", "updated_at")
+    list_filter = ("is_active",)
     search_fields = ("trip__title", "user__email")
     readonly_fields = ("id", "created_at", "updated_at", "created_by", "updated_by")
     autocomplete_fields = ("trip", "user")
 
 
-@admin.register(TripAgentMessage)
-class TripAgentMessageAdmin(admin.ModelAdmin):
-    list_display = ("session", "trip", "sender", "content", "created_at")
-    list_filter = ("sender",)
-    search_fields = ("content", "trip__title")
+@admin.register(TripConversationSession)
+class TripConversationSessionAdmin(admin.ModelAdmin):
+    list_display = ("trip", "user", "is_active", "updated_at")
+    list_filter = ("is_active",)
+    search_fields = ("trip__title", "user__email", "external_session_id")
     readonly_fields = ("id", "created_at", "updated_at", "created_by", "updated_by")
-    autocomplete_fields = ("session", "trip")
+    autocomplete_fields = ("trip", "user")
+
+
+@admin.register(TripConversationMessage)
+class TripConversationMessageAdmin(admin.ModelAdmin):
+    list_display = ("session", "sender", "content", "created_at")
+    list_filter = ("sender",)
+    search_fields = ("content", "session__trip__title")
+    readonly_fields = ("id", "created_at", "updated_at", "created_by", "updated_by")
+    autocomplete_fields = ("session",)
+
+
+@admin.register(ScheduledTripNotification)
+class ScheduledTripNotificationAdmin(admin.ModelAdmin):
+    list_display = (
+        "trip",
+        "event_type",
+        "delivery_type",
+        "scheduled_for",
+        "timezone",
+        "status",
+        "attempt_count",
+        "agent_context_synced_at",
+    )
+    list_filter = ("event_type", "delivery_type", "status", "timezone")
+    search_fields = ("trip__title", "user__email", "idempotency_key")
+    readonly_fields = (
+        "id",
+        "idempotency_key",
+        "alert",
+        "message",
+        "attempt_count",
+        "processing_started_at",
+        "sent_at",
+        "agent_context_synced_at",
+        "failed_at",
+        "created_at",
+        "updated_at",
+    )
+    autocomplete_fields = ("trip", "user")

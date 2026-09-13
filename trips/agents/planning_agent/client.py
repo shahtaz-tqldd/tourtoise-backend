@@ -1,16 +1,17 @@
 import json
 import logging
+from copy import deepcopy
 from typing import Optional
 from uuid import uuid4
 
 from django.conf import settings
 
-from google.adk.agents.context_cache_config import ContextCacheConfig
-from google.adk.apps.app import App, EventsCompactionConfig
+from google.adk.apps.app import App
 from google.adk.runners import Runner
 from google.adk.sessions.database_session_service import DatabaseSessionService
 
 from .agents import ADKAgent
+from trips.choices import PlanningStep
 
 # utils
 from .helpers import call_agent_async
@@ -64,14 +65,13 @@ class PlanAgentClient:
     def __init__(
         self,
         trip,
-        current_step: int = 2,
-        destination_id: str | None = None,
+        planning_step: PlanningStep = PlanningStep.PREFERENCE,
+        destination_id: str | list[str] | None = None,
         trip_context: dict | None = None,
     ):
         self.trip = trip
-        self.current_step = current_step
+        self.planning_step = planning_step
         self.destination_id = destination_id
-        self.trip_context = trip_context or {}
         self.app_name = "tourtoise_planning_agent"
         self.session_service = None
         self.app = None
@@ -80,29 +80,19 @@ class PlanAgentClient:
         try:
             self.session_service = DatabaseSessionService(db_url=settings.ADK_DB_URL)
             self.root_agent = ADKAgent().root_agent(
-                current_step=self.current_step,
+                planning_step=self.planning_step,
                 destination_id=self.destination_id,
-                trip=self.trip_context,
             )
             self.app = App(
                 name=self.app_name,
                 root_agent=self.root_agent,
-                events_compaction_config=EventsCompactionConfig(
-                    compaction_interval=4,
-                    overlap_size=1
-                ),
-                context_cache_config=ContextCacheConfig(
-                    cache_intervals=12,
-                    ttl_seconds=1800,
-                    min_tokens=4048
-                )
             )
         except Exception as exc:
             logger.error(
                 "PlanAgentClient initialization failed; falling back to default response. "
-                "trip_id=%s current_step=%s error_type=%s error=%s",
+                "trip_id=%s planning_step=%s error_type=%s error=%s",
                 getattr(self.trip, "id", None),
-                self.current_step,
+                self.planning_step,
                 type(exc).__name__,
                 type(exc.__cause__).__name__ if exc.__cause__ else None,
                 
@@ -130,11 +120,11 @@ class PlanAgentClient:
             except Exception as exc:
                 logger.exception(
                     "ADK session retrieval failed; creating a new session. "
-                    "trip_id=%s user_id=%s session_id=%s current_step=%s error=%s",
+                    "trip_id=%s user_id=%s session_id=%s planning_step=%s error=%s",
                     getattr(self.trip, "id", None),
                     user_id,
                     session_id,
-                    self.current_step,
+                    self.planning_step,
                     exc,
                 )
 
@@ -146,10 +136,10 @@ class PlanAgentClient:
             )
         except Exception:
             logger.exception(
-                "ADK session creation failed. trip_id=%s user_id=%s current_step=%s",
+                "ADK session creation failed. trip_id=%s user_id=%s planning_step=%s",
                 getattr(self.trip, "id", None),
                 user_id,
-                self.current_step,
+                self.planning_step,
             )
             raise
 
@@ -183,19 +173,19 @@ class PlanAgentClient:
             user_id=user_id,
             session_id=active_session_id,
             query=enriched_query,
-            current_step=self.current_step,
+            planning_step=self.planning_step,
         )
         qna_response = agent_response.qna_response
         
         if not qna_response:
             logger.error(
                 "PlanAgentClient received no valid structured response; using default. "
-                "trip_id=%s user_id=%s session_id=%s current_step=%s response_text_preview=%r "
+                "trip_id=%s user_id=%s session_id=%s planning_step=%s response_text_preview=%r "
                 "total_tokens=%s intention=%s",
                 getattr(self.trip, "id", None),
                 user_id,
                 active_session_id,
-                self.current_step,
+                self.planning_step,
                 (agent_response.response_text or "")[:500],
                 agent_response.total_tokens,
                 agent_response.intention,
@@ -207,41 +197,74 @@ class PlanAgentClient:
             "response": qna_response,
             "cost": agent_response.cost,
             "total_tokens": agent_response.total_tokens,
+            "input_tokens": agent_response.input_tokens,
+            "output_tokens": agent_response.output_tokens,
+            "model": settings.PLANNING_AGENT_MODEL,
             "intention": agent_response.intention,
         }
 
     def _build_enriched_query(self, user_query: str, preferences: dict, trip_snapshot: dict) -> str:
-        return (
-            f"{user_query}\n\n"
-            "Current collected preferences JSON:\n"
-            f"{json.dumps(preferences, default=str)}\n\n"
-            "Trip destination snapshot JSON:\n"
-            f"{json.dumps(trip_snapshot, default=str)}"
-        )
+        if self.planning_step in {PlanningStep.ITINERARY, PlanningStep.PREPARATION}:
+            context = {"trip_planning_context": trip_snapshot}
+        else:
+            context = {
+                "preferences": preferences,
+                "trip": trip_snapshot,
+            }
+        return f"{user_query}\n\nCONTEXT_JSON:\n{_compact_json(context)}"
 
     def _fallback_response(self, session_id: Optional[str], reason: str) -> dict:
         fallback_session_id = session_id or str(uuid4())
         logger.error(
             "PlanAgentClient returning DEFAULT_STRUCTURED_RESPONSE. reason=%s trip_id=%s "
-            "session_id=%s current_step=%s",
+            "session_id=%s planning_step=%s",
             reason,
             getattr(self.trip, "id", None),
             fallback_session_id,
-            self.current_step,
+            self.planning_step,
         )
         return {
             "session_id": fallback_session_id,
             "response": self._default_response(),
             "cost": None,
             "total_tokens": None,
+            "input_tokens": None,
+            "output_tokens": None,
+            "model": settings.PLANNING_AGENT_MODEL,
             "intention": None,
         }
 
     def _default_response(self) -> dict:
-        if self.current_step == 3:
-            return DEFAULT_RECOMMENDATIONS_RESPONSE
-        if self.current_step == 4:
-            return DEFAULT_ITINERARY_RESPONSE
-        if self.current_step == 5:
-            return DEFAULT_PREPARATION_RESPONSE
-        return DEFAULT_STRUCTURED_RESPONSE
+        if self.planning_step == PlanningStep.RECOMMENDATION:
+            return deepcopy(DEFAULT_RECOMMENDATIONS_RESPONSE)
+        if self.planning_step == PlanningStep.ITINERARY:
+            return deepcopy(DEFAULT_ITINERARY_RESPONSE)
+        if self.planning_step == PlanningStep.PREPARATION:
+            return deepcopy(DEFAULT_PREPARATION_RESPONSE)
+        return deepcopy(DEFAULT_STRUCTURED_RESPONSE)
+
+
+def _compact_json(value: dict) -> str:
+    """Serialize agent context once, without whitespace-only token overhead."""
+    return json.dumps(
+        _without_empty_values(value),
+        default=str,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+
+
+def _without_empty_values(value):
+    if isinstance(value, dict):
+        return {
+            key: compacted
+            for key, item in value.items()
+            if (compacted := _without_empty_values(item)) not in (None, "", [], {})
+        }
+    if isinstance(value, list):
+        return [
+            compacted
+            for item in value
+            if (compacted := _without_empty_values(item)) not in (None, "", [], {})
+        ]
+    return value

@@ -1,6 +1,7 @@
 from django.utils import timezone
 from rest_framework import serializers
 
+from app.utils.cloudinary import cloudinary_thumbnail_url
 from destinations.models import (
     Activity,
     ActivityImage,
@@ -10,6 +11,7 @@ from destinations.models import (
     CuisineImage,
     Destination,
     DestinationImage,
+    SavedDestination,
     DestinationTag,
 )
 
@@ -18,6 +20,13 @@ class DestinationTagSerializer(serializers.ModelSerializer):
     class Meta:
         model = DestinationTag
         fields = ("name", "slug", "category")
+        read_only_fields = fields
+
+
+class DestinationTagListSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DestinationTag
+        fields = ("id", "name", "category")
         read_only_fields = fields
 
 
@@ -51,6 +60,7 @@ class CuisineImageSerializer(serializers.ModelSerializer):
 
 class ClientAttractionSerializer(serializers.ModelSerializer):
     images = AttractionImageSerializer(many=True, read_only=True)
+    tags = DestinationTagSerializer(many=True, read_only=True)
 
     class Meta:
         model = Attraction
@@ -60,6 +70,7 @@ class ClientAttractionSerializer(serializers.ModelSerializer):
             "slug",
             "attraction_type",
             "description",
+            "how_to_reach",
             "latitude",
             "longitude",
             "address",
@@ -67,6 +78,10 @@ class ClientAttractionSerializer(serializers.ModelSerializer):
             "budget_tier",
             "avg_duration_hours",
             "best_time_of_day",
+            "best_months",
+            "picking_reasons",
+            "notes",
+            "tags",
             "entrance_fee_required",
             "approx_entrance_fee",
             "sort_order",
@@ -90,10 +105,11 @@ class ClientActivitySerializer(serializers.ModelSerializer):
             "difficulty_level",
             "budget_tier",
             "approx_cost",
-            "cost_unit",
             "duration_hours",
-            "best_season",
+            "best_months",
             "cover_image",
+            "picking_reasons",
+            "notes",
             "booking_required",
             "is_featured",
             "images",
@@ -112,24 +128,88 @@ class ClientCuisineSerializer(serializers.ModelSerializer):
             "slug",
             "cuisine_type",
             "description",
-            "ingredients_note",
             "spice_level",
             "meal_type",
             "cover_image",
             "is_vegetarian_friendly",
-            "is_must_try",
-            "approx_price_range",
+            "is_featured",
+            "approx_cost",
+            "picking_reasons",
+            "notes",
             "images",
         )
         read_only_fields = fields
 
 
+class ClientDestinationAttractionSerializer(serializers.ModelSerializer):
+    tags = DestinationTagSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Attraction
+        fields = (
+            "name",
+            "slug",
+            "attraction_type",
+            "address",
+            "cover_image",
+            "tags",
+            "best_months",
+            "is_featured",
+        )
+        read_only_fields = fields
+
+
+class ClientDestinationActivitySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Activity
+        fields = (
+            "name",
+            "slug",
+            "activity_type",
+            "cover_image",
+            "best_months",
+            "booking_required",
+            "is_featured",
+        )
+        read_only_fields = fields
+
+
+class ClientDestinationCuisineSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Cuisine
+        fields = (
+            "name",
+            "slug",
+            "cuisine_type",
+            "meal_type",
+            "cover_image",
+            "is_vegetarian_friendly",
+            "is_featured",
+        )
+        read_only_fields = fields
+
+
 class ClientDestinationListSerializer(serializers.ModelSerializer):
+    cover_image = serializers.SerializerMethodField()
     is_now_best_time = serializers.SerializerMethodField()
+    is_saved = serializers.SerializerMethodField()
     tags = serializers.SerializerMethodField()
+
+    def get_cover_image(self, obj):
+        return cloudinary_thumbnail_url(obj.cover_image, 800)
 
     def get_is_now_best_time(self, obj):
         return timezone.localdate().month in obj.best_travel_months
+
+    def get_is_saved(self, obj):
+        if hasattr(obj, "is_saved"):
+            return bool(obj.is_saved)
+
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if not user or not user.is_authenticated:
+            return False
+        return SavedDestination.objects.filter(user=user, destination=obj).exists()
 
     def get_tags(self, obj):
         return [tag.name for tag in obj.tags.all()]
@@ -144,17 +224,55 @@ class ClientDestinationListSerializer(serializers.ModelSerializer):
             "destination_type",
             "cover_image",
             "is_now_best_time",
+            "is_saved",
             "tags",
         )
         read_only_fields = fields
 
 
+class ClientDestinationShortDetailSerializer(serializers.ModelSerializer):
+    cover_image = serializers.SerializerMethodField()
+    tags = serializers.SerializerMethodField()
+
+    def get_cover_image(self, obj):
+        return cloudinary_thumbnail_url(obj.cover_image, 800)
+
+    def get_tags(self, obj):
+        return [tag.name for tag in obj.tags.all()]
+
+    class Meta:
+        model = Destination
+        fields = (
+            "name",
+            "slug",
+            "country",
+            "region",
+            "destination_type",
+            "tagline",
+            "cover_image",
+            "description",
+            "budget_tier",
+            "difficulty_level",
+            "best_travel_months",
+            "tags",
+        )
+        read_only_fields = fields
+
+
+class DestinationSaveSerializer(serializers.Serializer):
+    save = serializers.BooleanField()
+
+
 class ClientDestinationDetailSerializer(serializers.ModelSerializer):
     tags = DestinationTagSerializer(many=True, read_only=True)
     images = DestinationImageSerializer(many=True, read_only=True)
-    attractions = ClientAttractionSerializer(many=True, read_only=True)
-    activities = ClientActivitySerializer(many=True, read_only=True)
-    cuisines = ClientCuisineSerializer(many=True, read_only=True)
+    attractions = ClientDestinationAttractionSerializer(many=True, read_only=True)
+    activities = ClientDestinationActivitySerializer(many=True, read_only=True)
+    cuisines = ClientDestinationCuisineSerializer(many=True, read_only=True)
+    is_saved = serializers.SerializerMethodField()
+
+    def get_is_saved(self, obj):
+        return ClientDestinationListSerializer(context=self.context).get_is_saved(obj)
 
     class Meta:
         model = Destination
@@ -168,20 +286,22 @@ class ClientDestinationDetailSerializer(serializers.ModelSerializer):
             "latitude",
             "longitude",
             "tagline",
-            "overview",
+            "description",
             "cover_image",
+            "is_saved",
             "tags",
             "min_stay_days",
             "max_stay_days",
             "budget_tier",
-            "difficulty",
+            "difficulty_level",
             "local_languages",
             "best_travel_months",
             "currency",
             "currency_code",
             "getting_around",
             "visa_notes",
-            "cultural_tips",
+            "notes",
+            "picking_reasons",
             "images",
             "attractions",
             "activities",

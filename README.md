@@ -1,5 +1,9 @@
 # tourtoise backend
 
+## Deployment
+
+CI/CD is configured with GitHub Actions for the `prod` branch. See [docs/ci-cd.md](docs/ci-cd.md) for required GitHub secrets and production server setup.
+
 ## Accounts
 - User
 - User Profile
@@ -19,3 +23,10 @@
 - Multiple source checking, validates, verify and analyze
 - Human in loop acceptance
 - For existing Destination: Run with a scheduler to keep upto-date weekly
+
+
+# Future work scope
+- Comment notification to the reciepent
+- Manage multiple comments from different user (instead of making a lot of comment notification, how about updating the single notification if the status is unread)
+- Implement multiple destination covering during single trip plan
+- New readme added to check ci-cd

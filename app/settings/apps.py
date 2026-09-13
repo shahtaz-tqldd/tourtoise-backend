@@ -8,9 +8,11 @@ DJANGO_BASE_APPS = [
 ]
 
 THIRD_PARTY_APPS = [
+    "django.contrib.postgres",
     "rest_framework",
     "corsheaders",
     "django_celery_results",
+    "channels",
     "rest_framework_simplejwt",
     "rest_framework_simplejwt.token_blacklist",
     # "django_filters",
@@ -18,9 +20,15 @@ THIRD_PARTY_APPS = [
 
 
 MODULER_APPS = [
+    "app.base.apps.BaseConfig",
     "accounts.apps.AccountsConfig",
     "destinations.apps.DestinationsConfig",
     "trips.apps.TripsConfig",
+    "journals.apps.JournalsConfig",
+    "chat.apps.ChatConfig",
+    "notification.apps.NotificationConfig",
+    "vector_store.apps.VectorStoreConfig",
+    "analytics.apps.AnalyticsConfig",
 ]
 
 INSTALLED_APPS = DJANGO_BASE_APPS + THIRD_PARTY_APPS + MODULER_APPS

@@ -1,13 +1,54 @@
-from django.db.models import Q
+from django.db.models import (
+    BigIntegerField,
+    Count,
+    FloatField,
+    OuterRef,
+    Prefetch,
+    Q,
+    Subquery,
+    Sum,
+    Value,
+)
+from django.db.models.functions import Coalesce
 from django.shortcuts import get_object_or_404
 from rest_framework.generics import GenericAPIView
 from rest_framework.permissions import IsAuthenticated
 
 from accounts.permissions import IsSuperAdmin
+from analytics.choices import AIUsageType
+from analytics.models import AIUsage
 from app.base.pagination import CustomPagination
 from app.utils.response import APIResponse
 from trips.api.v1.admin.serializers import AdminTripDetailSerializer, AdminTripListSerializer
-from trips.models import Trip
+from trips.models import Trip, TripDestination
+
+
+def _sum_ai_usage(*, usage_type, field, output_field):
+    return Subquery(
+        AIUsage.objects.filter(
+            trip_id=OuterRef("pk"),
+            usage_type=usage_type,
+        )
+        .order_by()
+        .values("trip_id")
+        .annotate(total=Sum(field, output_field=output_field))
+        .values("total")[:1],
+        output_field=output_field,
+    )
+
+
+def _count_ai_usage(*, usage_type):
+    return Subquery(
+        AIUsage.objects.filter(
+            trip_id=OuterRef("pk"),
+            usage_type=usage_type,
+        )
+        .order_by()
+        .values("trip_id")
+        .annotate(total=Count("id"))
+        .values("total")[:1],
+        output_field=BigIntegerField(),
+    )
 
 
 class TripPaginationMixin:
@@ -42,19 +83,82 @@ class AdminTripListAPIView(TripPaginationMixin, GenericAPIView):
       `page`, `page_size`
       `search=summer`
       `status=draft,ready`
-      `visibility=private,link_only`
+      `visibility=private,public`
       `planning_source=agent,hybrid`
       `user_email=traveler@example.com`
+      `destination_name=Dhaka`
+      `country=Bangladesh`
+      `region=Asia`
     - Multiple filters can be combined.
 
     Frontend response:
     - 200 success with paginated trip rows for admin dashboards.
+    - Each row includes planning and trip-chat cost/token totals, plus the number
+      of trip-chat AI responses recorded in analytics.
     """
 
     permission_classes = [IsAuthenticated, IsSuperAdmin]
 
     def get_queryset(self):
-        queryset = Trip.objects.select_related("user").order_by("-updated_at")
+        float_output = FloatField()
+        integer_output = BigIntegerField()
+
+        queryset = (
+            Trip.objects.select_related("user", "user__profile")
+            .prefetch_related(
+                Prefetch(
+                    "trip_destinations",
+                    queryset=TripDestination.objects.filter(is_primary=True).select_related(
+                        "destination",
+                    ),
+                    to_attr="prefetched_primary_destinations",
+                ),
+            )
+            .annotate(
+                planning_cost=Coalesce(
+                    _sum_ai_usage(
+                        usage_type=AIUsageType.TRIP_PLANNING,
+                        field="cost",
+                        output_field=float_output,
+                    ),
+                    Value(0.0),
+                    output_field=float_output,
+                ),
+                planning_total_tokens=Coalesce(
+                    _sum_ai_usage(
+                        usage_type=AIUsageType.TRIP_PLANNING,
+                        field="tokens",
+                        output_field=integer_output,
+                    ),
+                    Value(0),
+                    output_field=integer_output,
+                ),
+                trip_chat_cost=Coalesce(
+                    _sum_ai_usage(
+                        usage_type=AIUsageType.TRIP_CHAT,
+                        field="cost",
+                        output_field=float_output,
+                    ),
+                    Value(0.0),
+                    output_field=float_output,
+                ),
+                trip_chat_total_tokens=Coalesce(
+                    _sum_ai_usage(
+                        usage_type=AIUsageType.TRIP_CHAT,
+                        field="tokens",
+                        output_field=integer_output,
+                    ),
+                    Value(0),
+                    output_field=integer_output,
+                ),
+                trip_chat_messages_count=Coalesce(
+                    _count_ai_usage(usage_type=AIUsageType.TRIP_CHAT),
+                    Value(0),
+                    output_field=integer_output,
+                ),
+            )
+            .order_by("-updated_at")
+        )
         params = self.request.query_params
 
         search = params.get("search", "").strip()
@@ -70,10 +174,6 @@ class AdminTripListAPIView(TripPaginationMixin, GenericAPIView):
         if statuses:
             queryset = queryset.filter(status__in=statuses)
 
-        visibilities = self._get_multi_values("visibility")
-        if visibilities:
-            queryset = queryset.filter(visibility__in=visibilities)
-
         planning_sources = self._get_multi_values("planning_source")
         if planning_sources:
             queryset = queryset.filter(planning_source__in=planning_sources)
@@ -81,6 +181,22 @@ class AdminTripListAPIView(TripPaginationMixin, GenericAPIView):
         user_email = params.get("user_email", "").strip()
         if user_email:
             queryset = queryset.filter(user__email__icontains=user_email)
+
+        queryset = self._filter_by_destination_values(
+            queryset,
+            param_name="destination_name",
+            destination_field="name",
+        )
+        queryset = self._filter_by_destination_values(
+            queryset,
+            param_name="country",
+            destination_field="country",
+        )
+        queryset = self._filter_by_destination_values(
+            queryset,
+            param_name="region",
+            destination_field="region",
+        )
 
         return queryset.distinct()
 
@@ -92,6 +208,17 @@ class AdminTripListAPIView(TripPaginationMixin, GenericAPIView):
         for item in self.request.query_params.getlist(key):
             values.extend([part.strip() for part in str(item).split(",") if part.strip()])
         return values
+
+    def _filter_by_destination_values(self, queryset, *, param_name, destination_field):
+        values = self._get_multi_values(param_name)
+        if not values:
+            return queryset
+
+        lookup = f"trip_destinations__destination__{destination_field}__icontains"
+        condition = Q()
+        for value in values:
+            condition |= Q(**{lookup: value})
+        return queryset.filter(condition)
 
 
 class AdminTripDetailAPIView(GenericAPIView):
